@@ -11,7 +11,7 @@
 | **卡台地址** | [https://www.avanfinity.com](https://www.avanfinity.com) |
 | **官方频道** | [https://t.me/avanfinity](https://t.me/avanfinity) |
 
-卡台提供直充 OpenAPI。有开发能力的用户或代理可直接对接卡台 API 充值，不必只走本站 CDK 兑换页。
+卡台提供直充 OpenAPI（对接说明见 [docs/danew-openapi-zh.md](docs/danew-openapi-zh.md)）。有开发能力的用户或代理可直接对接卡台 API 充值，不必只走本站 CDK 兑换页。
 
 ## 主要特性
 
