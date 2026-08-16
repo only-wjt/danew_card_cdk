@@ -6,9 +6,8 @@
 
 | 类型 | 链接 |
 |------|------|
-| **卡台官网** | [https://spacexcard.com](https://spacexcard.com) |
-| **官方频道** | [https://t.me/spacex_card_visa](https://t.me/spacex_card_visa) |
-| **官方群聊 2 群** | [https://t.me/spacex_card2](https://t.me/spacex_card2) |
+| **官网** | [https://cdk.danew.cc](https://cdk.danew.cc) |
+| **官方 QQ 群** | **1055165609**（QQ 内搜索该群号加入，亦可从 [https://qm.qq.com/](https://qm.qq.com/) 查找） |
 
 ## 主要特性
 
