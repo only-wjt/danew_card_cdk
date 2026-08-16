@@ -32,8 +32,12 @@ html {
     radial-gradient(900px 500px at 110% 0%, rgba(192, 86, 58, 0.05), transparent 55%);
   --surface: #fbf8f1;
   --surface-2: #f4eee3;
+  /* 皮肤未单独定义时退回 surface-2，hover 填充与斑马纹因此不会互相吃掉 */
+  --surface-3: var(--surface-2);
   --brd: #e7ddcb;
   --brd-2: #dccfb8;
+  /* 交互控件边界（输入框 / 下拉 / 复选框），比分隔线更重 */
+  --brd-control: var(--brd-2);
 
   --ink: #2a2622;
   --ink-2: #6f6657;
@@ -44,6 +48,12 @@ html {
   --primary-active: #9c4530;
   --primary-soft: rgba(192, 86, 58, 0.1);
   --primary-on: #ffffff;
+
+  /* 珊瑚橙强调色：danew 皮肤按通道值重定义，其余皮肤沿用这里的兜底值。
+     只做大色块（logo 缺口、空状态插画），文字与描边取 --accent-text。 */
+  --accent: #ff6a3d;
+  --accent-text: #b93c13;
+  --accent-soft: rgba(255, 106, 61, 0.12);
 
   --good: #2f8f6b;
   --good-soft: rgba(47, 143, 107, 0.12);
@@ -56,6 +66,18 @@ html {
 
   --shadow: 0 18px 48px rgba(120, 72, 40, 0.1);
   --shadow-sm: 0 2px 12px rgba(120, 72, 40, 0.08);
+  --shadow-lg: 0 28px 64px rgba(120, 72, 40, 0.16);
+
+  /* 键盘焦点环：各皮肤都定义了 primary / primary-soft，因此无需逐套覆盖 */
+  --ring: 0 0 0 2px var(--primary), 0 0 0 5px var(--primary-soft);
+
+  --dur-1: 80ms;
+  --dur-2: 140ms;
+  --dur-3: 200ms;
+  --dur-4: 320ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
 }
 
 /* density */
@@ -128,9 +150,10 @@ html[data-heading='serif'] {
   --el-button-disabled-text-color: var(--ink-3);
 }
 .el-dialog {
-  border-radius: var(--radius-lg) !important;
+  /* 未定义 --radius-xl 的皮肤退回自己的 lg，避免直角皮肤被强行圆角化 */
+  border-radius: var(--radius-xl, var(--radius-lg)) !important;
   overflow: hidden;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg, var(--shadow));
   background: var(--surface) !important;
 }
 .el-dialog__title {
@@ -223,7 +246,8 @@ h1, h2, h3, h4, .page-title, .stat-value, .brand-title, .brand-text {
   border-radius: var(--radius-lg);
   padding: 1.25rem;
   box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  transition: box-shadow var(--dur-3) var(--ease-standard),
+    border-color var(--dur-3) var(--ease-standard), transform var(--dur-3) var(--ease-standard);
 }
 
 .card-hover:hover,
@@ -245,25 +269,42 @@ button.card:hover {
 
 .app-link {
   color: var(--primary);
-  transition: color 0.15s ease;
+  transition: color var(--dur-2) var(--ease-standard);
 }
 .app-link:hover { color: var(--primary-hover); }
 
 /* ── Buttons ── */
+.btn-primary,
+.btn-secondary,
+.btn-ghost,
+.btn-danger {
+  transition: background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard), color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard), transform var(--dur-1) linear;
+}
+.btn-primary:focus-visible,
+.btn-secondary:focus-visible,
+.btn-ghost:focus-visible,
+.btn-danger:focus-visible,
+.app-link:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
 .btn-primary {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold transition-all duration-150 active:scale-[0.98];
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold active:scale-[0.98];
   background: var(--primary);
   color: var(--primary-on);
-  box-shadow: 0 6px 18px var(--primary-soft);
+  box-shadow: var(--shadow-sm);
 }
 .btn-primary:hover { background: var(--primary-hover); }
 .btn-primary:active { background: var(--primary-active); }
 
 .btn-secondary {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold transition-all duration-150 active:scale-[0.98];
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold active:scale-[0.98];
   background: transparent;
   color: var(--ink);
-  border: 1px solid var(--brd-2);
+  border: 1px solid var(--brd-control);
 }
 .btn-secondary:hover {
   border-color: var(--primary);
@@ -272,13 +313,13 @@ button.card:hover {
 }
 
 .btn-ghost {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 font-medium transition-all duration-150;
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 font-medium;
   color: var(--ink-2);
 }
 .btn-ghost:hover { color: var(--primary); background: var(--surface-2); }
 
 .btn-danger {
-  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold transition-all duration-150 active:scale-[0.98];
+  @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold active:scale-[0.98];
   background: var(--err-soft);
   color: var(--err);
   border: 1px solid var(--err);
@@ -287,16 +328,25 @@ button.card:hover {
 
 /* ── Inputs ── */
 .input {
-  @apply w-full rounded-xl px-4 py-3 text-sm transition-colors;
+  @apply w-full rounded-xl px-4 py-3 text-sm;
   background: var(--surface);
-  border: 1px solid var(--brd);
+  border: 1px solid var(--brd-control);
   color: var(--ink);
   outline: none;
+  transition: border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard), background-color var(--dur-2) var(--ease-standard);
 }
 .input::placeholder { color: var(--ink-3); }
-.input:focus {
+.input:focus,
+.input:focus-visible {
   border-color: var(--primary);
-  box-shadow: 0 0 0 3px var(--primary-soft);
+  box-shadow: var(--ring);
+}
+.input:disabled {
+  background: var(--surface-2);
+  border-color: var(--brd);
+  color: var(--ink-3);
+  cursor: not-allowed;
 }
 textarea.input { resize: vertical; }
 
@@ -312,11 +362,23 @@ textarea.input { resize: vertical; }
   background: var(--surface-2);
   color: var(--ink-2);
   border: 1px solid var(--brd);
+  transition: background-color var(--dur-2) var(--ease-standard),
+    color var(--dur-2) var(--ease-standard), border-color var(--dur-2) var(--ease-standard);
 }
 .pill-good { background: var(--good-soft); color: var(--good); border-color: transparent; }
 .pill-warn { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .pill-err  { background: var(--err-soft);  color: var(--err);  border-color: transparent; }
 .pill-info { background: var(--info-soft); color: var(--info); border-color: transparent; }
+
+/* 批量充值的 unknown 态：可能已扣款、严禁重试。
+   与 .pill-err 视觉上必须可区分——红色会诱导操作员点重试，
+   所以走 warn 色并额外加实描边，标签文案须自带「勿重试」。 */
+.pill-unknown {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-color: var(--warn);
+  font-weight: 600;
+}
 
 /* ── Alert boxes ── */
 .alert { @apply rounded-xl p-4 text-sm; border: 1px solid transparent; }
@@ -327,16 +389,28 @@ textarea.input { resize: vertical; }
 /* ── Data tables ── */
 .data-table { @apply min-w-full text-sm; border-collapse: collapse; }
 .data-table thead th {
-  @apply px-4 py-3 text-left font-medium;
+  @apply px-4 py-3 text-left;
   background: var(--surface-2);
   color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .data-table tbody td {
   @apply px-4 py-3;
   border-top: 1px solid var(--brd);
   color: var(--ink);
+  font-size: 13px;
 }
-.data-table tbody tr:hover td { background: var(--surface-2); }
+.data-table tbody tr:nth-child(even) td { background: var(--surface-2); }
+.data-table tbody tr:hover td { background: var(--surface-3); }
+/* 金额 / 数量列：右对齐等宽，位数不跳 */
+.data-table .num, .data-table th.num {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Misc ── */
 .spinner {
@@ -393,10 +467,14 @@ html.dark .el-dropdown-menu__item:hover { background: #322619 !important; color:
 html.dark .el-scrollbar__thumb { background: rgba(255,255,255,.16); }
 
 /* 交互动画 */
-.el-button { transition: transform .12s ease, background-color .2s, border-color .2s, box-shadow .2s; }
+.el-button {
+  transition: transform var(--dur-1) linear, background-color var(--dur-2) var(--ease-standard),
+    border-color var(--dur-2) var(--ease-standard), box-shadow var(--dur-2) var(--ease-standard);
+}
 .el-button:not(.is-disabled):hover { transform: translateY(-1px); }
-.el-table__body tr { transition: background-color .15s ease; }
-.el-tag { transition: transform .15s ease; border-radius: 6px; }
+.el-button:focus-visible { box-shadow: var(--ring); }
+.el-table__body tr { transition: background-color var(--dur-2) var(--ease-standard); }
+.el-tag { transition: transform var(--dur-2) var(--ease-standard); border-radius: 6px; }
 
 /* 移动端收窄 */
 @media (max-width: 768px) {
@@ -536,12 +614,12 @@ html[data-skin="forest"] {
   --ink: #14241c;
   --ink-2: #3d5c4a;
   --ink-3: #7a9a88;
-  --primary: #059669;
+  --primary: #047857;
   --primary-hover: #10b981;
   --primary-active: #047857;
   --primary-soft: rgba(5,150,105,.12);
   --primary-on: #fff;
-  --el-color-primary: #059669;
+  --el-color-primary: #047857;
   --el-color-primary-light-3: #34d399;
   --el-color-primary-dark-2: #047857;
   --font-serif: var(--font-sans);
@@ -700,7 +778,8 @@ html[data-skin="paper"] {
 }
 html.dark[data-skin="paper"] {
   --bg: #1c1812; --surface: #262019; --surface-2: #302820;
-  --brd: #3d3428; --ink: #f3ecdf; --ink-2: #c4b8a4;
+  /* brd-2 必须在暗色下也压暗，否则 --brd-control 会退回亮色米白，输入框描边发亮 */
+  --brd: #3d3428; --brd-2: #4d4234; --ink: #f3ecdf; --ink-2: #c4b8a4;
   --primary: #d4a574; --primary-on: #1c1812;
   --el-color-primary: #d4a574;
   --bg-tint: none;
@@ -725,7 +804,7 @@ html[data-nav='block'] .topnav {
 /* Element 按钮圆角跟随主题 */
 .el-button { border-radius: var(--radius-md) !important; }
 .el-card { border-radius: var(--radius-lg) !important; }
-.el-dialog { border-radius: var(--radius-lg) !important; }
+.el-dialog { border-radius: var(--radius-xl, var(--radius-lg)) !important; }
 .el-input__wrapper, .el-select__wrapper { border-radius: var(--radius-md) !important; }
 
 /* 结果状态卡片 */
@@ -743,3 +822,183 @@ html[data-nav='block'] .topnav {
 .result-tile .k { font-size: 11px; color: var(--ink-3); margin-bottom: 4px; }
 .result-tile .v { font-size: 14px; font-weight: 600; color: var(--ink); word-break: break-all; }
 .result-tile .v.mono { font-family: var(--font-mono); font-size: 13px; }
+
+/* ══════════════════════════════════════════════════════════════════
+   danew · Indigo —— 品牌默认皮肤（靛蓝主色 + 珊瑚橙强调 / 亮暗双模）
+
+   与其它皮肤不同，danew 的语义色以「RGB 通道值」形式存在 --c-* 变量里，
+   再由 --primary / --ink 这类历史变量包一层 rgb() 供现有组件继续使用。
+   这样新写的组件可以用 rgb(var(--c-primary) / .12) 直接调透明度。
+
+   soft 色不走 alpha 派生而是给足实色通道：徽章会落在 surface-2 斑马纹和
+   表头上，半透明底会把对比度拖到 4.5:1 以下（实测 warn 4.02 / err 4.16）。
+   ══════════════════════════════════════════════════════════════════ */
+
+html[data-skin='danew'] {
+  /* ── 通道值：亮色 ── */
+  --c-bg: 247 248 250;
+  --c-surface: 255 255 255;
+  --c-surface-2: 239 241 245;
+  --c-surface-3: 227 230 236;
+  --c-brd: 227 230 236;
+  --c-brd-2: 203 208 218;
+  --c-brd-control: 130 138 155;
+  --c-ink: 26 29 37;
+  --c-ink-2: 84 91 107;
+  --c-ink-3: 97 104 120;
+  --c-ink-4: 154 161 177;
+  --c-primary: 75 63 206;
+  --c-primary-hover: 90 78 220;
+  --c-primary-active: 59 49 168;
+  --c-primary-on: 255 255 255;
+  --c-primary-soft: 238 240 254;
+  --c-accent: 255 106 61;
+  --c-accent-text: 185 60 19;
+  --c-accent-soft: 255 243 238;
+  --c-good: 14 124 85;
+  --c-good-soft: 228 244 236;
+  --c-warn: 154 90 2;
+  --c-warn-soft: 253 241 220;
+  --c-err: 196 43 28;
+  --c-err-soft: 253 236 234;
+  --c-info: 27 99 196;
+  --c-info-soft: 232 240 252;
+
+  /* ── 语义色：由通道值派生，保持与其它皮肤相同的变量名 ── */
+  --bg: rgb(var(--c-bg));
+  --bg-tint: none;
+  --surface: rgb(var(--c-surface));
+  --surface-2: rgb(var(--c-surface-2));
+  --surface-3: rgb(var(--c-surface-3));
+  --brd: rgb(var(--c-brd));
+  --brd-2: rgb(var(--c-brd-2));
+  --brd-control: rgb(var(--c-brd-control));
+
+  --ink: rgb(var(--c-ink));
+  --ink-2: rgb(var(--c-ink-2));
+  --ink-3: rgb(var(--c-ink-3));
+  --ink-4: rgb(var(--c-ink-4));
+
+  --primary: rgb(var(--c-primary));
+  --primary-hover: rgb(var(--c-primary-hover));
+  --primary-active: rgb(var(--c-primary-active));
+  --primary-soft: rgb(var(--c-primary-soft));
+  --primary-on: rgb(var(--c-primary-on));
+
+  /* 珊瑚橙只做大色块；需要橙色文字或图标时一律取 --accent-text */
+  --accent: rgb(var(--c-accent));
+  --accent-text: rgb(var(--c-accent-text));
+  --accent-soft: rgb(var(--c-accent-soft));
+
+  --good: rgb(var(--c-good));
+  --good-soft: rgb(var(--c-good-soft));
+  --warn: rgb(var(--c-warn));
+  --warn-soft: rgb(var(--c-warn-soft));
+  --err: rgb(var(--c-err));
+  --err-soft: rgb(var(--c-err-soft));
+  --info: rgb(var(--c-info));
+  --info-soft: rgb(var(--c-info-soft));
+
+  /* ── 形状：20px 卡角配 13px 表格行会显得轻浮，整体收一档 ── */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* ── 字体：Jakarta 只做标题与 logo，正文与表格交回 Inter；中文走系统字体 ── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'HarmonyOS Sans SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-display: 'Plus Jakarta Sans', 'Inter', 'PingFang SC', 'HarmonyOS Sans SC',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --font-serif: var(--font-display);
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --ring: 0 0 0 2px rgb(var(--c-primary)), 0 0 0 5px rgb(var(--c-primary) / 0.18);
+  --shadow-sm: 0 1px 2px rgb(var(--c-ink) / 0.06);
+  --shadow: 0 4px 12px rgb(var(--c-ink) / 0.08);
+  --shadow-lg: 0 12px 32px rgb(var(--c-ink) / 0.14);
+
+  --el-color-primary: rgb(var(--c-primary));
+  --el-color-primary-light-3: #7a79ec;
+  --el-color-primary-light-5: #9a9ef5;
+  --el-color-primary-light-7: #bec3fa;
+  --el-color-primary-light-9: #eef0fe;
+  --el-color-primary-dark-2: rgb(var(--c-primary-active));
+}
+
+html.dark[data-skin='danew'] {
+  /* ── 通道值：暗色（主色提亮、on-primary 转深靛、中性阶保持微冷）── */
+  --c-bg: 14 16 22;
+  --c-surface: 23 26 34;
+  --c-surface-2: 31 35 44;
+  --c-surface-3: 40 45 56;
+  --c-brd: 40 45 56;
+  --c-brd-2: 58 64 77;
+  --c-brd-control: 106 114 130;
+  --c-ink: 242 244 248;
+  --c-ink-2: 168 176 191;
+  --c-ink-3: 136 144 159;
+  --c-ink-4: 106 114 130;
+  --c-primary: 142 134 245;
+  --c-primary-hover: 164 157 248;
+  /* #7A70EE 而非更深的 #6F65E8：后者配 primary-on 只有 4.03:1，按下时标签会虚 */
+  --c-primary-active: 122 112 238;
+  --c-primary-on: 22 19 46;
+  --c-primary-soft: 34 31 61;
+  --c-accent: 255 138 92;
+  --c-accent-text: 255 138 92;
+  --c-accent-soft: 51 32 26;
+  --c-good: 52 211 153;
+  --c-good-soft: 16 49 42;
+  --c-warn: 245 179 60;
+  --c-warn-soft: 51 40 15;
+  --c-err: 255 132 120;
+  --c-err-soft: 58 30 28;
+  --c-info: 127 168 255;
+  --c-info-soft: 24 38 64;
+
+  /* 暗色下阴影几乎不可见，e1/e2 改用提亮边框表达高程 */
+  --shadow-sm: 0 0 0 1px rgb(var(--c-brd-2));
+  --shadow: 0 0 0 1px rgb(var(--c-brd-2)), 0 4px 12px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 16px 40px rgb(0 0 0 / 0.55);
+
+  --el-color-primary: rgb(var(--c-primary));
+  --el-color-primary-light-3: #a49df8;
+  --el-color-primary-light-5: #bec3fa;
+  --el-color-primary-light-7: #2e2782;
+  --el-color-primary-light-9: #221f3d;
+  --el-color-primary-dark-2: rgb(var(--c-primary-active));
+}
+
+/* 覆盖通用 html.dark 里写死的赤陶色调（#2e2319 / #e8a07f），否则 danew 暗色会串色 */
+html.dark[data-skin='danew'] .el-table__body tr:hover > td.el-table__cell {
+  background: rgb(var(--c-surface-3)) !important;
+}
+html.dark[data-skin='danew'] .el-table--striped .el-table__body tr.el-table__row--striped td.el-table__cell {
+  background: rgb(var(--c-surface-2));
+}
+html.dark[data-skin='danew'] .el-dropdown-menu__item:hover {
+  background: rgb(var(--c-primary) / 0.14) !important;
+  color: rgb(var(--c-primary)) !important;
+}
+
+/* 输入类控件的边界要够重才算可交互（≥3:1），比分隔线的 --brd 强一档 */
+html[data-skin='danew'] .el-input__wrapper,
+html[data-skin='danew'] .el-select__wrapper,
+html[data-skin='danew'] .el-textarea__inner {
+  background: rgb(var(--c-surface)) !important;
+  box-shadow: 0 0 0 1px var(--brd-control) inset !important;
+}
+html[data-skin='danew'] .el-input__wrapper.is-focus,
+html[data-skin='danew'] .el-select__wrapper.is-focused,
+html[data-skin='danew'] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px var(--primary) inset, var(--ring) !important;
+}
+
+/* 表头按 overline 处理：11/16，大写，字距 0.04em */
+html[data-skin='danew'] .el-table th.el-table__cell {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

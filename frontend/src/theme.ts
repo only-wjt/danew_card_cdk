@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 
 export type ThemeMode = 'light' | 'dark' | 'auto'
 export type SkinId =
+  | 'danew'
   | 'terracotta'
   | 'ember'
   | 'ocean'
@@ -40,9 +41,28 @@ export interface SkinMeta {
   /** 主色，用于同步 Element Plus */
   primary: string
   primaryOn?: string
+  /** 暗色下的主色覆盖。只有需要明暗分别取值的皮肤才填，未填则沿用 primary/primaryOn。 */
+  primaryDark?: string
+  primaryOnDark?: string
 }
 
 export const SKINS: SkinMeta[] = [
+  {
+    id: 'danew',
+    label: 'danew 靛蓝',
+    labelEn: 'danew Indigo',
+    swatch: '#4b3fce',
+    swatch2: '#ff6a3d',
+    blurb: '品牌默认 · 靛蓝主色 + 珊瑚橙强调 · 亮暗双模 · WCAG AA',
+    heading: 'sans',
+    density: 'comfy',
+    nav: 'pill',
+    layout: 'top',
+    primary: '#4b3fce',
+    primaryOn: '#ffffff',
+    primaryDark: '#8e86f5',
+    primaryOnDark: '#16132e',
+  },
   {
     id: 'terracotta',
     label: '赤陶奶油',
@@ -103,14 +123,14 @@ export const SKINS: SkinMeta[] = [
     id: 'forest',
     label: '森林清新',
     labelEn: 'Forest',
-    swatch: '#059669',
+    swatch: '#047857',
     swatch2: '#eef6f1',
     blurb: '空气感留白 · 轻圆角',
     heading: 'sans',
     density: 'airy',
     nav: 'pill',
     layout: 'top',
-    primary: '#059669',
+    primary: '#047857',
   },
   {
     id: 'violet',
@@ -181,9 +201,15 @@ export const SKINS: SkinMeta[] = [
   },
 ]
 
+export const DEFAULT_SKIN: SkinId = 'danew'
+
+/** 品牌名/副标题的中性兜底，必须与后端 settings.go 的 settingOr 默认值保持一致 */
+export const DEFAULT_BRAND_NAME = 'Recharge Portal'
+export const DEFAULT_BRAND_SUB = 'Account Upgrade Service'
+
 function readSkin(): SkinId {
   const v = localStorage.getItem(SKIN_KEY) as SkinId
-  return SKINS.some((s) => s.id === v) ? v : 'terracotta'
+  return SKINS.some((s) => s.id === v) ? v : DEFAULT_SKIN
 }
 
 export const themeMode = ref<ThemeMode>((localStorage.getItem(MODE_KEY) as ThemeMode) || 'light')
@@ -197,7 +223,7 @@ function loadBrand(): SiteBrand {
       if (o?.name) return { name: String(o.name), sub: String(o.sub || '') }
     }
   } catch { /* ignore */ }
-  return { name: 'CDK Portal', sub: 'Card Platform Redeem' }
+  return { name: DEFAULT_BRAND_NAME, sub: DEFAULT_BRAND_SUB }
 }
 
 export const siteBrand = ref<SiteBrand>(loadBrand())
@@ -207,7 +233,6 @@ function systemPrefersDark(): boolean {
 }
 
 export function isDark(): boolean {
-  const meta = currentSkinMeta.value
   // preferDark 皮肤在 light 模式下仍用皮肤自身暗色 token；.dark 类只在用户选 dark/auto-dark 时加
   if (themeMode.value === 'auto') return systemPrefersDark()
   return themeMode.value === 'dark'
@@ -289,9 +314,14 @@ function applySkin() {
   if (meta.preferDark && themeMode.value === 'light') {
     // 允许 light，但皮肤 CSS 本身已是暗色 token；不强制改 mode
   }
-  syncElementPlus(meta.primary, meta.primaryOn || '#ffffff')
+  const dark = isDark()
+  // 亮/暗主色不同的皮肤（danew）要让 EP 跟着换，否则暗色下按钮仍是亮色主色 + 白字
+  syncElementPlus(
+    (dark && meta.primaryDark) || meta.primary,
+    (dark && meta.primaryOnDark) || meta.primaryOn || '#ffffff',
+  )
   // 强制重绘部分 EP 组件缓存
-  root.style.colorScheme = isDark() || meta.preferDark ? 'dark' : 'light'
+  root.style.colorScheme = dark || meta.preferDark ? 'dark' : 'light'
 }
 
 /** 统一入口：皮肤 + 明暗 一次刷完 */
@@ -325,7 +355,7 @@ export function setSkin(id: SkinId) {
 
 export function setSiteBrand(patch: Partial<SiteBrand>) {
   siteBrand.value = {
-    name: (patch.name ?? siteBrand.value.name).trim() || 'CDK Portal',
+    name: (patch.name ?? siteBrand.value.name).trim() || DEFAULT_BRAND_NAME,
     sub: (patch.sub ?? siteBrand.value.sub).trim(),
   }
   localStorage.setItem(BRAND_KEY, JSON.stringify(siteBrand.value))

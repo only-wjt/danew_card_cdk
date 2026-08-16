@@ -7,9 +7,9 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tuzi/cdk-recharge-system/internal/cardplatform"
-	"github.com/tuzi/cdk-recharge-system/internal/db"
-	"github.com/tuzi/cdk-recharge-system/internal/plansync"
+	"github.com/danew/cdk-recharge-system/internal/cardplatform"
+	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/plansync"
 )
 
 // AdminGetCardSelectionRules GET /api/v1/admin/card-selection/rules

@@ -5,7 +5,10 @@ echo "CDK 充值系统 - 本地开发启动"
 echo "================================================"
 echo ""
 
-# 检查环境变量文件
+PROJECT_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$PROJECT_ROOT"
+
+# 检查环境变量文件（后端不会自己加载 .env，必须由本脚本 export）
 if [ ! -f .env.local ]; then
     echo "✗ 未找到 .env.local 文件"
     exit 1
@@ -14,33 +17,35 @@ fi
 echo "✓ 环境文件已找到"
 echo ""
 
-# 检查数据库连接
-echo "检查数据库连接..."
-psql -U postgres -h localhost -d cdk_recharge -c "SELECT NOW();" >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "✗ PostgreSQL 连接失败"
-    echo "  请确保 PostgreSQL 已启动，或运行:"
-    echo "  createdb cdk_recharge"
-    exit 1
-fi
-echo "✓ PostgreSQL 连接成功"
+# 载入环境变量（后端只读进程环境变量）
+set -a
+# shellcheck disable=SC1091
+. ./.env.local
+set +a
 
-# 检查 Redis
-redis-cli ping >/dev/null 2>&1
-if [ $? -ne 0 ]; then
-    echo "✗ Redis 连接失败 (可选，不影响基本功能)"
+# 准备 SQLite 数据库文件目录（SQLite 会自动建文件，但不会自动建目录）
+# DB_PATH 默认值 ../data/cdk_recharge.db 是相对 backend 目录的，即项目根的 data/
+DB_FILE="${DB_PATH:-./data/cdk_recharge.db}"
+case "$DB_FILE" in
+    ../*) DB_FILE="$PROJECT_ROOT/${DB_FILE#../}" ;;
+esac
+DB_DIR="$(dirname "$DB_FILE")"
+echo "检查数据库文件..."
+mkdir -p "$DB_DIR" || { echo "✗ 无法创建数据库目录: $DB_DIR"; exit 1; }
+if [ -f "$DB_FILE" ]; then
+    echo "✓ 使用已有 SQLite 数据库: $DB_FILE"
 else
-    echo "✓ Redis 连接成功"
+    echo "✓ 数据库不存在，后端启动时会自动创建: $DB_FILE"
 fi
 
 echo ""
 echo "启动服务..."
 echo ""
 
-# 启动后端
-cd backend
-export $(cat ../.env.local | xargs)
-echo "启动后端服务 (端口 8080)..."
+# 启动后端（go-sqlite3 依赖 cgo，必须开启）
+cd "$PROJECT_ROOT/backend"
+export CGO_ENABLED=1
+echo "启动后端服务 (端口 ${SERVER_PORT:-8080})..."
 go run ./cmd/server/main.go &
 BACKEND_PID=$!
 echo "  后端 PID: $BACKEND_PID"

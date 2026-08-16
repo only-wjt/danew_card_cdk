@@ -6,7 +6,7 @@
 set -euo pipefail
 
 DOMAIN=""
-REPO_URL="https://github.com/spacexcard/spacex_card_cdk_auto.git"
+REPO_URL="https://github.com/danew/danew_card_cdk.git"
 INSTALL_DIR="/opt/cdk-recharge"
 
 usage() {

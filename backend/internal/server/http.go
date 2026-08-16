@@ -10,10 +10,10 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tuzi/cdk-recharge-system/internal/config"
-	"github.com/tuzi/cdk-recharge-system/internal/db"
-	"github.com/tuzi/cdk-recharge-system/internal/handler"
-	"github.com/tuzi/cdk-recharge-system/internal/plansync"
+	"github.com/danew/cdk-recharge-system/internal/config"
+	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/handler"
+	"github.com/danew/cdk-recharge-system/internal/plansync"
 )
 
 type Server struct {
@@ -51,6 +51,9 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	// 启动卡台产品状态后台同步（每3分钟）
 	plansync.Start(ctx)
+
+	// 重启后把仍在途的批量充值明细与上游状态对齐一次
+	handler.ResumeInFlightBatchRecharges(ctx)
 
 	return &Server{
 		engine: engine,
@@ -195,6 +198,14 @@ func setupRoutes(r *gin.Engine) {
 			admin.GET("/cardplatform/cdk-orders", handler.CardPlatformListCDKOrders)
 			admin.GET("/cardplatform/cdk-orders/:id", handler.CardPlatformGetCDKOrder)
 			admin.DELETE("/cardplatform/cards/:id", handler.CardPlatformDeleteCard)
+
+			// 管理员批量充值（管理端无卡密；后端自动发码即兑换）。
+			// 路径必须挂在 cardplatform 前缀下：前端 lib/api.ts 只对该前缀
+			// 豁免「401/403 即登出」，否则上游鉴权错误会把管理员踢回登录页。
+			admin.POST("/cardplatform/batch-recharge", handler.AdminBatchRechargeCreate)
+			admin.GET("/cardplatform/batch-recharge", handler.AdminBatchRechargeList)
+			admin.GET("/cardplatform/batch-recharge/:batch_id", handler.AdminBatchRechargeDetail)
+			admin.POST("/cardplatform/batch-recharge/:batch_id/retry", handler.AdminBatchRechargeRetry)
 
 			// Webhook 事件列表 + 配置提示
 			admin.GET("/webhooks/events", handler.AdminListWebhooks)

@@ -19,11 +19,11 @@ fi
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 
-GIT_USER="${GIT_USER:-spacexcard}"
-GIT_REPO="${GIT_REPO:-spacex_card_cdk_auto}"
+GIT_USER="${GIT_USER:-danew}"
+GIT_REPO="${GIT_REPO:-danew_card_cdk}"
 GIT_BRANCH="${GIT_BRANCH:-master}"
-GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-spacexcard}"
-GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-spacexcard@users.noreply.github.com}"
+GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-danew}"
+GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-danew@users.noreply.github.com}"
 
 if [[ -z "${GIT_PAT:-}" || "$GIT_PAT" == ghp_在这里粘贴你的token* || "$GIT_PAT" == ghp_xxx* ]]; then
   echo "请在 $ENV_FILE 里设置有效的 GIT_PAT"

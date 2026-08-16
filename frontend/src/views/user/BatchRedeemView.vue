@@ -510,12 +510,6 @@ async function api(path: string, init: RequestInit = {}) {
   return { r, data }
 }
 
-const TERMINAL = new Set(['completed', 'declined', 'failed_precharge', 'cancelled', 'failed'])
-
-function isTerminal(st: string) {
-  return TERMINAL.has(String(st || '').toLowerCase())
-}
-
 function isSuccessStatus(st: string) {
   return String(st || '').toLowerCase() === 'completed'
 }

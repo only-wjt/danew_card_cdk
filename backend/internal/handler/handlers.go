@@ -16,10 +16,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/tuzi/cdk-recharge-system/internal/auth"
-	"github.com/tuzi/cdk-recharge-system/internal/cardplatform"
-	"github.com/tuzi/cdk-recharge-system/internal/db"
-	"github.com/tuzi/cdk-recharge-system/internal/notify"
+	"github.com/danew/cdk-recharge-system/internal/auth"
+	"github.com/danew/cdk-recharge-system/internal/cardplatform"
+	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 )
 
 // GenerateTaskID generates a unique task ID

@@ -3,7 +3,7 @@
     <!-- 侧栏 / 细轨（cyber、slate 等） -->
     <aside v-if="layout === 'sidebar' || layout === 'rail'" class="sidenav">
       <div class="side-brand" @click="router.push('/ops')">
-        <span class="brand-icon">{{ layout === 'cyber' || skin === 'cyber' ? '◈' : '🚀' }}</span>
+        <BrandMark :size="22" :label="brand.name || 'danew'" />
         <span v-if="layout !== 'rail'" class="brand-text">{{ brand.name || '运营控制台' }}</span>
       </div>
       <nav class="side-pills">
@@ -20,6 +20,7 @@
         </router-link>
       </nav>
       <div class="side-foot">
+        <ThemeToggle />
         <el-popover placement="right-end" :width="340" trigger="click">
           <template #reference>
             <button type="button" class="side-tool" title="主题">
@@ -39,7 +40,7 @@
       <header v-if="layout === 'top'" class="topnav">
         <div class="nav-inner">
           <div class="brand" @click="router.push('/ops')">
-            <span class="brand-icon">🚀</span>
+            <BrandMark :size="22" :label="brand.name || 'danew'" />
             <span class="brand-text">{{ brand.name || '运营控制台' }}</span>
           </div>
           <nav class="nav-pills">
@@ -54,6 +55,7 @@
             </router-link>
           </nav>
           <div class="nav-actions">
+            <ThemeToggle />
             <el-popover placement="bottom-end" :width="340" trigger="click">
               <template #reference>
                 <span class="hicon" title="整站主题"><el-icon><Brush /></el-icon></span>
@@ -85,14 +87,14 @@ import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { serverLogout } from '../lib/api'
-import { siteBrand, currentSkinMeta, siteSkin } from '../theme'
+import { siteBrand, currentSkinMeta } from '../theme'
 import SkinPicker from '../components/SkinPicker.vue'
+import ThemeToggle from '../components/ThemeToggle.vue'
 
 const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 const brand = siteBrand
-const skin = siteSkin
 
 const layout = computed(() => currentSkinMeta.value.layout)
 const nav = computed(() => currentSkinMeta.value.nav)
@@ -100,6 +102,7 @@ const nav = computed(() => currentSkinMeta.value.nav)
 const navItems = [
   { path: '/ops', label: '总览', icon: 'Odometer' },
   { path: '/ops/cdkeys', label: 'CDK卡密', icon: 'Key' },
+  { path: '/ops/batch-recharge', label: '批量充值', icon: 'Upload' },
   { path: '/ops/orders', label: '兑换对账', icon: 'Document' },
   { path: '/ops/integration', label: '卡台接入', icon: 'Link' },
   { path: '/ops/card-selection', label: '选卡配置', icon: 'CreditCard' },

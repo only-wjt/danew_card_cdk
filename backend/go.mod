@@ -1,4 +1,4 @@
-module github.com/tuzi/cdk-recharge-system
+module github.com/danew/cdk-recharge-system
 
 go 1.24.1
 

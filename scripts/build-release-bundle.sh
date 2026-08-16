@@ -12,7 +12,7 @@ echo "$VER" > "$ROOT/VERSION"
 mkdir -p "$ROOT/dist/web"
 echo "==> go build v$VER"
 cd "$ROOT/backend"
-go build -trimpath -ldflags="-s -w -X github.com/tuzi/cdk-recharge-system/internal/handler.BuildVersion=${VER}" \
+go build -trimpath -ldflags="-s -w -X github.com/danew/cdk-recharge-system/internal/handler.BuildVersion=${VER}" \
   -o "$ROOT/dist/cdk-recharge" ./cmd/server
 echo "==> frontend build"
 cd "$ROOT/frontend"

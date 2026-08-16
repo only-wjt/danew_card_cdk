@@ -6,8 +6,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/tuzi/cdk-recharge-system/internal/cardplatform"
-	"github.com/tuzi/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/cardplatform"
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
 const syncInterval = 3 * time.Minute

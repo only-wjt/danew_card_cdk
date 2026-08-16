@@ -15,7 +15,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/tuzi/cdk-recharge-system/internal/config"
+	"github.com/danew/cdk-recharge-system/internal/config"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -35,7 +35,9 @@ func Init(cfg *config.DatabaseConfig) error {
 		dbPath = p
 	}
 	log.Printf("使用数据库: %s", dbPath)
-	db, err := sql.Open("sqlite3", dbPath)
+	// WAL + busy_timeout：批量充值 executor 会并发写 admin_recharge_items，
+	// 默认的 rollback journal 在并发写下会直接返回 SQLITE_BUSY 而不是等待。
+	db, err := sql.Open("sqlite3", sqliteDSN(dbPath))
 	if err != nil {
 		return err
 	}
@@ -47,6 +49,14 @@ func Init(cfg *config.DatabaseConfig) error {
 	db.SetMaxOpenConns(25)
 	db.SetMaxIdleConns(5)
 
+	if mode, err := currentJournalMode(db); err != nil {
+		log.Printf("警告: 无法读取 journal_mode: %v", err)
+	} else if !strings.EqualFold(mode, "wal") {
+		log.Printf("警告: journal_mode=%s（期望 wal），并发写可能出现 SQLITE_BUSY", mode)
+	} else {
+		log.Printf("✓ SQLite journal_mode=wal, busy_timeout=%dms", sqliteBusyTimeoutMS)
+	}
+
 	DB = db
 	log.Println("✓ SQLite 数据库连接成功: data/cdk_recharge.db")
 
@@ -56,6 +66,24 @@ func Init(cfg *config.DatabaseConfig) error {
 	}
 
 	return nil
+}
+
+// sqliteBusyTimeoutMS 是写锁竞争时的最长等待，超时才返回 SQLITE_BUSY。
+const sqliteBusyTimeoutMS = 5000
+
+// sqliteDSN 给库路径附加 WAL 与 busy_timeout 参数（调用方已配置的参数优先保留）。
+func sqliteDSN(path string) string {
+	if strings.Contains(path, "?") {
+		return path
+	}
+	return fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=%d", path, sqliteBusyTimeoutMS)
+}
+
+// currentJournalMode 回读实际生效的日志模式（内存库等场景无法启用 WAL）。
+func currentJournalMode(db *sql.DB) (string, error) {
+	var mode string
+	err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode)
+	return mode, err
 }
 
 func createTables() error {
@@ -201,6 +229,42 @@ func createTables() error {
 			suspended_at TEXT DEFAULT '',
 			synced_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
+
+		// 管理员批量充值批次（管理端不出现卡密；卡密是内部记账凭证）
+		`CREATE TABLE IF NOT EXISTS admin_recharge_batches (
+			batch_id TEXT PRIMARY KEY,
+			operator TEXT DEFAULT '',
+			plan TEXT DEFAULT '',
+			total INTEGER DEFAULT 0,
+			status TEXT DEFAULT 'running',
+			fingerprint TEXT DEFAULT '',
+			message TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_arb_created ON admin_recharge_batches(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_arb_fingerprint ON admin_recharge_batches(fingerprint)`,
+
+		// 批量充值明细：只落邮箱等非敏感字段，绝不落 session / 邮箱密码
+		`CREATE TABLE IF NOT EXISTS admin_recharge_items (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			batch_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			client_request_id TEXT NOT NULL UNIQUE,
+			plan TEXT DEFAULT '',
+			cred_mode TEXT DEFAULT '',
+			account_email TEXT DEFAULT '',
+			cdk_code TEXT DEFAULT '',
+			card_id INTEGER DEFAULT 0, -- reserved: future card-platform card id write-back; access layer does not read/write it yet
+			redemption_token TEXT DEFAULT '',
+			upstream_order_id TEXT DEFAULT '',
+			status TEXT DEFAULT 'pending',
+			message TEXT DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ari_batch_seq ON admin_recharge_items(batch_id, seq)`,
+		`CREATE INDEX IF NOT EXISTS idx_ari_status ON admin_recharge_items(status)`,
 	}
 
 	for _, query := range queries {
@@ -1300,6 +1364,254 @@ func migrateDefaultCardSelectionRules() error {
 	}
 	log.Println("✓ 已写入默认选卡优先级规则")
 	return nil
+}
+
+// ---- 管理员批量充值 ----
+
+// AdminRechargeBatch 一次批量充值任务。
+type AdminRechargeBatch struct {
+	BatchID   string `json:"batch_id"`
+	Operator  string `json:"operator"`
+	Plan      string `json:"plan"`
+	Total     int    `json:"total"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// AdminRechargeItem 批次内一条充值明细。
+// RedemptionToken / CDKCode 带 json:"-"，绝不随接口返回给前端。
+// CardID 预留：表上有 card_id INTEGER DEFAULT 0，供未来回写卡台 card id。
+// 当前 SELECT/INSERT/Patch 都不碰该列（INSERT 不列它则走 DEFAULT 0），避免误扫炸。
+type AdminRechargeItem struct {
+	BatchID         string `json:"batch_id"`
+	Seq             int    `json:"seq"`
+	ClientRequestID string `json:"client_request_id"`
+	Plan            string `json:"plan"`
+	CredMode        string `json:"cred_mode"`
+	AccountEmail    string `json:"account_email"`
+	CDKCode         string `json:"-"`
+	RedemptionToken string `json:"-"`
+	// CardID reserved for future card-platform card id write-back. Not selected or patched yet.
+	CardID          int    `json:"-"`
+	UpstreamOrderID string `json:"upstream_order_id"`
+	Status          string `json:"status"`
+	Message         string `json:"message"`
+	UpdatedAt       string `json:"updated_at"`
+}
+
+// AdminRechargeItemPatch 局部更新，只写非 nil 字段。
+type AdminRechargeItemPatch struct {
+	Status          *string
+	Message         *string
+	AccountEmail    *string
+	CDKCode         *string
+	RedemptionToken *string
+	UpstreamOrderID *string
+}
+
+// adminRechargeItemCols 显式列清单，不含 reserved card_id，避免 Scan 与结构体字段错位。
+const adminRechargeItemCols = `batch_id, seq, client_request_id, COALESCE(plan,''), COALESCE(cred_mode,''),
+	COALESCE(account_email,''), COALESCE(cdk_code,''), COALESCE(redemption_token,''),
+	COALESCE(upstream_order_id,''), COALESCE(status,''), COALESCE(message,''), COALESCE(updated_at,'')`
+
+func scanAdminRechargeItem(s interface{ Scan(...any) error }) (AdminRechargeItem, error) {
+	var it AdminRechargeItem
+	err := s.Scan(&it.BatchID, &it.Seq, &it.ClientRequestID, &it.Plan, &it.CredMode,
+		&it.AccountEmail, &it.CDKCode, &it.RedemptionToken,
+		&it.UpstreamOrderID, &it.Status, &it.Message, &it.UpdatedAt)
+	return it, err
+}
+
+// CreateAdminRechargeBatch 在一个事务里写入批次与全部明细。
+func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []AdminRechargeItem) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`
+		INSERT INTO admin_recharge_batches (batch_id, operator, plan, total, status, fingerprint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, b.BatchID, b.Operator, b.Plan, b.Total, b.Status, fingerprint); err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`
+		INSERT INTO admin_recharge_items
+			(batch_id, seq, client_request_id, plan, cred_mode, account_email, status, message, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, it := range items {
+		if _, err := stmt.Exec(it.BatchID, it.Seq, it.ClientRequestID, it.Plan,
+			it.CredMode, it.AccountEmail, it.Status, it.Message); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// FindRecentAdminRechargeBatchByFingerprint 查同一操作员在窗口期内提交过的相同批次（防误双击重复扣款）。
+func FindRecentAdminRechargeBatchByFingerprint(fingerprint string, withinSeconds int) (string, error) {
+	if DB == nil || strings.TrimSpace(fingerprint) == "" {
+		return "", nil
+	}
+	var batchID string
+	err := DB.QueryRow(`
+		SELECT batch_id FROM admin_recharge_batches
+		WHERE fingerprint = ?
+		  AND created_at >= datetime('now', ?)
+		ORDER BY created_at DESC LIMIT 1
+	`, fingerprint, fmt.Sprintf("-%d seconds", withinSeconds)).Scan(&batchID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return batchID, err
+}
+
+// GetAdminRechargeBatch 取批次头；不存在返回 nil。
+func GetAdminRechargeBatch(batchID string) (*AdminRechargeBatch, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	var b AdminRechargeBatch
+	err := DB.QueryRow(`
+		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), total,
+		       COALESCE(status,''), COALESCE(message,''), COALESCE(created_at,''), COALESCE(updated_at,'')
+		FROM admin_recharge_batches WHERE batch_id = ?
+	`, batchID).Scan(&b.BatchID, &b.Operator, &b.Plan, &b.Total, &b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+// ListAdminRechargeBatches 批次列表（倒序）。
+func ListAdminRechargeBatches(limit int) ([]AdminRechargeBatch, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if limit < 1 || limit > 200 {
+		limit = 50
+	}
+	rows, err := DB.Query(`
+		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), total,
+		       COALESCE(status,''), COALESCE(message,''), COALESCE(created_at,''), COALESCE(updated_at,'')
+		FROM admin_recharge_batches ORDER BY created_at DESC LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]AdminRechargeBatch, 0, limit)
+	for rows.Next() {
+		var b AdminRechargeBatch
+		if err := rows.Scan(&b.BatchID, &b.Operator, &b.Plan, &b.Total,
+			&b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// ListAdminRechargeItems 按 seq 返回批次明细。
+func ListAdminRechargeItems(batchID string) ([]AdminRechargeItem, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(`SELECT `+adminRechargeItemCols+`
+		FROM admin_recharge_items WHERE batch_id = ? ORDER BY seq`, batchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdminRechargeItem
+	for rows.Next() {
+		it, err := scanAdminRechargeItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// ListInFlightAdminRechargeItems 取重启后仍需对齐上游状态的明细（已拿到 token 但未终态）。
+func ListInFlightAdminRechargeItems() ([]AdminRechargeItem, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(`SELECT ` + adminRechargeItemCols + `
+		FROM admin_recharge_items
+		WHERE status IN ('submitted','processing','unknown')
+		  AND COALESCE(redemption_token,'') <> ''
+		ORDER BY batch_id, seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdminRechargeItem
+	for rows.Next() {
+		it, err := scanAdminRechargeItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
+	}
+	return out, rows.Err()
+}
+
+// PatchAdminRechargeItem 按 client_request_id 局部更新明细。
+func PatchAdminRechargeItem(clientRequestID string, p AdminRechargeItemPatch) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	sets := make([]string, 0, 6)
+	args := make([]any, 0, 7)
+	add := func(col string, v *string) {
+		if v != nil {
+			sets = append(sets, col+" = ?")
+			args = append(args, *v)
+		}
+	}
+	add("status", p.Status)
+	add("message", p.Message)
+	add("account_email", p.AccountEmail)
+	add("cdk_code", p.CDKCode)
+	add("redemption_token", p.RedemptionToken)
+	add("upstream_order_id", p.UpstreamOrderID)
+	if len(sets) == 0 {
+		return nil
+	}
+	sets = append(sets, "updated_at = CURRENT_TIMESTAMP")
+	args = append(args, clientRequestID)
+	_, err := DB.Exec(`UPDATE admin_recharge_items SET `+strings.Join(sets, ", ")+
+		` WHERE client_request_id = ?`, args...)
+	return err
+}
+
+// SetAdminRechargeBatchStatus 更新批次状态与备注。
+func SetAdminRechargeBatchStatus(batchID, status, message string) error {
+	if DB == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	_, err := DB.Exec(`
+		UPDATE admin_recharge_batches SET status = ?, message = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE batch_id = ?
+	`, status, message, batchID)
+	return err
 }
 
 func Close() error {

@@ -326,6 +326,8 @@ function loadProgress(): boolean {
         canPurchaseAt: String(p.account.canPurchaseAt || ''),
         subscriptionWillRenew:
           typeof p.account.subscriptionWillRenew === 'boolean' ? p.account.subscriptionWillRenew : null,
+        subscriptionIsDelinquent:
+          typeof p.account.subscriptionIsDelinquent === 'boolean' ? p.account.subscriptionIsDelinquent : null,
         lastPayment: p.account.lastPayment || null,
         paymentMethod: p.account.paymentMethod || null,
       }

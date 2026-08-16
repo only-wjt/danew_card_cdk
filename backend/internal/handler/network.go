@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tuzi/cdk-recharge-system/internal/cardplatform"
+	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 )
 
 // NetworkEgress GET /api/v1/admin/network/egress

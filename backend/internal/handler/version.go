@@ -13,11 +13,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// 可由编译 ldflags 注入：-X github.com/tuzi/cdk-recharge-system/internal/handler.BuildVersion=x
+// 可由编译 ldflags 注入：-X github.com/danew/cdk-recharge-system/internal/handler.BuildVersion=x
 var BuildVersion = ""
 
 // 默认仓库：白标 CDK 门户公开仓
-const defaultGitHubRepo = "spacexcard/spacex_card_cdk_auto"
+const defaultGitHubRepo = "danew/danew_card_cdk"
 
 var (
 	versionCacheMu   sync.Mutex

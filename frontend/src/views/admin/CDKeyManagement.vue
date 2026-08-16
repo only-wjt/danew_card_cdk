@@ -1013,7 +1013,7 @@ async function issue() {
     rememberIssued(issued, form.plan)
     recentCodes.value = codes
     persistRecent(codes, form.plan)
-    const shortOnes = codes.filter((c) => !isFullCode(c))
+    const shortOnes = codes.filter((c: string) => !isFullCode(c))
     const storedN = Number(d.stored_count)
     const storeFail = Number(d.store_failed) || 0
     let okMsg = shortOnes.length

@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tuzi/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
 // 一键更新状态（进程内；重启后重置为 idle，版本由 VERSION 体现）

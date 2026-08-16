@@ -5,8 +5,11 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tuzi/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
+
+// defaultSkin 未配置站点时的默认皮肤，需与前端 theme.ts 的 DEFAULT_SKIN 保持一致
+const defaultSkin = "danew"
 
 // 允许写入 site_settings 的公开安全键（无密钥）
 var publicSettingKeys = map[string]bool{
@@ -31,7 +34,7 @@ func PublicSiteConfig(c *gin.Context) {
 		"installed":  db.IsInstalled(),
 		"brand_name": settingOr("brand_name", "Recharge Portal"),
 		"brand_sub":  settingOr("brand_sub", "Account Upgrade Service"),
-		"skin":       settingOr("skin", "terracotta"),
+		"skin":       settingOr("skin", defaultSkin),
 		"theme_mode": settingOr("theme_mode", "light"),
 	})
 }
@@ -41,7 +44,7 @@ func AdminGetSettings(c *gin.Context) {
 	out := gin.H{
 		"brand_name": settingOr("brand_name", "Recharge Portal"),
 		"brand_sub":  settingOr("brand_sub", "Account Upgrade Service"),
-		"skin":       settingOr("skin", "terracotta"),
+		"skin":       settingOr("skin", defaultSkin),
 		"theme_mode": settingOr("theme_mode", "light"),
 	}
 	// 非密钥可读
@@ -93,6 +96,7 @@ func AdminPutSettings(c *gin.Context) {
 	}
 
 	allowedSkins := map[string]bool{
+		"danew": true,
 		"terracotta": true, "ocean": true, "cyber": true, "forest": true, "violet": true,
 		"slate": true, "rose": true, "ember": true, "noir": true, "paper": true,
 	}

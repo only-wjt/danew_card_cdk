@@ -2,31 +2,62 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="/favicon.ico" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>CDK Portal</title>
+    <!-- 中性兜底标题：真实品牌名由路由守卫用 site_settings 的 brand_name 覆写 -->
+    <title>Recharge Portal</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <!--
+      字重预算：中文优先系统字体（PingFang SC / HarmonyOS Sans SC / Microsoft YaHei），
+      Noto Sans/Serif SC 只留 400/700 兜底 —— 中文子集是这里最重的一块。
+      Plus Jakarta Sans 只做标题与 logo（600/700/800），正文与表格走 Inter。
+      金额与卡密走 JetBrains Mono，配 font-variant-numeric: tabular-nums。
+    -->
     <link
-      href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Instrument+Serif&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;700&family=Noto+Serif+SC:wght@400;700&family=Outfit:wght@400;600;700&family=Plus+Jakarta+Sans:wght@600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=Space+Grotesk:wght@400;600;700&display=swap"
       rel="stylesheet"
     />
     <script>
+      // 首屏防闪（FOUC）：必须在样式表解析前同步执行，把皮肤属性写到 <html> 上。
+      // 这里的表是 src/theme.ts 里 SKINS 元数据的镜像，新增皮肤时两边都要加。
+      // 多皮肤体系保留，所以 preferDark / layout 判断依旧需要。
       (function () {
         try {
+          // [heading, density, nav, layout, preferDark]
+          var BOOT = {
+            danew: ['sans', 'comfy', 'pill', 'top', 0],
+            terracotta: ['serif', 'comfy', 'pill', 'top', 0],
+            cyber: ['mono', 'compact', 'block', 'sidebar', 1],
+            ocean: ['sans', 'compact', 'block', 'top', 0],
+            ember: ['display', 'comfy', 'pill', 'top', 1],
+            forest: ['sans', 'airy', 'pill', 'top', 0],
+            violet: ['display', 'comfy', 'underline', 'top', 0],
+            slate: ['mono', 'compact', 'block', 'rail', 0],
+            rose: ['serif', 'airy', 'underline', 'top', 0],
+            noir: ['display', 'compact', 'block', 'top', 1],
+            paper: ['serif', 'comfy', 'underline', 'top', 0],
+          }
+          var root = document.documentElement
           var mode = localStorage.getItem('theme-mode') || 'light'
-          var skin = localStorage.getItem('site-skin') || 'terracotta'
+          var skin = localStorage.getItem('site-skin') || 'danew'
+          var meta = BOOT[skin] || BOOT.danew
           var dark =
             mode === 'dark' ||
             (mode === 'auto' &&
               window.matchMedia &&
               window.matchMedia('(prefers-color-scheme: dark)').matches)
-          // preferDark 皮肤默认暗色，减少首屏闪白
-          if (skin === 'cyber' || skin === 'ember' || skin === 'noir') dark = true
-          if (dark) document.documentElement.classList.add('dark')
-          document.documentElement.setAttribute('data-skin', skin)
-          var layoutMap = { cyber: 'sidebar', slate: 'rail' }
-          document.documentElement.setAttribute('data-layout', layoutMap[skin] || 'top')
+          // preferDark 皮肤（cyber / ember / noir）本身就是暗色 token，首屏直接按暗色画
+          if (meta[4]) dark = true
+          if (dark) root.classList.add('dark')
+          root.setAttribute('data-skin', skin)
+          // heading / density / nav 也要在首屏就位，否则标题字体和圆角会跳一下
+          root.setAttribute('data-heading', meta[0])
+          root.setAttribute('data-density', meta[1])
+          root.setAttribute('data-nav', meta[2])
+          root.setAttribute('data-layout', meta[3])
+          // 让浏览器原生控件（滚动条 / 表单）第一帧就用对配色
+          root.style.colorScheme = dark ? 'dark' : 'light'
         } catch (e) {}
       })()
     </script>

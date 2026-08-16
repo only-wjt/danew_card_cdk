@@ -48,7 +48,6 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { authFetch } from '../../lib/api'
-import ThemeToggle from '../../components/ThemeToggle.vue'
 
 interface AuditLog {
   id: number

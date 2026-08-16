@@ -66,6 +66,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'AdminDashboard', component: () => import('../views/admin/AdminDashboard.vue') },
       { path: 'cdkeys', name: 'CDKeyManagement', component: () => import('../views/admin/CDKeyManagement.vue') },
+      { path: 'batch-recharge', name: 'BatchRecharge', component: () => import('../views/admin/BatchRechargeView.vue') },
       { path: 'orders', name: 'OrderReconcile', component: () => import('../views/admin/OrderReconcile.vue') },
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
       { path: 'integration', name: 'CardIntegration', component: () => import('../views/admin/CardIntegration.vue') },
@@ -133,6 +134,7 @@ router.beforeEach(async (to) => {
   if ((to.path === `${OPS_BASE}/login` || to.path === '/auth/login') && authStore.isLoggedIn) {
     return OPS_BASE
   }
+  return true
 })
 
 export default router

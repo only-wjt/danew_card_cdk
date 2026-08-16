@@ -1,5 +1,5 @@
 // Package cardplatform 封装卡台 Open API + 公开 CDK 兑换接口。
-// 文档：docs/spacexcard-cdk-zh.md、docs/spacexcard-openapi-zh.md
+// 文档：docs/danew-cdk-zh.md、docs/danew-openapi-zh.md
 package cardplatform
 
 import (
@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tuzi/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
 const defaultBase = "https://spacexcard.com"

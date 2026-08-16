@@ -6,8 +6,8 @@ import (
 	"log"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tuzi/cdk-recharge-system/internal/config"
-	"github.com/tuzi/cdk-recharge-system/internal/server"
+	"github.com/danew/cdk-recharge-system/internal/config"
+	"github.com/danew/cdk-recharge-system/internal/server"
 )
 
 func main() {

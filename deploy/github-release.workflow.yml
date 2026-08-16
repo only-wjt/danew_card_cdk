@@ -42,7 +42,7 @@ jobs:
         working-directory: backend
         run: |
           mkdir -p ../dist
-          go build -trimpath -ldflags="-s -w -X github.com/tuzi/cdk-recharge-system/internal/handler.BuildVersion=${{ steps.ver.outputs.version }}" \
+          go build -trimpath -ldflags="-s -w -X github.com/danew/cdk-recharge-system/internal/handler.BuildVersion=${{ steps.ver.outputs.version }}" \
             -o ../dist/cdk-recharge ./cmd/server
 
       - name: Build frontend
