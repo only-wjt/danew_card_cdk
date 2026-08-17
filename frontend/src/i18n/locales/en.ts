@@ -194,7 +194,7 @@ export default {
   batchRecharge: {
     title: 'Batch Recharge',
     subtitle:
-      'Operator-side direct top-up: the backend issues and redeems internally — no CDK on screen, no credential ever stored.',
+      'Operator-side direct top-up: the backend issues and redeems internally — no CDK on screen. Credentials for new batches are stored server-side for export only and never echoed in list/detail JSON.',
     createTitle: 'New Batch',
     planLabel: 'Plan',
     fee: 'Service fee',
@@ -214,7 +214,7 @@ export default {
     maxHint: '1–100 entries per batch; split larger jobs.',
     overLimit: '{n} entries recognised, over the per-batch limit of {max}. Please split the job.',
     credNotice:
-      'Credentials travel only in this request body and stay in server memory. Neither the batch nor the item table has a session/password column. This page never echoes or caches them, and clears them from memory after submit.',
+      'Credentials are stored on the server for Excel export only. List and detail APIs never return passwords or sessions. This page never echoes or caches them, and clears them from memory after submit.',
     previewTitle: 'Entries to submit',
     masked: '••••',
     fundingLabel: 'I confirm this account covers card issuing, funding, upstream subscription and service fees',
@@ -231,6 +231,8 @@ export default {
     colBatch: 'Batch',
     colPlan: 'Plan',
     colTotal: 'Items',
+    colSuccess: 'Success',
+    colFailed: 'Failed',
     colStatus: 'Status',
     colOperator: 'Operator',
     colUpdated: 'Updated',
@@ -258,7 +260,27 @@ export default {
     reconcileDone: 'Reconciled {n} item(s); {r} need resubmission',
     resubmitTitle: 'Items needing resubmission',
     resubmitHint:
-      'The server keeps no credentials and cannot resend for you. Take the matching credentials from your source data by sequence number and submit them as a new batch above — that is a separate, explicit action.',
+      'Failed items must be submitted as a new batch. For new batches you can Export Excel (failed) to recover credentials; older batches with empty credential cells need the original file. Reconciliation never charges twice.',
+    exportLabel: 'Export scope',
+    exportExcel: 'Export Excel',
+    exporting: 'Exporting…',
+    exportHint:
+      'Columns are email, gpt password, email password, session. Failed includes status failed only — not unknown (may already be charged) or skipped. Use All for unknown, or reconcile first. Older batches with no stored credentials export empty cells.',
+    exportScope: { all: 'All', success: 'Success', failed: 'Failed' },
+    errExport: 'Export failed',
+    confirmTitle: 'Confirm the plan before creating',
+    confirmCannotStop: 'Once created, the batch starts immediately and cannot be stopped. Double-check the plan.',
+    confirmHighPrice: 'This is the high-price plan (Pro 20x) at $10 per item.',
+    confirmCount: 'Items',
+    confirmUnitFee: 'Unit service fee',
+    confirmTotalFee: 'Estimated total fee',
+    confirmCancel: 'Go back',
+    confirmOk: 'Confirm create {plan}',
+    planHuman: {
+      plus: 'Plus ({fee}/item)',
+      pro_5x: 'Pro 5x ({fee}/item)',
+      pro_20x: 'Pro 20x ({fee}/item)',
+    },
     unknownBanner:
       '{n} item(s) in this batch have an unknown result: they may already be charged, so resubmitting is forbidden. Use “Reconcile with upstream” first, or cross-check the order id under Redeem Reconciliation.',
     unknownTip:

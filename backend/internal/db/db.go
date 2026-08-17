@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/danew/cdk-recharge-system/internal/config"
+	_ "github.com/mattn/go-sqlite3"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -245,7 +245,8 @@ func createTables() error {
 		`CREATE INDEX IF NOT EXISTS idx_arb_created ON admin_recharge_batches(created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_arb_fingerprint ON admin_recharge_batches(fingerprint)`,
 
-		// 批量充值明细：只落邮箱等非敏感字段，绝不落 session / 邮箱密码
+		// 批量充值明细：列表/详情接口不回传凭据；gpt_password / email_password / session
+		// 仅供服务端导出 Excel，旧库由 migrateAdminRechargeItemCredCols 补列。
 		`CREATE TABLE IF NOT EXISTS admin_recharge_items (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			batch_id TEXT NOT NULL,
@@ -254,6 +255,9 @@ func createTables() error {
 			plan TEXT DEFAULT '',
 			cred_mode TEXT DEFAULT '',
 			account_email TEXT DEFAULT '',
+			gpt_password TEXT DEFAULT '',
+			email_password TEXT DEFAULT '',
+			session TEXT DEFAULT '',
 			cdk_code TEXT DEFAULT '',
 			card_id INTEGER DEFAULT 0, -- reserved: future card-platform card id write-back; access layer does not read/write it yet
 			redemption_token TEXT DEFAULT '',
@@ -286,6 +290,9 @@ func createTables() error {
 	if err := migrateCardplatformCDKStatusCol(); err != nil {
 		log.Printf("migrateCardplatformCDKStatusCol: %v", err)
 	}
+	if err := migrateAdminRechargeItemCredCols(); err != nil {
+		log.Printf("migrateAdminRechargeItemCredCols: %v", err)
+	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
 	}
@@ -304,6 +311,27 @@ func migrateCardplatformCDKStatusCol() error {
 	}
 	_, err = DB.Exec(`ALTER TABLE cardplatform_cdk_codes ADD COLUMN status TEXT DEFAULT ''`)
 	return err
+}
+
+// migrateAdminRechargeItemCredCols 为旧库补导出用凭据列（可空，历史批次保持空字符串）。
+func migrateAdminRechargeItemCredCols() error {
+	if DB == nil {
+		return nil
+	}
+	for _, col := range []string{"gpt_password", "email_password", "session"} {
+		var n int
+		err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('admin_recharge_items') WHERE name=?`, col).Scan(&n)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := DB.Exec(`ALTER TABLE admin_recharge_items ADD COLUMN ` + col + ` TEXT DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // legacySHA256 是旧的（不安全）哈希算法，仅用于兼容历史数据并在登录时升级为 bcrypt。
@@ -1374,6 +1402,8 @@ type AdminRechargeBatch struct {
 	Operator  string `json:"operator"`
 	Plan      string `json:"plan"`
 	Total     int    `json:"total"`
+	Success   int    `json:"success"`
+	Failed    int    `json:"failed"`
 	Status    string `json:"status"`
 	Message   string `json:"message"`
 	CreatedAt string `json:"created_at"`
@@ -1381,7 +1411,8 @@ type AdminRechargeBatch struct {
 }
 
 // AdminRechargeItem 批次内一条充值明细。
-// RedemptionToken / CDKCode 带 json:"-"，绝不随接口返回给前端。
+// RedemptionToken / CDKCode / GptPassword / EmailPassword / Session 带 json:"-"，
+// 绝不随列表/详情接口返回给前端；凭据只走独立导出接口。
 // CardID 预留：表上有 card_id INTEGER DEFAULT 0，供未来回写卡台 card id。
 // 当前 SELECT/INSERT/Patch 都不碰该列（INSERT 不列它则走 DEFAULT 0），避免误扫炸。
 type AdminRechargeItem struct {
@@ -1391,6 +1422,9 @@ type AdminRechargeItem struct {
 	Plan            string `json:"plan"`
 	CredMode        string `json:"cred_mode"`
 	AccountEmail    string `json:"account_email"`
+	GptPassword     string `json:"-"`
+	EmailPassword   string `json:"-"`
+	Session         string `json:"-"`
 	CDKCode         string `json:"-"`
 	RedemptionToken string `json:"-"`
 	// CardID reserved for future card-platform card id write-back. Not selected or patched yet.
@@ -1424,6 +1458,15 @@ func scanAdminRechargeItem(s interface{ Scan(...any) error }) (AdminRechargeItem
 	return it, err
 }
 
+func scanAdminRechargeItemExport(s interface{ Scan(...any) error }) (AdminRechargeItem, error) {
+	var it AdminRechargeItem
+	err := s.Scan(&it.BatchID, &it.Seq, &it.ClientRequestID, &it.Plan, &it.CredMode,
+		&it.AccountEmail, &it.CDKCode, &it.RedemptionToken,
+		&it.UpstreamOrderID, &it.Status, &it.Message, &it.UpdatedAt,
+		&it.GptPassword, &it.EmailPassword, &it.Session)
+	return it, err
+}
+
 // CreateAdminRechargeBatch 在一个事务里写入批次与全部明细。
 func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []AdminRechargeItem) error {
 	if DB == nil {
@@ -1443,8 +1486,9 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	}
 	stmt, err := tx.Prepare(`
 		INSERT INTO admin_recharge_items
-			(batch_id, seq, client_request_id, plan, cred_mode, account_email, status, message, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			(batch_id, seq, client_request_id, plan, cred_mode, account_email,
+			 gpt_password, email_password, session, status, message, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`)
 	if err != nil {
 		return err
@@ -1452,7 +1496,8 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	defer stmt.Close()
 	for _, it := range items {
 		if _, err := stmt.Exec(it.BatchID, it.Seq, it.ClientRequestID, it.Plan,
-			it.CredMode, it.AccountEmail, it.Status, it.Message); err != nil {
+			it.CredMode, it.AccountEmail, it.GptPassword, it.EmailPassword, it.Session,
+			it.Status, it.Message); err != nil {
 			return err
 		}
 	}
@@ -1506,9 +1551,12 @@ func ListAdminRechargeBatches(limit int) ([]AdminRechargeBatch, error) {
 		limit = 50
 	}
 	rows, err := DB.Query(`
-		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), total,
-		       COALESCE(status,''), COALESCE(message,''), COALESCE(created_at,''), COALESCE(updated_at,'')
-		FROM admin_recharge_batches ORDER BY created_at DESC LIMIT ?
+		SELECT b.batch_id, COALESCE(b.operator,''), COALESCE(b.plan,''), b.total,
+		       COALESCE(b.status,''), COALESCE(b.message,''), COALESCE(b.created_at,''), COALESCE(b.updated_at,''),
+		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'success'), 0),
+		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'failed'), 0)
+		FROM admin_recharge_batches b
+		ORDER BY b.created_at DESC LIMIT ?
 	`, limit)
 	if err != nil {
 		return nil, err
@@ -1518,10 +1566,34 @@ func ListAdminRechargeBatches(limit int) ([]AdminRechargeBatch, error) {
 	for rows.Next() {
 		var b AdminRechargeBatch
 		if err := rows.Scan(&b.BatchID, &b.Operator, &b.Plan, &b.Total,
-			&b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt); err != nil {
+			&b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt, &b.Success, &b.Failed); err != nil {
 			return nil, err
 		}
 		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// ListAdminRechargeItemsForExport 按 seq 返回批次明细，含导出用凭据列。
+// 仅供服务端生成 Excel；不要把结果直接 JSON 给浏览器。
+func ListAdminRechargeItemsForExport(batchID string) ([]AdminRechargeItem, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	rows, err := DB.Query(`SELECT `+adminRechargeItemCols+`,
+		COALESCE(gpt_password,''), COALESCE(email_password,''), COALESCE(session,'')
+		FROM admin_recharge_items WHERE batch_id = ? ORDER BY seq`, batchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdminRechargeItem
+	for rows.Next() {
+		it, err := scanAdminRechargeItemExport(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, it)
 	}
 	return out, rows.Err()
 }

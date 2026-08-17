@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/config"
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/handler"
 	"github.com/danew/cdk-recharge-system/internal/plansync"
+	"github.com/gin-gonic/gin"
 )
 
 type Server struct {
@@ -106,7 +106,7 @@ func setupRoutes(r *gin.Engine) {
 	// Health check
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{
-			"status": "ok",
+			"status":  "ok",
 			"message": "Recharge System is running",
 		})
 	})
@@ -204,6 +204,7 @@ func setupRoutes(r *gin.Engine) {
 			// 豁免「401/403 即登出」，否则上游鉴权错误会把管理员踢回登录页。
 			admin.POST("/cardplatform/batch-recharge", handler.AdminBatchRechargeCreate)
 			admin.GET("/cardplatform/batch-recharge", handler.AdminBatchRechargeList)
+			admin.GET("/cardplatform/batch-recharge/:batch_id/export", handler.AdminBatchRechargeExport)
 			admin.GET("/cardplatform/batch-recharge/:batch_id", handler.AdminBatchRechargeDetail)
 			admin.POST("/cardplatform/batch-recharge/:batch_id/retry", handler.AdminBatchRechargeRetry)
 

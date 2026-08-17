@@ -135,10 +135,11 @@
         <span class="text-sm text-muted">
           {{ t('batchRecharge.estimate', { amount: estimatedFee, n: itemCount, fee: usd(currentFeeMinor) }) }}
         </span>
-        <button type="button" class="btn-primary" :disabled="!canSubmit" @click="submitBatch">
+        <button type="button" class="btn-primary" :disabled="!canSubmit" @click="openCreateConfirm">
           {{ creating ? t('batchRecharge.submitting') : t('batchRecharge.submit') }}
         </button>
       </div>
+      <p v-if="itemCount === 0" class="text-xs text-subtle">{{ t('batchRecharge.needItems') }}</p>
 
       <p v-if="createError" class="alert alert-error">{{ createError }}</p>
     </div>
@@ -154,6 +155,8 @@
               <th>{{ t('batchRecharge.colBatch') }}</th>
               <th>{{ t('batchRecharge.colPlan') }}</th>
               <th class="num">{{ t('batchRecharge.colTotal') }}</th>
+              <th class="num">{{ t('batchRecharge.colSuccess') }}</th>
+              <th class="num">{{ t('batchRecharge.colFailed') }}</th>
               <th>{{ t('batchRecharge.colStatus') }}</th>
               <th>{{ t('batchRecharge.colOperator') }}</th>
               <th>{{ t('batchRecharge.colUpdated') }}</th>
@@ -163,12 +166,14 @@
           </thead>
           <tbody>
             <tr v-if="!batches.length">
-              <td colspan="8" class="text-center text-muted">{{ t('batchRecharge.emptyList') }}</td>
+              <td colspan="10" class="text-center text-muted">{{ t('batchRecharge.emptyList') }}</td>
             </tr>
             <tr v-for="b in batches" :key="b.batch_id">
               <td class="mono">{{ b.batch_id }}</td>
               <td>{{ b.plan }}</td>
               <td class="num">{{ b.total }}</td>
+              <td class="num stat-success">{{ b.success ?? 0 }}</td>
+              <td class="num stat-failed">{{ b.failed ?? 0 }}</td>
               <td><span class="pill" :class="batchPillClass(b.status)">{{ batchStatusLabel(b.status) }}</span></td>
               <td>{{ b.operator || '—' }}</td>
               <td class="text-xs text-muted">{{ fmtTime(b.updated_at) }}</td>
@@ -202,6 +207,26 @@
             <div class="text-[10px] text-muted">{{ s.label }}</div>
           </div>
         </div>
+
+        <div class="export-bar">
+          <span class="text-xs text-muted">{{ t('batchRecharge.exportLabel') }}</span>
+          <div class="flex flex-wrap gap-1">
+            <button
+              v-for="s in EXPORT_SCOPES"
+              :key="s"
+              type="button"
+              class="btn-secondary !py-1 !px-2 text-xs"
+              :class="{ 'mode-on': exportScope === s }"
+              @click="exportScope = s"
+            >
+              {{ t(`batchRecharge.exportScope.${s}`) }}
+            </button>
+          </div>
+          <button type="button" class="btn-secondary !py-1.5" :disabled="exporting" @click="exportExcel">
+            {{ exporting ? t('batchRecharge.exporting') : t('batchRecharge.exportExcel') }}
+          </button>
+        </div>
+        <p class="text-xs text-subtle">{{ t('batchRecharge.exportHint') }}</p>
 
         <p v-if="unknownCount > 0" class="alert unknown-banner">
           {{ t('batchRecharge.unknownBanner', { n: unknownCount }) }}
@@ -262,6 +287,45 @@
         </div>
       </div>
     </el-drawer>
+
+    <el-dialog
+      v-model="confirmOpen"
+      :title="t('batchRecharge.confirmTitle')"
+      width="540px"
+      align-center
+      destroy-on-close
+      :close-on-click-modal="!creating"
+    >
+      <div class="confirm-box">
+        <div class="confirm-code" :class="{ 'is-high': plan === 'pro_20x' }">{{ plan }}</div>
+        <div class="confirm-human">{{ planHumanLabel }}</div>
+        <p class="confirm-stop">{{ t('batchRecharge.confirmCannotStop') }}</p>
+        <p v-if="plan === 'pro_20x'" class="confirm-extra">{{ t('batchRecharge.confirmHighPrice') }}</p>
+        <dl class="confirm-facts">
+          <div>
+            <dt>{{ t('batchRecharge.confirmCount') }}</dt>
+            <dd>{{ itemCount }}</dd>
+          </div>
+          <div>
+            <dt>{{ t('batchRecharge.confirmUnitFee') }}</dt>
+            <dd>{{ usd(currentFeeMinor) }}</dd>
+          </div>
+          <div>
+            <dt>{{ t('batchRecharge.confirmTotalFee') }}</dt>
+            <dd>{{ usd(currentFeeMinor * itemCount) }}</dd>
+          </div>
+        </dl>
+        <p v-if="createError" class="alert alert-error" style="margin-top: 12px; text-align: left">{{ createError }}</p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn-secondary" :disabled="creating" @click="confirmOpen = false">
+          {{ t('batchRecharge.confirmCancel') }}
+        </button>
+        <button type="button" class="btn-primary" :disabled="creating || itemCount === 0" @click="submitBatch">
+          {{ creating ? t('batchRecharge.submitting') : t('batchRecharge.confirmOk', { plan }) }}
+        </button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -284,6 +348,7 @@ const { t } = useI18n({ useScope: 'global' })
 const API = '/api/v1/admin/cardplatform/batch-recharge'
 const MAX_ITEMS = 100
 const POLL_INTERVAL_MS = 3000
+const EXPORT_SCOPES = ['all', 'success', 'failed'] as const
 const PLANS = [
   { value: 'plus', feeMinor: 100 },
   { value: 'pro_5x', feeMinor: 500 },
@@ -296,6 +361,8 @@ interface BatchRow {
   operator: string
   plan: string
   total: number
+  success?: number
+  failed?: number
   status: string
   message: string
   created_at: string
@@ -351,6 +418,9 @@ const detail = ref<{ batch: BatchRow; items: ItemRow[]; stats: Stats } | null>(n
 const reconciling = ref(false)
 const reconcileError = ref('')
 const resubmitRows = ref<ResubmitRow[]>([])
+const confirmOpen = ref(false)
+const exportScope = ref<(typeof EXPORT_SCOPES)[number]>('all')
+const exporting = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const mailboxPool = computed<ImportedMailbox[]>(() => parseMailboxLines(mailboxText.value))
@@ -369,6 +439,7 @@ const canSubmit = computed(
   () => !creating.value && itemCount.value > 0 && !overLimit.value && fundingConfirmed.value,
 )
 const unknownCount = computed(() => detail.value?.stats?.unknown ?? 0)
+const planHumanLabel = computed(() => t(`batchRecharge.planHuman.${plan.value}`, { fee: usd(currentFeeMinor.value) }))
 
 const statCells = computed(() => {
   const s = detail.value?.stats
@@ -512,19 +583,38 @@ async function onPickMailboxFile(e: Event) {
 
 function buildItems() {
   if (credMode.value === 'session') {
-    return sessionPool.value.map((s) => ({ mode: 'session', session: s.session }))
+    return sessionPool.value.map((s) => ({
+      mode: 'session',
+      session: s.session,
+      email: s.email,
+      gpt_password: s.gptPassword,
+      email_password: s.emailPassword,
+    }))
   }
-  return mailboxPool.value.map((m) => ({ mode: 'mailbox', email: m.email, password: m.password }))
+  return mailboxPool.value.map((m) => ({
+    mode: 'mailbox',
+    email: m.email,
+    password: m.password,
+    email_password: m.password,
+  }))
+}
+
+function openCreateConfirm() {
+  if (creating.value || overLimit.value || !fundingConfirmed.value) return
+  if (itemCount.value <= 0) {
+    dialog.toast(t('batchRecharge.needItems'), 'warn')
+    return
+  }
+  confirmOpen.value = true
 }
 
 async function submitBatch() {
-  if (!canSubmit.value) return
+  if (itemCount.value <= 0) {
+    dialog.toast(t('batchRecharge.needItems'), 'warn')
+    return
+  }
+  if (!fundingConfirmed.value || overLimit.value || creating.value) return
   const count = itemCount.value
-  const ok = await dialog.confirm(
-    `确认为 ${count} 个账号充值 ${plan.value}？预计服务费 $${estimatedFee.value}，另需承担上游订阅实付。`,
-    { title: t('batchRecharge.submit'), okText: t('batchRecharge.submit'), cancelText: '取消' },
-  )
-  if (!ok) return
   creating.value = true
   createError.value = ''
   try {
@@ -541,6 +631,7 @@ async function submitBatch() {
       createError.value = d.error || d.msg || t('batchRecharge.errCreate')
       return
     }
+    confirmOpen.value = false
     clearCreds()
     fundingConfirmed.value = false
     if (d.deduped) {
@@ -652,6 +743,33 @@ async function reconcile() {
   }
 }
 
+async function exportExcel() {
+  if (!detailId.value || exporting.value) return
+  exporting.value = true
+  try {
+    const r = await authFetch(
+      `${API}/${encodeURIComponent(detailId.value)}/export?scope=${exportScope.value}`,
+    )
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      dialog.toast(d.error || d.msg || t('batchRecharge.errExport'), 'err')
+      return
+    }
+    const blob = await r.blob()
+    const cd = r.headers.get('Content-Disposition') || ''
+    const m = cd.match(/filename="?([^"]+)"?/)
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = m?.[1] || `batch-recharge-${detailId.value}-${exportScope.value}.xlsx`
+    a.click()
+    URL.revokeObjectURL(a.href)
+  } catch (err: any) {
+    dialog.toast(err?.message || t('batchRecharge.errNetwork'), 'err')
+  } finally {
+    exporting.value = false
+  }
+}
+
 onUnmounted(stopPoll)
 void loadBatches()
 </script>
@@ -702,4 +820,68 @@ void loadBatches()
   font-weight: 600;
 }
 .no-retry { color: var(--warn); }
+
+.stat-success { color: var(--good); font-weight: 600; }
+.stat-failed { color: var(--err); font-weight: 600; }
+
+.export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm-box { text-align: center; }
+.confirm-code {
+  font-family: var(--font-mono);
+  font-size: 42px;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+.confirm-code.is-high { color: var(--warn); }
+.confirm-human {
+  margin-top: 8px;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.confirm-stop {
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.confirm-extra {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--warn);
+}
+.confirm-facts {
+  margin: 18px 0 0;
+  display: grid;
+  gap: 10px;
+  text-align: left;
+}
+.confirm-facts > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  border: 1px solid var(--brd);
+}
+.confirm-facts dt {
+  font-size: 13px;
+  color: var(--ink-3);
+}
+.confirm-facts dd {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--ink);
+}
 </style>

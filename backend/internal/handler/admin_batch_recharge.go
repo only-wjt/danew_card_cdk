@@ -1,6 +1,7 @@
-﻿package handler
+package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -15,9 +16,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/xlsxsheet"
+	"github.com/gin-gonic/gin"
 )
 
 // 管理员批量充值（方案 A）：管理端界面上不出现卡密，后端在一个批次里
@@ -72,12 +74,15 @@ var batchRechargePlanFallbackFeeMinor = map[string]int64{
 	"pro_20x": 1000,
 }
 
-// batchRechargeCredential 单条 ChatGPT 账号凭据。只在内存中流转，绝不落库、绝不进日志。
+// batchRechargeCredential 单条 ChatGPT 账号凭据。明文不进日志；创建批次时写入明细表供导出，
+// 列表/详情 JSON 不回传（json:"-"），只走独立导出接口。
 type batchRechargeCredential struct {
-	Mode     string `json:"mode"` // session | mailbox
-	Session  string `json:"session"`
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Mode          string `json:"mode"` // session | mailbox
+	Session       string `json:"session"`
+	Email         string `json:"email"`
+	Password      string `json:"password"`
+	GptPassword   string `json:"gpt_password"`
+	EmailPassword string `json:"email_password"`
 }
 
 type batchRechargeCreateReq struct {
@@ -247,10 +252,15 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 	cleaned := make([]batchRechargeCredential, 0, len(req.Items))
 	for i, raw := range req.Items {
 		it := batchRechargeCredential{
-			Mode:     strings.ToLower(strings.TrimSpace(raw.Mode)),
-			Session:  strings.TrimSpace(raw.Session),
-			Email:    strings.TrimSpace(raw.Email),
-			Password: raw.Password,
+			Mode:          strings.ToLower(strings.TrimSpace(raw.Mode)),
+			Session:       strings.TrimSpace(raw.Session),
+			Email:         strings.TrimSpace(raw.Email),
+			Password:      raw.Password,
+			GptPassword:   strings.TrimSpace(raw.GptPassword),
+			EmailPassword: strings.TrimSpace(raw.EmailPassword),
+		}
+		if it.EmailPassword == "" {
+			it.EmailPassword = strings.TrimSpace(it.Password)
 		}
 		if it.Mode == "" {
 			it.Mode = "session"
@@ -323,9 +333,9 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		// 幂等锁 1/3：client_request_id 后端生成并落库唯一索引；
 		// 卡台侧同一 client_request_id 返回原订单（docs/danew-openapi-zh.md:904）
 		crid := fmt.Sprintf("%s-%03d", batchID, i+1)
-		email := ""
-		if cred.Mode == "mailbox" {
-			email = cred.Email
+		emailPass := strings.TrimSpace(cred.EmailPassword)
+		if emailPass == "" {
+			emailPass = cred.Password
 		}
 		items = append(items, db.AdminRechargeItem{
 			BatchID:         batchID,
@@ -333,7 +343,10 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 			ClientRequestID: crid,
 			Plan:            plan,
 			CredMode:        cred.Mode,
-			AccountEmail:    email,
+			AccountEmail:    strings.TrimSpace(cred.Email),
+			GptPassword:     cred.GptPassword,
+			EmailPassword:   emailPass,
+			Session:         cred.Session,
 			Status:          itemStatusPending,
 			Message:         "等待处理",
 		})
@@ -410,6 +423,67 @@ func AdminBatchRechargeDetail(c *gin.Context) {
 		"items": items,
 		"stats": batchRechargeStats(items),
 	})
+}
+
+// AdminBatchRechargeExport GET /api/v1/admin/cardplatform/batch-recharge/:batch_id/export?scope=all|success|failed
+// 返回真正的 .xlsx。凭据只在此接口读出，不进列表/详情 JSON。旧批次缺列则为空单元格。
+func AdminBatchRechargeExport(c *gin.Context) {
+	batchID := strings.TrimSpace(c.Param("batch_id"))
+	if batchID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "batch_id required"})
+		return
+	}
+	scope := strings.ToLower(strings.TrimSpace(c.DefaultQuery("scope", "all")))
+	switch scope {
+	case "all", "success", "failed":
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "scope must be all | success | failed"})
+		return
+	}
+	batch, err := db.GetAdminRechargeBatch(batchID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if batch == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
+		return
+	}
+	items, err := db.ListAdminRechargeItemsForExport(batchID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	filtered := make([]db.AdminRechargeItem, 0, len(items))
+	for _, it := range items {
+		switch scope {
+		case "success":
+			if it.Status != itemStatusSuccess {
+				continue
+			}
+		case "failed":
+			// 失败导出只含 failed；unknown（可能已扣款）与 skipped 不含在内
+			if it.Status != itemStatusFailed {
+				continue
+			}
+		}
+		filtered = append(filtered, it)
+	}
+	rows := make([][]string, 0, len(filtered))
+	for _, it := range filtered {
+		rows = append(rows, []string{it.AccountEmail, it.GptPassword, it.EmailPassword, it.Session})
+	}
+	var buf bytes.Buffer
+	if err := xlsxsheet.Write(&buf, "导出", []string{"邮箱", "gpt密码", "邮箱密码", "session"}, rows); err != nil {
+		log.Printf("[batch-recharge] export xlsx failed batch=%s: %v", batchID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成 Excel 失败"})
+		return
+	}
+	filename := fmt.Sprintf("batch-recharge-%s-%s.xlsx", batchID, scope)
+	auditAdmin(c, "admin_batch_recharge_export",
+		fmt.Sprintf("batch=%s scope=%s rows=%d", batchID, scope, len(rows)))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", buf.Bytes())
 }
 
 // AdminBatchRechargeRetry POST /api/v1/admin/cardplatform/batch-recharge/:batch_id/retry
@@ -642,7 +716,6 @@ func endJob(job *batchRechargeJob, status, message string) (bool, string) {
 	patchItem(job.clientRequestID, status, message)
 	return false, ""
 }
-
 
 // submitOneRecharge 走完一条明细的提交阶段。
 // 返回 fatal=true 表示遇到需要中止整批的错误（余额不足）。
