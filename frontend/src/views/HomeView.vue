@@ -26,14 +26,21 @@
       <div class="text-center mb-16 animate-slideInUp">
         <h2 class="text-4xl sm:text-5xl font-bold text-ink mb-4">{{ t('home.heroTitle') }}</h2>
         <p class="text-lg text-muted">{{ t('home.heroSub') }}</p>
+        <a
+          :href="CARD_SHOP_URL"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="btn-primary mt-8"
+        >{{ t('home.buyCdk') }}</a>
       </div>
 
       <!-- Main Services -->
       <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6 animate-slideInUp">
-        <router-link
+        <component
+          :is="svc.shopHint ? 'div' : 'router-link'"
           v-for="svc in services"
           :key="svc.to"
-          :to="svc.to"
+          v-bind="svc.shopHint ? {} : { to: svc.to }"
           class="card card-hover group"
         >
           <span class="grid h-12 w-12 place-items-center rounded-2xl" style="background: var(--primary-soft); color: var(--primary)" v-html="svc.icon" />
@@ -45,8 +52,20 @@
               <span>{{ line }}</span>
             </div>
           </div>
-          <div class="mt-6 text-sm font-medium app-link">{{ svc.cta }} →</div>
-        </router-link>
+          <a
+            v-if="svc.shopHint"
+            :href="CARD_SHOP_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="mt-5 inline-block text-sm app-link"
+          >{{ svc.shopHint }}</a>
+          <router-link
+            v-if="svc.shopHint"
+            :to="svc.to"
+            class="mt-3 block text-sm font-medium app-link"
+          >{{ svc.cta }} →</router-link>
+          <div v-else class="mt-6 text-sm font-medium app-link">{{ svc.cta }} →</div>
+        </component>
       </div>
 
       <!-- Flow Section -->
@@ -58,7 +77,17 @@
             <div class="space-y-3 text-sm text-muted">
               <div v-for="(step, i) in flow.steps" :key="i" class="flex gap-3">
                 <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full text-xs font-bold" style="background: var(--primary-soft); color: var(--primary)">{{ i + 1 }}</span>
-                <span>{{ step }}</span>
+                <span>
+                  <template v-if="step.link">
+                    {{ step.prefix }}<a
+                      :href="CARD_SHOP_URL"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="app-link"
+                    >{{ step.link }}</a>
+                  </template>
+                  <template v-else>{{ step.text }}</template>
+                </span>
               </div>
             </div>
           </div>
@@ -75,6 +104,8 @@ import ThemeToggle from '../components/ThemeToggle.vue'
 import LanguageToggle from '../components/LanguageToggle.vue'
 import { siteBrand } from '../theme'
 
+const CARD_SHOP_URL = 'https://card.danew.cc'
+
 const brand = siteBrand
 
 const { t } = useI18n({ useScope: 'global' })
@@ -85,6 +116,7 @@ const services = computed(() => [
     title: t('home.services.recharge.title'),
     en: t('home.services.recharge.en'),
     cta: t('home.services.recharge.cta'),
+    shopHint: t('home.services.recharge.shopHint'),
     icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14l2 2 4-4"/></svg>',
     points: [t('home.services.recharge.p1'), t('home.services.recharge.p2'), t('home.services.recharge.p3')],
   },
@@ -114,10 +146,19 @@ const services = computed(() => [
   },
 ])
 
+type FlowStep = { text: string; prefix?: never; link?: never } | { prefix: string; link: string; text?: never }
+
 const flows = computed(() => [
-  { title: t('home.flows.submit.title'), steps: [t('home.flows.submit.s1'), t('home.flows.submit.s2'), t('home.flows.submit.s3')] },
-  { title: t('home.flows.batch.title'), steps: [t('home.flows.batch.s1'), t('home.flows.batch.s2'), t('home.flows.batch.s3')] },
-  { title: t('home.flows.lookup.title'), steps: [t('home.flows.lookup.s1'), t('home.flows.lookup.s2'), t('home.flows.lookup.s3')] },
-  { title: t('home.flows.billing.title'), steps: [t('home.flows.billing.s1'), t('home.flows.billing.s2'), t('home.flows.billing.s3')] },
+  {
+    title: t('home.flows.submit.title'),
+    steps: [
+      { prefix: t('home.flows.submit.s1Prefix'), link: t('home.flows.submit.s1Link') },
+      { text: t('home.flows.submit.s2') },
+      { text: t('home.flows.submit.s3') },
+    ] as FlowStep[],
+  },
+  { title: t('home.flows.batch.title'), steps: [{ text: t('home.flows.batch.s1') }, { text: t('home.flows.batch.s2') }, { text: t('home.flows.batch.s3') }] as FlowStep[] },
+  { title: t('home.flows.lookup.title'), steps: [{ text: t('home.flows.lookup.s1') }, { text: t('home.flows.lookup.s2') }, { text: t('home.flows.lookup.s3') }] as FlowStep[] },
+  { title: t('home.flows.billing.title'), steps: [{ text: t('home.flows.billing.s1') }, { text: t('home.flows.billing.s2') }, { text: t('home.flows.billing.s3') }] as FlowStep[] },
 ])
 </script>

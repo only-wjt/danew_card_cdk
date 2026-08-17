@@ -13,15 +13,16 @@ export default {
     brandSub: 'Account Upgrade Service',
     heroTitle: '充值与账户升级服务',
     heroSub: '按步骤校验账号、卡密并确认信息',
+    buyCdk: '购买卡密',
     flowTitle: '操作流程',
     services: {
-      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', p1: '验证 CDK 卡密', p2: '提交 Session', p3: '确认提交申请' },
+      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', shopHint: '还没有卡密？去卡网购买 →', p1: '验证 CDK 卡密', p2: '提交 Session', p3: '确认提交申请' },
       batch: { title: '批量兑换', en: 'Batch Redeem', cta: '批量开始', p1: '批量验证 CDK', p2: '导入 Excel Session', p3: '按序配对自动提交' },
       lookup: { title: '卡密查询', en: 'CDK Status', cta: '查询卡密', p1: '输入完整卡密', p2: '查看是否已使用', p3: '显示充值邮箱' },
       billing: { title: '账单查询', en: 'Billing Tool', cta: '查询账单', p1: '粘贴 Session', p2: '查询账单信息', p3: '查看订阅状态' },
     },
     flows: {
-      submit: { title: '提交流程', s1: 'CDK 验证 — 匹配套餐和状态', s2: '提交 Session — 粘贴 chatgpt.com/api/auth/session 的 JSON', s3: '确认提交 — 阅读协议后确认' },
+      submit: { title: '提交流程', s1Prefix: 'CDK 卡密 — ', s1Link: '获取商家卡密', s2: '提交 Session — 粘贴 chatgpt.com/api/auth/session 的 JSON', s3: '确认提交 — 阅读协议后确认' },
       batch: { title: '批量兑换', s1: '验证 CDK — 批量预览卡密', s2: '导入 Session — Excel/CSV 自动识别', s3: '配对提交 — 按序兑换并看进度' },
       lookup: { title: '卡密查询', s1: '输入卡密 — 完整 CDK', s2: '查询状态 — 是否已使用', s3: '查看邮箱 — 充值到哪个账号' },
       billing: { title: '账单查询', s1: 'Session 输入 — 粘贴 Token', s2: '查询账单 — 点击查询后进入', s3: '账单结果 — 查询后展示' },

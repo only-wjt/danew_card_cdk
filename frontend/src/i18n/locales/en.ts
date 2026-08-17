@@ -13,15 +13,16 @@ export default {
     brandSub: 'Account Upgrade Service',
     heroTitle: 'Recharge & Account Upgrade Service',
     heroSub: 'Verify your account and CDK, then confirm — step by step',
+    buyCdk: 'Buy CDK',
     flowTitle: 'How It Works',
     services: {
-      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start Recharge', p1: 'Verify CDK code', p2: 'Submit session', p3: 'Confirm submission' },
+      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start Recharge', shopHint: "Don't have a CDK? Buy from the shop →", p1: 'Verify CDK code', p2: 'Submit session', p3: 'Confirm submission' },
       batch: { title: 'Batch Redeem', en: 'Batch Redeem', cta: 'Start Batch', p1: 'Verify CDK list', p2: 'Import Excel sessions', p3: 'Match and submit in order' },
       lookup: { title: 'CDK Status', en: 'CDK Status', cta: 'Check CDK', p1: 'Enter full CDK', p2: 'See if used', p3: 'Show recharge email' },
       billing: { title: 'Billing', en: 'Billing Tool', cta: 'Check Billing', p1: 'Paste session', p2: 'Query billing info', p3: 'View subscription' },
     },
     flows: {
-      submit: { title: 'Submit Flow', s1: 'Verify CDK — match plan and status', s2: 'Submit session — paste the JSON from chatgpt.com/api/auth/session', s3: 'Confirm — agree to terms and submit' },
+      submit: { title: 'Submit Flow', s1Prefix: 'CDK — ', s1Link: 'Get a merchant CDK', s2: 'Submit session — paste the JSON from chatgpt.com/api/auth/session', s3: 'Confirm — agree to terms and submit' },
       batch: { title: 'Batch Redeem', s1: 'Verify CDKs — batch preview', s2: 'Import sessions — Excel/CSV auto-detect', s3: 'Match & submit — redeem in order and track progress' },
       lookup: { title: 'CDK Status', s1: 'Enter CDK — full code', s2: 'Check status — used or not', s3: 'See email — which account was recharged' },
       billing: { title: 'Billing Lookup', s1: 'Session input — paste your token', s2: 'Query billing — click to look up', s3: 'Result — shown after the query' },
