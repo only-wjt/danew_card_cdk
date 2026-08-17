@@ -267,7 +267,7 @@ export default {
     errExport: '导出失败',
     confirmTitle: '核对套餐后创建',
     confirmCannotStop: '创建后立即执行且无法停止，请核对套餐。',
-    confirmHighPrice: '这是高单价套餐（Pro 20x），服务费按 $10/条计。',
+    confirmHighPrice: '这是高单价套餐（Pro 20x）。',
     confirmCount: '条数',
     confirmUnitFee: '单价服务费',
     confirmTotalFee: '预计总服务费',

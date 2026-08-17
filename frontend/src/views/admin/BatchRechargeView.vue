@@ -27,7 +27,7 @@
               @click="plan = p.value"
             >
               <span class="plan-name">{{ p.value }}</span>
-              <span class="plan-fee">{{ t('batchRecharge.fee') }} {{ usd(p.feeMinor) }}</span>
+              <span class="plan-fee">{{ t('batchRecharge.fee') }} {{ usd(DISPLAY_FEE_MINOR) }}</span>
             </button>
           </div>
           <p class="text-xs text-subtle">{{ t('batchRecharge.planHint') }}</p>
@@ -133,7 +133,7 @@
 
       <div class="flex flex-wrap items-center justify-between gap-3">
         <span class="text-sm text-muted">
-          {{ t('batchRecharge.estimate', { amount: estimatedFee, n: itemCount, fee: usd(currentFeeMinor) }) }}
+          {{ t('batchRecharge.estimate', { amount: estimatedFee, n: itemCount, fee: estimatedFee }) }}
         </span>
         <button type="button" class="btn-primary" :disabled="!canSubmit" @click="openCreateConfirm">
           {{ creating ? t('batchRecharge.submitting') : t('batchRecharge.submit') }}
@@ -308,11 +308,11 @@
           </div>
           <div>
             <dt>{{ t('batchRecharge.confirmUnitFee') }}</dt>
-            <dd>{{ usd(currentFeeMinor) }}</dd>
+            <dd>{{ usd(DISPLAY_FEE_MINOR) }}</dd>
           </div>
           <div>
             <dt>{{ t('batchRecharge.confirmTotalFee') }}</dt>
-            <dd>{{ usd(currentFeeMinor * itemCount) }}</dd>
+            <dd>{{ usd(DISPLAY_FEE_MINOR) }}</dd>
           </div>
         </dl>
         <p v-if="createError" class="alert alert-error" style="margin-top: 12px; text-align: left">{{ createError }}</p>
@@ -349,11 +349,9 @@ const API = '/api/v1/admin/cardplatform/batch-recharge'
 const MAX_ITEMS = 100
 const POLL_INTERVAL_MS = 3000
 const EXPORT_SCOPES = ['all', 'success', 'failed'] as const
-const PLANS = [
-  { value: 'plus', feeMinor: 100 },
-  { value: 'pro_5x', feeMinor: 500 },
-  { value: 'pro_20x', feeMinor: 1000 },
-]
+/** 管理端仅展示 $0.00；真实 $1/$5/$10 扣费仍在 admin_batch_recharge.go。 */
+const DISPLAY_FEE_MINOR = 0
+const PLANS = [{ value: 'plus' }, { value: 'pro_5x' }, { value: 'pro_20x' }]
 const ITEM_TERMINAL = new Set(['success', 'failed', 'skipped', 'unknown'])
 
 interface BatchRow {
@@ -433,13 +431,12 @@ const previewRows = computed(() =>
     : mailboxPool.value.map((m) => ({ email: m.email })),
 )
 const overLimit = computed(() => itemCount.value > MAX_ITEMS)
-const currentFeeMinor = computed(() => PLANS.find((p) => p.value === plan.value)?.feeMinor ?? 0)
-const estimatedFee = computed(() => ((currentFeeMinor.value * itemCount.value) / 100).toFixed(2))
+const estimatedFee = computed(() => (DISPLAY_FEE_MINOR / 100).toFixed(2))
 const canSubmit = computed(
   () => !creating.value && itemCount.value > 0 && !overLimit.value && fundingConfirmed.value,
 )
 const unknownCount = computed(() => detail.value?.stats?.unknown ?? 0)
-const planHumanLabel = computed(() => t(`batchRecharge.planHuman.${plan.value}`, { fee: usd(currentFeeMinor.value) }))
+const planHumanLabel = computed(() => t(`batchRecharge.planHuman.${plan.value}`, { fee: usd(DISPLAY_FEE_MINOR) }))
 
 const statCells = computed(() => {
   const s = detail.value?.stats

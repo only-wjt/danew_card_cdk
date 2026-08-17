@@ -270,7 +270,7 @@ export default {
     errExport: 'Export failed',
     confirmTitle: 'Confirm the plan before creating',
     confirmCannotStop: 'Once created, the batch starts immediately and cannot be stopped. Double-check the plan.',
-    confirmHighPrice: 'This is the high-price plan (Pro 20x) at $10 per item.',
+    confirmHighPrice: 'This is the high-price plan (Pro 20x).',
     confirmCount: 'Items',
     confirmUnitFee: 'Unit service fee',
     confirmTotalFee: 'Estimated total fee',
