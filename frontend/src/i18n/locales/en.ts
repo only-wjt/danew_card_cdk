@@ -16,7 +16,7 @@ export default {
     buyCdk: 'Buy CDK',
     flowTitle: 'How It Works',
     services: {
-      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start Recharge', shopHint: "Don't have a CDK? Buy from the shop →", p1: 'Verify CDK code', p2: 'Submit session', p3: 'Confirm submission' },
+      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start Recharge', p1: 'Verify CDK code', p2: 'Submit session', p3: 'Confirm submission' },
       batch: { title: 'Batch Redeem', en: 'Batch Redeem', cta: 'Start Batch', p1: 'Verify CDK list', p2: 'Import Excel sessions', p3: 'Match and submit in order' },
       lookup: { title: 'CDK Status', en: 'CDK Status', cta: 'Check CDK', p1: 'Enter full CDK', p2: 'See if used', p3: 'Show recharge email' },
       billing: { title: 'Billing', en: 'Billing Tool', cta: 'Check Billing', p1: 'Paste session', p2: 'Query billing info', p3: 'View subscription' },
@@ -98,6 +98,7 @@ export default {
   recharge: {
     title: 'Recharge',
     subtitle: '{brand} · Account recharge request',
+    shopHint: "Don't have a CDK? Buy from the shop →",
     steps: { s1: 'Verify CDK', s2: 'Submit Session', s3: 'Confirm' },
     step1Title: 'Verify CDK Code',
     cdkLabel: 'CDK Code',

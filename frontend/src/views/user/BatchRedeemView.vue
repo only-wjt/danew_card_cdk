@@ -32,9 +32,17 @@
         <!-- input phase -->
         <template v-if="phase === 'input'">
           <div>
-            <label class="block text-sm font-medium text-ink mb-1.5">
-              {{ t('batch.cdkListLabel', { max: BATCH_MAX_KEYS }) }}
-            </label>
+            <div class="mb-1.5 flex items-baseline justify-between gap-3">
+              <label class="block text-sm font-medium text-ink">
+                {{ t('batch.cdkListLabel', { max: BATCH_MAX_KEYS }) }}
+              </label>
+              <a
+                :href="CARD_SHOP_URL"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-sm app-link shrink-0"
+              >{{ t('recharge.shopHint') }}</a>
+            </div>
             <textarea
               v-model="cdkText"
               rows="6"
@@ -365,6 +373,7 @@ import {
 } from '../../lib/batch-session'
 
 const { t } = useI18n({ useScope: 'global' })
+const CARD_SHOP_URL = 'https://card.danew.cc'
 
 type ItemStatus =
   | 'pending_verify'

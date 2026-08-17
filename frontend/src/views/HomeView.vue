@@ -36,11 +36,10 @@
 
       <!-- Main Services -->
       <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6 animate-slideInUp">
-        <component
-          :is="svc.shopHint ? 'div' : 'router-link'"
+        <router-link
           v-for="svc in services"
           :key="svc.to"
-          v-bind="svc.shopHint ? {} : { to: svc.to }"
+          :to="svc.to"
           class="card card-hover group"
         >
           <span class="grid h-12 w-12 place-items-center rounded-2xl" style="background: var(--primary-soft); color: var(--primary)" v-html="svc.icon" />
@@ -52,20 +51,8 @@
               <span>{{ line }}</span>
             </div>
           </div>
-          <a
-            v-if="svc.shopHint"
-            :href="CARD_SHOP_URL"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="mt-5 inline-block text-sm app-link"
-          >{{ svc.shopHint }}</a>
-          <router-link
-            v-if="svc.shopHint"
-            :to="svc.to"
-            class="mt-3 block text-sm font-medium app-link"
-          >{{ svc.cta }} →</router-link>
-          <div v-else class="mt-6 text-sm font-medium app-link">{{ svc.cta }} →</div>
-        </component>
+          <div class="mt-6 text-sm font-medium app-link">{{ svc.cta }} →</div>
+        </router-link>
       </div>
 
       <!-- Flow Section -->
@@ -116,7 +103,6 @@ const services = computed(() => [
     title: t('home.services.recharge.title'),
     en: t('home.services.recharge.en'),
     cta: t('home.services.recharge.cta'),
-    shopHint: t('home.services.recharge.shopHint'),
     icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 14l2 2 4-4"/></svg>',
     points: [t('home.services.recharge.p1'), t('home.services.recharge.p2'), t('home.services.recharge.p3')],
   },

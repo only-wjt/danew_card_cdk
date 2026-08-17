@@ -25,7 +25,15 @@
 
       <!-- 1 preview -->
       <div v-show="step === 1" class="card space-y-4">
-        <h2 class="text-xl font-bold text-ink">输入 CDK</h2>
+        <div class="flex items-baseline justify-between gap-3">
+          <h2 class="text-xl font-bold text-ink">输入 CDK</h2>
+          <a
+            :href="CARD_SHOP_URL"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-sm app-link shrink-0"
+          >{{ t('recharge.shopHint') }}</a>
+        </div>
         <input v-model="code" class="input mono" placeholder="SXC-XXXX-XXXX-XXXX-XXXX" @keyup.enter="doPreview" />
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div v-if="previewInfo" class="rounded-xl bg-soft p-4 text-sm space-y-1">
@@ -226,6 +234,7 @@ import ThemeToggle from '../../components/ThemeToggle.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 
 const { t } = useI18n({ useScope: 'global' })
+const CARD_SHOP_URL = 'https://card.danew.cc'
 const steps = ['预览', '凭证', '兑换', '结果']
 const step = ref(1)
 const busy = ref(false)

@@ -16,7 +16,7 @@ export default {
     buyCdk: '购买卡密',
     flowTitle: '操作流程',
     services: {
-      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', shopHint: '还没有卡密？去卡网购买 →', p1: '验证 CDK 卡密', p2: '提交 Session', p3: '确认提交申请' },
+      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', p1: '验证 CDK 卡密', p2: '提交 Session', p3: '确认提交申请' },
       batch: { title: '批量兑换', en: 'Batch Redeem', cta: '批量开始', p1: '批量验证 CDK', p2: '导入 Excel Session', p3: '按序配对自动提交' },
       lookup: { title: '卡密查询', en: 'CDK Status', cta: '查询卡密', p1: '输入完整卡密', p2: '查看是否已使用', p3: '显示充值邮箱' },
       billing: { title: '账单查询', en: 'Billing Tool', cta: '查询账单', p1: '粘贴 Session', p2: '查询账单信息', p3: '查看订阅状态' },
@@ -98,6 +98,7 @@ export default {
   recharge: {
     title: '充值提交',
     subtitle: '{brand} · 账号充值申请',
+    shopHint: '还没有卡密？去卡网购买 →',
     steps: { s1: 'CDK 验证', s2: '提交 Session', s3: '确认提交' },
     step1Title: '验证 CDK 卡密',
     cdkLabel: 'CDK 卡密',
