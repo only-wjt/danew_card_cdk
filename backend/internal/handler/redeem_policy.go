@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/tuzi/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
 const siteRedeemPolicyKey = "site_redeem_policy"
