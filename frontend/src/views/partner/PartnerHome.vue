@@ -8,6 +8,7 @@
       </div>
       <div class="welcome-actions">
         <router-link to="/partner/records" class="btn-primary">查看记录</router-link>
+        <router-link to="/partner/cdks" class="btn-secondary">我的卡密</router-link>
         <router-link to="/partner/api-keys" class="btn-secondary">管理 API Key</router-link>
       </div>
     </section>
@@ -93,12 +94,13 @@ const recentRows = ref<any[]>([])
 const recentTotal = ref(0)
 const loading = ref(true)
 const limits = ref({ rpm: 60, concurrent: 2 })
+const unusedCdks = ref<number | null>(null)
 
 const statCards = computed(() => [
+  { label: '可用卡密', value: unusedCdks.value != null ? String(unusedCdks.value) : '—', hint: '站长已分配、未使用', icon: '🎫', bg: 'var(--good-soft, #ecfdf5)' },
   { label: '可用套餐', value: String(plans.value.length), hint: '当前账号可发码档位', icon: '📦', bg: 'var(--primary-soft)' },
-  { label: '累计记录', value: String(recentTotal.value), hint: '历史兑换总条数', icon: '📋', bg: 'var(--good-soft, #ecfdf5)' },
-  { label: '请求配额', value: `${limits.value.rpm}/min`, hint: 'API 每分钟上限', icon: '⚡', bg: 'var(--warn-soft, #fffbeb)' },
-  { label: '并发充值', value: `${limits.value.concurrent} 笔`, hint: '同时进行中的任务', icon: '🔀', bg: 'var(--surface-2)' },
+  { label: '累计记录', value: String(recentTotal.value), hint: '历史兑换总条数', icon: '📋', bg: 'var(--warn-soft, #fffbeb)' },
+  { label: '请求配额', value: `${limits.value.rpm}/min`, hint: 'API 每分钟上限', icon: '⚡', bg: 'var(--surface-2)' },
 ])
 
 function formatFee(v: number) {
@@ -129,6 +131,7 @@ onMounted(async () => {
         rpm: m.rate_limit_rpm || 60,
         concurrent: m.max_concurrent_recharge || 2,
       }
+      unusedCdks.value = m.unused_cdk_count ?? null
     }
   } finally {
     loading.value = false

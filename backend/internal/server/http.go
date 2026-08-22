@@ -195,6 +195,7 @@ func setupRoutes(r *gin.Engine) {
 
 			agent.POST("/batch-recharge", handler.AgentBatchCreate)
 			agent.POST("/cdk/validate", handler.AgentValidateCDKs)
+			agent.GET("/cdks", handler.AgentListCDKs)
 			agent.GET("/batch-recharge", handler.AgentBatchList)
 			agent.GET("/batch-recharge/:batch_id", handler.AgentBatchDetail)
 			agent.GET("/batch-recharge/:batch_id/export", handler.AgentBatchExport)

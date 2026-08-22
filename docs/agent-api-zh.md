@@ -34,6 +34,7 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 代理充值**必须**提交站长线下分配的卡密 `cdk_code`。服务端不会代代理自动发码扣费。
 站长在管理后台「CDK 卡密」页发码/入库后，到「代理管理 → 发卡密」划给对应代理。
 门户「设置」可查看 `unused_cdk_count`（名下仍可用卡密数量）。
+完整卡密列表见 `GET /agent/cdks`（代理门户「我的卡密」页）。
 
 已分配给代理的卡密默认**不允许终端客户在本站公开兑换页自助兑换**（返回 `CDK_AGENT_CHANNEL`），
 避免同一张码被双方同时用掉。所以拿到货之后，请由代理统一代客户提交充值。
@@ -100,6 +101,7 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 | `POST` | `/agent/batch-recharge` | 批量充值 |
 | `GET` | `/agent/batch-recharge/{batch_id}` | 批次详情 |
 | `GET` | `/agent/batch-recharge/{batch_id}/export` | 导出批次对账表 |
+| `GET` | `/agent/cdks` | 我的卡密库存 |
 | `GET` | `/agent/plans` | 查询可售套餐 |
 | `POST` | `/agent/recharge` | 单条充值 |
 | `GET` | `/agent/recharge/{request_id}` | 查询单条充值状态 |
@@ -230,6 +232,30 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 | `200` | Excel 文件 |
 | `401` | API Key 缺失、无效或已吊销 |
 | `404` | 资源不存在 |
+
+---
+
+### `GET /agent/cdks` 我的卡密库存
+
+列出站长分配给本代理的卡密（含完整码），用于门户查看与复制。
+默认按「未使用优先」排序。
+
+**参数**
+
+| 名称 | 位置 | 必填 | 类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| `status` | query | 否 | string (枚举) | 按库存状态筛选；不传则返回全部 |
+| `plan` | query | 否 | string | 套餐 key |
+| `code` | query | 否 | string | 卡密前缀或片段 |
+| `page` | query | 否 | integer |  |
+| `page_size` | query | 否 | integer |  |
+
+**响应**
+
+| 状态码 | 说明 |
+| --- | --- |
+| `200` | OK |
+| `401` | API Key 缺失、无效或已吊销 |
 
 ---
 

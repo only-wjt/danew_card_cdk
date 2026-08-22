@@ -50,6 +50,149 @@ func cdkStatusUsable(status string) bool {
 	return st == "" || st == "unused"
 }
 
+// AgentCDKInventoryItem 代理名下的一张卡密（含完整码，仅供本人查看与复制）。
+type AgentCDKInventoryItem struct {
+	Code      string `json:"code"`
+	Prefix    string `json:"code_prefix,omitempty"`
+	Plan      string `json:"plan"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+}
+
+// AgentCDKInventoryQuery 代理卡密库存查询。
+type AgentCDKInventoryQuery struct {
+	AgentUserID int64
+	Status      string // unused / reserved / consumed / 空=全部
+	Plan        string
+	Code        string // 前缀或片段模糊
+	Page        int
+	PageSize    int
+}
+
+// AgentCDKInventorySummary 代理卡密库存汇总。
+type AgentCDKInventorySummary struct {
+	Total    int `json:"total"`
+	Unused   int `json:"unused"`
+	Reserved int `json:"reserved"`
+	Consumed int `json:"consumed"`
+}
+
+func agentCDKStatusWhere(status string) (clause string, args []interface{}) {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "unused", "available":
+		return `(status = '' OR lower(status) = 'unused')`, nil
+	case "reserved", "in_flight":
+		return `lower(status) = 'reserved'`, nil
+	case "consumed", "used":
+		return `lower(status) = 'consumed'`, nil
+	default:
+		return "", nil
+	}
+}
+
+// AgentCDKInventorySummaryFor 统计代理名下各状态卡密数量。
+func AgentCDKInventorySummaryFor(agentUserID int64) (AgentCDKInventorySummary, error) {
+	out := AgentCDKInventorySummary{}
+	if DB == nil || agentUserID <= 0 {
+		return out, fmt.Errorf("invalid query")
+	}
+	rows, err := DB.Query(`
+		SELECT lower(COALESCE(status,'')), COUNT(*)
+		FROM cardplatform_cdk_codes
+		WHERE assigned_agent_user_id = ?
+		GROUP BY lower(COALESCE(status,''))
+	`, agentUserID)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return out, err
+		}
+		out.Total += n
+		switch status {
+		case "", "unused":
+			out.Unused += n
+		case "reserved":
+			out.Reserved += n
+		case "consumed":
+			out.Consumed += n
+		}
+	}
+	return out, rows.Err()
+}
+
+// ListAgentCDKInventory 分页列出代理名下卡密（含完整码）。
+func ListAgentCDKInventory(q AgentCDKInventoryQuery) ([]AgentCDKInventoryItem, int, error) {
+	if DB == nil || q.AgentUserID <= 0 {
+		return nil, 0, fmt.Errorf("invalid query")
+	}
+	if q.Page < 1 {
+		q.Page = 1
+	}
+	if q.PageSize < 1 || q.PageSize > 200 {
+		q.PageSize = 50
+	}
+	offset := (q.Page - 1) * q.PageSize
+
+	where := []string{"assigned_agent_user_id = ?"}
+	args := []interface{}{q.AgentUserID}
+	if stClause, stArgs := agentCDKStatusWhere(q.Status); stClause != "" {
+		where = append(where, stClause)
+		args = append(args, stArgs...)
+	}
+	if p := strings.TrimSpace(q.Plan); p != "" {
+		where = append(where, "plan = ?")
+		args = append(args, p)
+	}
+	if c := strings.TrimSpace(q.Code); c != "" {
+		where = append(where, "(code LIKE ? OR code_prefix LIKE ?)")
+		args = append(args, c+"%", "%"+c+"%")
+	}
+	whereSQL := strings.Join(where, " AND ")
+
+	var total int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM cardplatform_cdk_codes WHERE `+whereSQL, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	listArgs := append(append([]interface{}{}, args...), q.PageSize, offset)
+	rows, err := DB.Query(`
+		SELECT code, COALESCE(code_prefix,''), COALESCE(plan,''),
+		       COALESCE(status,''), COALESCE(created_at,'')
+		FROM cardplatform_cdk_codes
+		WHERE `+whereSQL+`
+		ORDER BY
+			CASE lower(COALESCE(status,''))
+				WHEN '' THEN 0 WHEN 'unused' THEN 0
+				WHEN 'reserved' THEN 1
+				ELSE 2
+			END,
+			created_at DESC, code ASC
+		LIMIT ? OFFSET ?
+	`, listArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	out := make([]AgentCDKInventoryItem, 0)
+	for rows.Next() {
+		var it AgentCDKInventoryItem
+		if err := rows.Scan(&it.Code, &it.Prefix, &it.Plan, &it.Status, &it.CreatedAt); err != nil {
+			return nil, 0, err
+		}
+		if strings.TrimSpace(it.Status) == "" {
+			it.Status = "unused"
+		}
+		out = append(out, it)
+	}
+	return out, total, rows.Err()
+}
+
 // LookupStoredCDKDetail 按完整码查本站缓存（含代理归属）。
 func LookupStoredCDKDetail(code string) (StoredCDK, bool) {
 	code = normalizeCDKCode(code)

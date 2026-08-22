@@ -174,7 +174,8 @@
     <!-- 分配卡密 -->
     <Modal :open="assignOpen" :title="`分配卡密 · ${editingAgent?.username || ''}`" wide @close="assignOpen = false">
       <p class="text-sm text-muted mb-3">
-        在「CDK 卡密」页发码或入库后，把完整卡密粘贴到下方（每行一张），划给该代理。代理充值/API 时必须使用已分配给自己的卡密。
+        在「CDK 卡密」页发码或入库后，把完整卡密粘贴到下方（每行一张），划给该代理。
+        分配后代理可在门户「我的卡密」页查看并复制，无需再通过微信交接。
       </p>
       <div class="form-group">
         <label>卡密列表</label>

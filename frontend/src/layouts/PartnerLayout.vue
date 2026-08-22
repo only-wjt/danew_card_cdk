@@ -60,6 +60,7 @@ const auth = useAgentAuthStore()
 
 const navItems = [
   { path: '/partner', label: '概览', icon: 'Odometer', subtitle: '套餐、记录与 API 速览' },
+  { path: '/partner/cdks', label: '我的卡密', icon: 'Tickets', subtitle: '查看站长分配的卡密并复制' },
   { path: '/partner/batch', label: '批量充值', icon: 'Upload', subtitle: '批量提交与批次对账' },
   { path: '/partner/records', label: '兑换记录', icon: 'Document', subtitle: '按邮箱、卡密或 Session 检索' },
   { path: '/partner/api-keys', label: 'API 密钥', icon: 'Key', subtitle: '管理对接用的访问密钥' },

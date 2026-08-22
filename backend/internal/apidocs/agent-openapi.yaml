@@ -35,6 +35,7 @@ info:
     代理充值**必须**提交站长线下分配的卡密 `cdk_code`。服务端不会代代理自动发码扣费。
     站长在管理后台「CDK 卡密」页发码/入库后，到「代理管理 → 发卡密」划给对应代理。
     门户「设置」可查看 `unused_cdk_count`（名下仍可用卡密数量）。
+    完整卡密列表见 `GET /agent/cdks`（代理门户「我的卡密」页）。
 
     已分配给代理的卡密默认**不允许终端客户在本站公开兑换页自助兑换**（返回 `CDK_AGENT_CHANNEL`），
     避免同一张码被双方同时用掉。所以拿到货之后，请由代理统一代客户提交充值。
@@ -436,6 +437,54 @@ paths:
               schema: { type: string, format: binary }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  /agent/cdks:
+    get:
+      tags: [对账]
+      summary: 我的卡密库存
+      description: |
+        列出站长分配给本代理的卡密（含完整码），用于门户查看与复制。
+        默认按「未使用优先」排序。
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [unused, reserved, consumed]
+          description: 按库存状态筛选；不传则返回全部
+        - { name: plan, in: query, schema: { type: string }, description: 套餐 key }
+        - { name: code, in: query, schema: { type: string }, description: 卡密前缀或片段 }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  list:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        code: { type: string }
+                        code_prefix: { type: string }
+                        plan: { type: string }
+                        status: { type: string, enum: [unused, reserved, consumed] }
+                        created_at: { type: string }
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  summary:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      unused: { type: integer }
+                      reserved: { type: integer }
+                      consumed: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /agent/records:
     get:

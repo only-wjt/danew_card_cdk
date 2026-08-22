@@ -145,6 +145,41 @@ func TestAccountEmailByCDK(t *testing.T) {
 	}
 }
 
+// 代理只能看到自己名下的卡密，且含完整码供复制。
+func TestListAgentCDKInventoryIsolatesAgents(t *testing.T) {
+	openTestDB(t)
+	a1, err := CreateAgentUser("inv1", "AgentTestPass2026", "A1", nil)
+	if err != nil {
+		t.Fatalf("agent1: %v", err)
+	}
+	a2, err := CreateAgentUser("inv2", "AgentTestPass2027", "A2", nil)
+	if err != nil {
+		t.Fatalf("agent2: %v", err)
+	}
+	c1 := "CDK-INV-00000001"
+	c2 := "CDK-INV-00000002"
+	_ = SaveCardplatformCDKCode(9501, c1, "CDK-INV", "plus", 100)
+	_ = SaveCardplatformCDKCode(9502, c2, "CDK-INV", "plus", 100)
+	_, _, _ = AssignCDKsToAgent(a1.ID, []string{c1})
+	_, _, _ = AssignCDKsToAgent(a2.ID, []string{c2})
+
+	list, total, err := ListAgentCDKInventory(AgentCDKInventoryQuery{AgentUserID: a1.ID, Page: 1, PageSize: 20})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if total != 1 || len(list) != 1 || list[0].Code != c1 {
+		t.Fatalf("agent1 inventory=%+v total=%d", list, total)
+	}
+	sum, err := AgentCDKInventorySummaryFor(a1.ID)
+	if err != nil || sum.Unused != 1 || sum.Total != 1 {
+		t.Fatalf("summary=%+v err=%v", sum, err)
+	}
+	list2, total2, err := ListAgentCDKInventory(AgentCDKInventoryQuery{AgentUserID: a2.ID, Status: "unused"})
+	if err != nil || total2 != 1 || list2[0].Code != c2 {
+		t.Fatalf("agent2 got %+v total=%d", list2, total2)
+	}
+}
+
 func TestAgentCDKLifecycleOnTerminal(t *testing.T) {
 	openTestDB(t)
 	code := "CDK-TEST-LIFE-00000001"

@@ -83,6 +83,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'PartnerHome', component: () => import('../views/partner/PartnerHome.vue') },
       { path: 'batch', name: 'PartnerBatch', component: () => import('../views/partner/BatchView.vue') },
+      { path: 'cdks', name: 'PartnerCdks', component: () => import('../views/partner/CdkInventoryView.vue') },
       { path: 'records', name: 'PartnerRecords', component: () => import('../views/partner/RecordsView.vue') },
       { path: 'api-keys', name: 'PartnerApiKeys', component: () => import('../views/partner/ApiKeysView.vue') },
       { path: 'api-docs', name: 'PartnerApiDocs', component: () => import('../views/partner/ApiDocsView.vue') },

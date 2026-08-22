@@ -349,6 +349,41 @@ func AgentRevokeAPIKey(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "已吊销"})
 }
 
+// ---- CDK Inventory ----
+
+// AgentListCDKs GET /api/v1/agent/cdks
+// 列出站长分配给本代理的卡密（含完整码），用于门户查看与复制，替代线下交接。
+func AgentListCDKs(c *gin.Context) {
+	agentID := agentUserID(c)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	q := db.AgentCDKInventoryQuery{
+		AgentUserID: agentID,
+		Status:      c.Query("status"),
+		Plan:        c.Query("plan"),
+		Code:        c.Query("code"),
+		Page:        page,
+		PageSize:    pageSize,
+	}
+	list, total, err := db.ListAgentCDKInventory(q)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	summary, err := db.AgentCDKInventorySummaryFor(agentID)
+	if err != nil {
+		log.Printf("[agent] cdk inventory summary failed agent=%d: %v", agentID, err)
+		summary = db.AgentCDKInventorySummary{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"list":      list,
+		"total":     total,
+		"page":      q.Page,
+		"page_size": q.PageSize,
+		"summary":   summary,
+	})
+}
+
 // ---- Records ----
 
 func AgentListRecords(c *gin.Context) {
