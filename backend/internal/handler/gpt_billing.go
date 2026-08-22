@@ -107,8 +107,18 @@ func SessionBillingCheck(c *gin.Context) {
 			return
 		}
 		if strings.TrimSpace(sess) == "" {
+			// 代理/管理端代充不落 session，只能靠订单里的账号邮箱走 accounthub
+			if email := db.AccountEmailByCDK(cdk); email != "" {
+				if respondAccounthubInvoices(c, email) {
+					return
+				}
+				c.JSON(http.StatusBadGateway, gin.H{
+					"error": "账号 " + email + " 的账单暂时查不到，请稍后重试或联系客服。",
+				})
+				return
+			}
 			c.JSON(http.StatusNotFound, gin.H{
-				"error": "未找到该卡密绑定的 session。请确认兑换时使用了 session 凭证，或改用直接粘贴 session 查询。",
+				"error": "未找到该卡密的充值记录。请确认卡密正确；若已成功充值，可改用直接粘贴 session 查询。",
 			})
 			return
 		}
@@ -123,30 +133,9 @@ func SessionBillingCheck(c *gin.Context) {
 
 	// CDK 模式优先走 accounthub：用内部刷新过的 session 查账单
 	if source == "cdk" {
-		email := extractEmailFromSession(raw)
-		if email != "" {
-			if inv, err := queryAccounthubInvoices(email); err == nil {
-				summary := map[string]interface{}{
-					"email": email,
-				}
-				invoices := inv.Invoices
-				if invoices == nil && inv.InvoiceURL != "" {
-					invoices = []map[string]interface{}{
-						{"hosted_invoice_url": inv.InvoiceURL},
-					}
-				}
-				if invoices == nil {
-					invoices = []map[string]interface{}{}
-				}
-				c.JSON(http.StatusOK, gin.H{
-					"summary":     summary,
-					"invoices":    invoices,
-					"invoice_url": inv.InvoiceURL,
-					"auth_source": "accounthub",
-				})
+		if email := extractEmailFromSession(raw); email != "" {
+			if respondAccounthubInvoices(c, email) {
 				return
-			} else {
-				log.Printf("[billing] accounthub fallback for %s: %v", email, err)
 			}
 		}
 	}
@@ -162,4 +151,27 @@ func SessionBillingCheck(c *gin.Context) {
 		"invoices":    res.Invoices,
 		"auth_source": source,
 	})
+}
+
+// respondAccounthubInvoices 用邮箱走 accounthub 查账单并直接写响应；查不到返回 false 由调用方兜底。
+func respondAccounthubInvoices(c *gin.Context, email string) bool {
+	inv, err := queryAccounthubInvoices(email)
+	if err != nil {
+		log.Printf("[billing] accounthub fallback for %s: %v", email, err)
+		return false
+	}
+	invoices := inv.Invoices
+	if invoices == nil && inv.InvoiceURL != "" {
+		invoices = []map[string]interface{}{{"hosted_invoice_url": inv.InvoiceURL}}
+	}
+	if invoices == nil {
+		invoices = []map[string]interface{}{}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"summary":     map[string]interface{}{"email": email},
+		"invoices":    invoices,
+		"invoice_url": inv.InvoiceURL,
+		"auth_source": "accounthub",
+	})
+	return true
 }

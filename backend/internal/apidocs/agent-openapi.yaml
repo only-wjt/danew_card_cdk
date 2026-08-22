@@ -1,0 +1,772 @@
+openapi: 3.0.3
+info:
+  title: 代理开放 API
+  version: "1.0.0"
+  description: |
+    面向代理（二次分发）的充值与对账接口。
+
+    ## 鉴权
+    所有接口使用 API Key，放在 `Authorization` 头里：
+
+    ```
+    Authorization: Bearer ak_live_xxxxxxxxxxxx
+    ```
+
+    API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示一次**，请立即保存。
+    密钥泄露时到同一页面吊销即可，吊销后立即失效。
+
+    ## 异步模型
+    充值是异步的。`POST /agent/recharge` 与 `POST /agent/batch-recharge` 都只做「受理」，
+    立即返回 `202` 和 `request_id`，实际开通结果通过以下两种方式获取：
+
+    1. **Webhook（推荐）**：在门户「设置」页配置回调地址并生成签名密钥，
+       每条明细落终态时会推送事件，无需轮询。详见 `#/components/schemas/WebhookEvent`。
+    2. **轮询**：调用 `GET /agent/recharge/{request_id}` 或 `GET /agent/batch-recharge/{batch_id}`。
+       建议间隔不低于 5 秒。
+
+    ## 幂等
+    批量接口支持 `Idempotency-Key` 请求头，24 小时内相同 key 直接返回首次创建的批次，
+    不会重复扣款。**强烈建议每次提交都带上**，网络超时重发时才不会重复下单。
+
+    未带该头时，系统仍会按「套餐 + 凭据集合」在 60 秒内做一次误重复提交保护，
+    但这只兜误双击，不能替代 `Idempotency-Key`。
+
+    ## 卡密（拿货模式）
+    代理充值**必须**提交站长线下分配的卡密 `cdk_code`。服务端不会代代理自动发码扣费。
+    站长在管理后台「CDK 卡密」页发码/入库后，到「代理管理 → 发卡密」划给对应代理。
+    门户「设置」可查看 `unused_cdk_count`（名下仍可用卡密数量）。
+
+    已分配给代理的卡密默认**不允许终端客户在本站公开兑换页自助兑换**（返回 `CDK_AGENT_CHANNEL`），
+    避免同一张码被双方同时用掉。所以拿到货之后，请由代理统一代客户提交充值。
+
+    ## 客户查单
+    代充完成后，终端客户凭卡密可以自助查询，无需联系代理：
+
+    | 客户要查什么 | 入口 |
+    | --- | --- |
+    | 卡密是否已使用 | `GET /lookup/cdk?code=` |
+    | 充值进度 | `GET /public/cdk/result-by-code?code=` |
+    | 账单 / 发票 | 账单查询页填卡密（后台按订单邮箱查，代理无需交出 session） |
+
+    代理侧对账仍走 `GET /agent/records` 与 `GET /agent/batch-recharge`。
+
+    ## 限额
+    每个代理有三个独立额度，可在门户「设置」页查看当前值：
+
+    | 额度 | 含义 | 超限响应 |
+    | --- | --- | --- |
+    | `rate_limit_rpm` | 每分钟请求数 | `429 RATE_LIMITED` |
+    | `max_concurrent_recharge` | 同时在途的**充值明细条数**（单条与批量共用） | `429 CONCURRENCY_LIMIT` |
+    | `max_batch_items` | 单批最多条数 | `400 BATCH_TOO_LARGE` |
+
+    注意 `max_concurrent_recharge` 计的是明细条数而非批次数：若在途已有 8 条、
+    额度为 10，此时提交 5 条的批次会被整批拒绝，需等在途降到 5 条以内再提交。
+
+    ## 错误码
+    所有错误响应形如 `{"error": "人类可读说明", "error_code": "MACHINE_CODE"}`。
+    **程序分支请判断 `error_code`**，`error` 文案可能随版本调整。
+
+    | error_code | HTTP | 含义 | 建议处理 |
+    | --- | --- | --- | --- |
+    | `INVALID_REQUEST` | 400 | 请求体不是合法 JSON 或字段缺失 | 修正后重发 |
+    | `INVALID_ITEM` | 400 | 某条凭据不合法，`error` 里带序号 | 修正该条后重发 |
+    | `ITEMS_REQUIRED` | 400 | items 为空 | 检查提交逻辑 |
+    | `CDK_REQUIRED` | 400 | 缺少 `cdk_code` | 使用站长分配的卡密 |
+    | `CDK_NOT_FOUND` | 400 | 卡密未录入本站 | 联系站长 |
+    | `CDK_NOT_ASSIGNED` | 400 | 卡密未分配给本代理 | 联系站长发卡 |
+    | `CDK_WRONG_AGENT` | 403 | 卡密属于其他代理 | 检查是否抄错码 |
+    | `CDK_PLAN_MISMATCH` | 400 | 卡密套餐与 plan 不一致 | 换对应套餐的卡密 |
+    | `CDK_UNAVAILABLE` | 400 | 卡密已使用或已禁用 | 换一张 |
+    | `CDK_DUPLICATE` | 400 | 同批卡密重复 | 去重后重发 |
+    | `CDK_IN_FLIGHT` | 409 | 卡密正在其他任务中使用 | 等待完成 |
+    | `BATCH_TOO_LARGE` | 400 | 超出 `max_batch_items` | 拆成多批 |
+    | `PLAN_NOT_AVAILABLE` | 400 | 套餐不在可售范围或白名单内 | 先查 `/agent/plans` |
+    | `AGENT_INACTIVE` | 403 | 账号被停用 | 联系管理员 |
+    | `BATCH_NOT_FOUND` | 404 | 批次不存在或不属于本账号 | 检查 batch_id |
+    | `DELIVERY_NOT_FOUND` | 404 | 投递记录不存在或当前状态不可重投 | — |
+    | `RATE_LIMITED` | 429 | 超出每分钟请求数 | 退避后重试 |
+    | `CONCURRENCY_LIMIT` | 429 | 超出在途条数额度 | 等在途任务完成再提交 |
+    | `BALANCE_QUERY_FAILED` | 502 | 上游余额查询失败 | 可直接重试 |
+    | `CARD_PLATFORM_UNCONFIGURED` | 503 | 卡台未配置 | 联系管理员 |
+    | `INTERNAL` | 500 | 服务端异常 | 重试；持续失败请联系管理员 |
+
+    ⚠️ 遇到 `429` 和 `502` 可以安全重试；**遇到明细状态 `unknown` 绝不要重新提交同一账号**，
+    上游可能已扣款，重复提交会造成双倍扣费。
+
+  contact:
+    name: 平台管理员
+
+servers:
+  - url: /api/v1
+    description: 当前站点
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: 充值
+    description: 单条与批量充值
+  - name: 对账
+    description: 记录查询与导出
+  - name: 回调
+    description: Webhook 投递日志
+
+paths:
+  /agent/plans:
+    get:
+      tags: [充值]
+      summary: 查询可售套餐
+      description: 返回「卡台在售 ∩ 该代理白名单」的套餐列表。下单前应先取此列表，不要硬编码套餐 key。
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  plans:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        key:
+                          type: string
+                          example: plus
+                          description: 下单时传给 plan 字段的值
+                        label:
+                          type: string
+                          example: ChatGPT Plus
+                        fee_usd:
+                          type: number
+                          format: double
+                          example: 1.0
+                          description: 每条的服务费（美元），不含上游订阅实付
+                        is_credit:
+                          type: boolean
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "502":
+          description: 卡台档位暂不可用
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /agent/recharge:
+    post:
+      tags: [充值]
+      summary: 单条充值
+      description: |
+        受理一条充值任务，立即返回 `request_id`。开通结果通过 webhook 或轮询获取。
+
+        **须提交站长分配给你的 `cdk_code`**，服务端不会代你自动发码。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan, cdk_code, account]
+              properties:
+                plan:
+                  type: string
+                  example: plus
+                cdk_code:
+                  type: string
+                  description: 站长分配给你的完整卡密
+                  example: CDK-XXXX-XXXX-XXXX
+                client_reference:
+                  type: string
+                  description: 你自己的业务单号，会原样带回并出现在 webhook 与对账导出里
+                  example: order-1001
+                account:
+                  $ref: "#/components/schemas/Credential"
+            examples:
+              session模式:
+                value:
+                  plan: plus
+                  cdk_code: CDK-XXXX-XXXX-XXXX
+                  client_reference: order-1001
+                  account:
+                    mode: session
+                    session: eyJhbGciOi...
+              mailbox模式:
+                value:
+                  plan: plus
+                  cdk_code: CDK-YYYY-YYYY-YYYY
+                  client_reference: order-1002
+                  account:
+                    mode: mailbox
+                    email: user@example.com
+                    password: "邮箱密码"
+                    gpt_password: "ChatGPT 登录密码"
+      responses:
+        "202":
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request_id: { type: string, example: agt-1a2b3c4d-001 }
+                  batch_id: { type: string, example: agt-1a2b3c4d }
+                  plan: { type: string }
+                  status: { type: string, example: running }
+                  client_reference: { type: string }
+        "200":
+          description: 命中去重，返回原任务（未重复扣款）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request_id: { type: string }
+                  batch_id: { type: string }
+                  deduped: { type: boolean, example: true }
+                  status: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+
+  /agent/recharge/{request_id}:
+    get:
+      tags: [充值]
+      summary: 查询单条充值状态
+      parameters:
+        - name: request_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RechargeRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /agent/batch-recharge:
+    post:
+      tags: [充值]
+      summary: 批量充值
+      description: |
+        一次提交多条充值任务，立即返回 `batch_id` 及每条的 `request_id`。
+
+        执行链路与单条完全一致，服务端内部按小并发逐条处理。
+        提交前请确认：
+
+        - 每条 `items[]` **必须带 `cdk_code`**（站长线下分配给你的卡密）
+        - 条数不超过 `max_batch_items`
+        - 在途条数 + 本批条数不超过 `max_concurrent_recharge`，否则整批被拒
+        - 强烈建议带上 `Idempotency-Key`
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: 幂等键，建议用 UUID。24 小时内重复提交同一 key 直接返回首次的批次。
+          schema: { type: string }
+          example: 6f1c9b7e-4d3a-4f10-9a2b-8c5d1e0f7a33
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan, items]
+              properties:
+                plan:
+                  type: string
+                  example: plus
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    allOf:
+                      - $ref: "#/components/schemas/Credential"
+                      - type: object
+                        required: [cdk_code]
+                        properties:
+                          cdk_code:
+                            type: string
+                            description: 站长分配给你的完整卡密
+                          client_reference:
+                            type: string
+                            description: 该条的业务单号；留空则用账号默认前缀
+            example:
+              plan: plus
+              items:
+                - cdk_code: CDK-AAAA-BBBB-CCCC
+                  mode: session
+                  session: eyJhbGciOi...
+                  client_reference: order-2001
+                - cdk_code: CDK-DDDD-EEEE-FFFF
+                  mode: mailbox
+                  email: user@example.com
+                  password: "邮箱密码"
+                  gpt_password: "ChatGPT 登录密码"
+                  client_reference: order-2002
+      responses:
+        "202":
+          description: 已受理
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch_id: { type: string, example: agb-9f8e7d6c }
+                  total: { type: integer, example: 2 }
+                  plan: { type: string }
+                  status: { type: string, example: running }
+                  estimated_fee_usd:
+                    type: number
+                    format: double
+                    description: 整批预估服务费（美元）
+                  items:
+                    type: array
+                    description: 逐条回执，请落库保存 request_id 用于后续对账
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer, example: 1 }
+                        request_id: { type: string, example: agb-9f8e7d6c-001 }
+                        client_reference: { type: string, example: order-2001 }
+        "200":
+          description: 命中幂等，返回原批次（未重复扣款）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch_id: { type: string }
+                  deduped: { type: boolean, example: true }
+                  message: { type: string }
+                  total: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seq: { type: integer }
+                        request_id: { type: string }
+                        client_reference: { type: string }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "429": { $ref: "#/components/responses/TooManyRequests" }
+        "502":
+          description: 上游余额查询失败
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "503":
+          description: 卡台未配置
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    get:
+      tags: [对账]
+      summary: 批次列表
+      description: 倒序列出本账号的全部批次，单条充值产生的批次也在其中。
+      parameters:
+        - { name: page, in: query, description: 页码，从 1 开始, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, description: 每页条数，最大 100, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  list:
+                    type: array
+                    items: { $ref: "#/components/schemas/BatchSummary" }
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /agent/batch-recharge/{batch_id}:
+    get:
+      tags: [对账]
+      summary: 批次详情
+      description: 返回批次概览与全部明细。轮询建议间隔不低于 5 秒。
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  batch: { $ref: "#/components/schemas/BatchSummary" }
+                  items:
+                    type: array
+                    items: { $ref: "#/components/schemas/RechargeRecord" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /agent/batch-recharge/{batch_id}/export:
+    get:
+      tags: [对账]
+      summary: 导出批次对账表
+      description: 返回 `.xlsx` 对账表（不含凭据）。
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema: { type: string }
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [all, success, failed]
+            default: all
+      responses:
+        "200":
+          description: Excel 文件
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+              schema: { type: string, format: binary }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /agent/records:
+    get:
+      tags: [对账]
+      summary: 兑换记录查询
+      description: |
+        按邮箱、卡密、状态、套餐筛选。
+
+        **按 session 检索请改用 `POST /agent/records/search-session`**：
+        session 明文放进 query string 会落进访问日志和浏览器历史。
+      parameters:
+        - { name: email, in: query, schema: { type: string }, description: 账号邮箱，模糊匹配 }
+        - { name: cdk, in: query, schema: { type: string }, description: 卡密，前缀或模糊匹配 }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, issuing, preparing, submitted, processing, success, failed, skipped, unknown]
+        - { name: plan, in: query, schema: { type: string }, description: 套餐 key，精确匹配 }
+        - { name: page, in: query, description: 页码，从 1 开始, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, description: 每页条数，最大 100, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecordPage" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /agent/records/search-session:
+    post:
+      tags: [对账]
+      summary: 按 session 检索记录
+      description: |
+        session 只以哈希形式存储与比对，服务端不留明文，也不会回显。
+        用 POST 是为了避免明文出现在 URL 里。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session]
+              properties:
+                session: { type: string }
+                page: { type: integer, default: 1 }
+                page_size: { type: integer, default: 20 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RecordPage" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /agent/webhooks/deliveries:
+    get:
+      tags: [回调]
+      summary: 回调投递日志
+      description: 查看每条事件的投递状态、重试次数与最近一次错误，便于排查回调没收到的原因。
+      parameters:
+        - { name: page, in: query, description: 页码，从 1 开始, schema: { type: integer, default: 1 } }
+        - { name: page_size, in: query, description: 每页条数，最大 100, schema: { type: integer, default: 20, maximum: 100 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  list:
+                    type: array
+                    items: { $ref: "#/components/schemas/WebhookDelivery" }
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /agent/webhooks/deliveries/{id}/retry:
+    post:
+      tags: [回调]
+      summary: 手动重投回调
+      description: 仅对 `status = failed` 的记录有效，重投后重新进入自动重试队列。
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: 已重新入队
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: http
+      scheme: bearer
+      description: "值为门户创建的 API Key，形如 `ak_live_xxxxxxxx`。"
+
+  schemas:
+    Credential:
+      type: object
+      description: |
+        ChatGPT 账号凭据 + 卡密。批量接口每条须带 `cdk_code`；单条接口在顶层传 `cdk_code`。
+
+        凭据二选一：
+
+        - `mode = session`：只需 `session`
+        - `mode = mailbox`：需要 `email` + `password`，建议同时给 `gpt_password`
+
+        凭据仅用于本次开通，服务端不回显；session 只存哈希。
+      required: [mode]
+      properties:
+        cdk_code:
+          type: string
+          description: 站长分配给你的完整卡密（批量接口必填）
+        mode:
+          type: string
+          enum: [session, mailbox]
+          default: session
+        session:
+          type: string
+          description: mode = session 时必填
+        email:
+          type: string
+          format: email
+          description: mode = mailbox 时必填
+        password:
+          type: string
+          description: mode = mailbox 时必填，邮箱密码
+        gpt_password:
+          type: string
+          description: ChatGPT 登录密码
+        email_password:
+          type: string
+          description: 邮箱密码；留空时回落到 password
+
+    RechargeRecord:
+      type: object
+      properties:
+        batch_id: { type: string }
+        seq: { type: integer }
+        request_id:
+          type: string
+          description: 该条充值的唯一标识，对账以此为准
+        client_reference:
+          type: string
+          description: 你提交时带的业务单号
+        plan: { type: string }
+        cred_mode: { type: string, enum: [session, mailbox] }
+        account_email: { type: string }
+        cdk_prefix:
+          type: string
+          description: 内部凭证前缀，仅用于人工核对
+        upstream_order_id: { type: string }
+        status: { $ref: "#/components/schemas/ItemStatus" }
+        message:
+          type: string
+          description: 人类可读说明，不要用于程序判断
+        source: { type: string, enum: [agent_api, agent_portal] }
+        created_at: { type: string }
+        updated_at: { type: string }
+
+    ItemStatus:
+      type: string
+      description: |
+        明细状态机。终态为 `success` / `failed` / `skipped` / `unknown`。
+
+        - `pending`：已受理，排队中
+        - `issuing` / `preparing` / `submitted` / `processing`：处理中
+        - `success`：开通完成
+        - `failed`：开通失败
+        - `skipped`：账号已是目标套餐，未扣款
+        - `unknown`：上游结果不确定。**切勿重新提交同一账号**，
+          请联系管理员核对，重复提交可能造成双倍扣款。
+      enum: [pending, issuing, preparing, submitted, processing, success, failed, skipped, unknown]
+
+    BatchSummary:
+      type: object
+      properties:
+        batch_id: { type: string }
+        plan: { type: string }
+        source: { type: string }
+        total: { type: integer }
+        success: { type: integer }
+        failed: { type: integer }
+        skipped: { type: integer }
+        unknown: { type: integer }
+        pending: { type: integer }
+        running: { type: integer }
+        status:
+          type: string
+          enum: [running, done, paused]
+          description: paused 表示因余额不足等致命错误中止，剩余条目未提交
+        message: { type: string }
+        created_at: { type: string }
+        updated_at: { type: string }
+
+    RecordPage:
+      type: object
+      properties:
+        list:
+          type: array
+          items: { $ref: "#/components/schemas/RechargeRecord" }
+        total: { type: integer }
+        page: { type: integer }
+        page_size: { type: integer }
+
+    WebhookDelivery:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        event_id: { type: string }
+        event_type: { type: string }
+        batch_id: { type: string }
+        request_id: { type: string }
+        status: { type: string, enum: [pending, delivered, failed] }
+        attempts: { type: integer }
+        last_status_code: { type: integer }
+        last_error: { type: string }
+        next_attempt_at: { type: string }
+        created_at: { type: string }
+        delivered_at: { type: string }
+
+    WebhookEvent:
+      type: object
+      description: |
+        推送到你回调地址的事件体（`POST`，`Content-Type: application/json`）。
+
+        ### 请求头
+        | 头 | 说明 |
+        | --- | --- |
+        | `X-Webhook-Id` | 事件唯一 ID，等于 body 里的 `event_id`，**用它做幂等去重** |
+        | `X-Webhook-Event` | 事件类型 |
+        | `X-Webhook-Timestamp` | Unix 秒级时间戳，参与签名 |
+        | `X-Signature` | `hex(HMAC-SHA256(secret, timestamp + "." + rawBody))` |
+
+        ### 验签
+        用门户「设置」页生成的 webhook 密钥，对 `时间戳 + "." + 原始请求体` 做
+        HMAC-SHA256，与 `X-Signature` 常量时间比对。务必使用**原始字节**，
+        不要先反序列化再重新序列化。
+
+        建议同时校验 `X-Webhook-Timestamp` 与当前时间相差不超过 5 分钟，以拒绝重放。
+
+        ```javascript
+        const crypto = require("crypto");
+        // express: app.post("/hook", express.raw({ type: "application/json" }), ...)
+        function verify(req, secret) {
+          const ts = req.get("X-Webhook-Timestamp");
+          const expect = crypto.createHmac("sha256", secret)
+            .update(ts + "." + req.body)  // req.body 是 Buffer
+            .digest("hex");
+          const got = req.get("X-Signature") || "";
+          return got.length === expect.length &&
+            crypto.timingSafeEqual(Buffer.from(got), Buffer.from(expect));
+        }
+        ```
+
+        ```python
+        import hmac, hashlib
+        def verify(raw_body: bytes, timestamp: str, signature: str, secret: str) -> bool:
+            expect = hmac.new(secret.encode(),
+                              timestamp.encode() + b"." + raw_body,
+                              hashlib.sha256).hexdigest()
+            return hmac.compare_digest(expect, signature)
+        ```
+
+        ### 投递与重试
+        返回 2xx 视为成功；其余状态码或超时（10 秒）会重试，
+        间隔依次为 30 秒、2 分钟、10 分钟、30 分钟、2 小时，共 6 次。
+        全部失败后置为 `failed`，可在门户「回调日志」里手动重投。
+
+        重试意味着**同一事件可能被投递多次**，请按 `event_id` 幂等处理。
+      properties:
+        event_id:
+          type: string
+          example: evt_agb-9f8e7d6c-001_success
+        event_type:
+          type: string
+          enum: [recharge.completed, recharge.failed, recharge.unknown, batch.completed]
+        created_at: { type: string, format: date-time }
+        data:
+          type: object
+          description: |
+            `recharge.*` 事件为单条明细（字段同 RechargeRecord 的子集）；
+            `batch.completed` 事件为批次汇总（字段同 BatchSummary 的子集）。
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          description: 人类可读的错误说明，用于展示
+        error_code:
+          type: string
+          description: 机器可判断的错误码，程序分支请用这个字段而非 error 文案。取值见文档开头「错误码」一节。
+          example: CONCURRENCY_LIMIT
+
+  responses:
+    BadRequest:
+      description: 请求参数有误
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: API Key 缺失、无效或已吊销
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: 账号被停用
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyRequests:
+      description: 超出频率或在途条数额度
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

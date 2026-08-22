@@ -77,7 +77,8 @@ var batchRechargePlanFallbackFeeMinor = map[string]int64{
 // batchRechargeCredential 单条 ChatGPT 账号凭据。明文不进日志；创建批次时写入明细表供导出，
 // 列表/详情 JSON 不回传（json:"-"），只走独立导出接口。
 type batchRechargeCredential struct {
-	Mode          string `json:"mode"` // session | mailbox
+	CDKCode       string `json:"cdk_code"` // 代理路径必填；管理端自动发码时留空
+	Mode          string `json:"mode"`     // session | mailbox
 	Session       string `json:"session"`
 	Email         string `json:"email"`
 	Password      string `json:"password"`
@@ -114,6 +115,10 @@ func randomHex(n int) string {
 // credIdentity 返回一条凭据的稳定标识，用于指纹计算。
 // session 只取哈希前缀，绝不使用明文。
 func credIdentity(c batchRechargeCredential) string {
+	if code := strings.TrimSpace(c.CDKCode); code != "" {
+		sum := sha256.Sum256([]byte(strings.ToUpper(code)))
+		return "cdk:" + hex.EncodeToString(sum[:])[:16]
+	}
 	if c.Mode == "mailbox" {
 		return "mailbox:" + strings.ToLower(strings.TrimSpace(c.Email))
 	}
@@ -337,6 +342,10 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		if emailPass == "" {
 			emailPass = cred.Password
 		}
+		sessionHash := ""
+		if cred.Mode == "session" && cred.Session != "" {
+			sessionHash = HashSession(cred.Session)
+		}
 		items = append(items, db.AdminRechargeItem{
 			BatchID:         batchID,
 			Seq:             i + 1,
@@ -347,6 +356,7 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 			GptPassword:     cred.GptPassword,
 			EmailPassword:   emailPass,
 			Session:         cred.Session,
+			SessionHash:     sessionHash,
 			Status:          itemStatusPending,
 			Message:         "等待处理",
 		})
@@ -356,6 +366,7 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 	batch := db.AdminRechargeBatch{
 		BatchID:  batchID,
 		Operator: operator,
+		Source:   "admin",
 		Plan:     plan,
 		Total:    len(items),
 		Status:   batchStatusRunning,
@@ -571,7 +582,12 @@ func AdminBatchRechargeRetry(c *gin.Context) {
 // AdminBatchRechargeList GET /api/v1/admin/cardplatform/batch-recharge
 func AdminBatchRechargeList(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
-	batches, err := db.ListAdminRechargeBatches(limit)
+	agentID, _ := strconv.ParseInt(c.Query("agent_user_id"), 10, 64)
+	batches, err := db.ListAdminRechargeBatches(db.AdminBatchFilter{
+		Limit:       limit,
+		AgentUserID: agentID,
+		Source:      c.Query("source"),
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -680,6 +696,7 @@ func runBatchRecharge(batchID, plan, operator string, jobs []batchRechargeJob) {
 	} else {
 		_ = db.SetAdminRechargeBatchStatus(batchID, batchStatusDone, finalMsg)
 	}
+	enqueueAgentBatchEvent(batchID)
 
 	db.WriteAudit(operator, "admin_batch_recharge_done",
 		fmt.Sprintf("batch=%s plan=%s total=%v success=%v failed=%v unknown=%v",
@@ -698,12 +715,31 @@ func mustListItems(batchID string) []db.AdminRechargeItem {
 	return items
 }
 
+// patchItem 是所有明细状态流转的必经之路（endJob、轮询、中止收尾都走这里），
+// 所以代理回调也统一挂在这一个点上，不必在每个终态分支各埋一次。
 func patchItem(crid, status, message string) {
+	var cdkCode string
+	if it, err := db.GetAdminRechargeItemByClientRequestID(crid); err == nil && it != nil {
+		cdkCode = it.CDKCode
+	}
 	if err := db.PatchAdminRechargeItem(crid, db.AdminRechargeItemPatch{
 		Status: strPtr(status), Message: strPtr(message),
 	}); err != nil {
 		log.Printf("[batch-recharge] patch item %s failed: %v", crid, err)
+		return
 	}
+	if isTerminalItemStatus(status) && cdkCode != "" {
+		db.ReconcileCDKAfterItemTerminal(cdkCode, status)
+	}
+	enqueueAgentItemEvent(crid, status)
+}
+
+func isTerminalItemStatus(st string) bool {
+	switch strings.ToLower(strings.TrimSpace(st)) {
+	case itemStatusSuccess, itemStatusFailed, itemStatusSkipped, itemStatusUnknown:
+		return true
+	}
+	return false
 }
 
 // endJob 落一个终态并标记 job 已完结。
@@ -723,29 +759,34 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 	ctx, cancel := context.WithTimeout(context.Background(), batchRechargeItemTimeout)
 	defer cancel()
 
-	// 1) 发码：count=1，单次超时最多丢一张码的服务费
-	patchItem(job.clientRequestID, itemStatusIssuing, "购买内部凭证…")
-	issued, err := cli.IssueCDKs(ctx, plan, 1, "brc-issue-"+job.clientRequestID)
-	if err != nil {
-		if errorCodeOf(err) == "INSUFFICIENT_BALANCE" {
-			job.terminal = true
-			patchItem(job.clientRequestID, itemStatusFailed, "卡台余额不足，批次已中止")
-			return true, "卡台余额不足，批次已中止；请充值后重新提交剩余条目"
+	code := strings.TrimSpace(job.cred.CDKCode)
+	if code == "" {
+		// 1) 发码：count=1，单次超时最多丢一张码的服务费（管理端路径）
+		patchItem(job.clientRequestID, itemStatusIssuing, "购买内部凭证…")
+		issued, err := cli.IssueCDKs(ctx, plan, 1, "brc-issue-"+job.clientRequestID)
+		if err != nil {
+			if errorCodeOf(err) == "INSUFFICIENT_BALANCE" {
+				job.terminal = true
+				patchItem(job.clientRequestID, itemStatusFailed, "卡台余额不足，批次已中止")
+				return true, "卡台余额不足，批次已中止；请充值后重新提交剩余条目"
+			}
+			return endJob(job, itemStatusFailed, "购买内部凭证失败："+errorTextOf(err))
 		}
-		return endJob(job, itemStatusFailed, "购买内部凭证失败："+errorTextOf(err))
-	}
-	if issued == nil || len(issued.Issued) == 0 || strings.TrimSpace(issued.Issued[0].Code) == "" {
-		return endJob(job, itemStatusFailed, "卡台未返回可用凭证")
-	}
-	one := issued.Issued[0]
-	code := strings.TrimSpace(one.Code)
-	prefix := strings.TrimSpace(one.CodePrefix)
-	if prefix == "" && len(code) >= 14 {
-		prefix = code[:14]
-	}
-	// 落本站码库，保证即使本条失败，这张码也能在 CDK 页面被找回复用
-	if err := db.SaveCardplatformCDKCode(one.ID, code, prefix, one.Plan, one.FeeAmountMinor); err != nil {
-		log.Printf("[batch-recharge] save cdk failed seq=%d: %v", job.seq, err)
+		if issued == nil || len(issued.Issued) == 0 || strings.TrimSpace(issued.Issued[0].Code) == "" {
+			return endJob(job, itemStatusFailed, "卡台未返回可用凭证")
+		}
+		one := issued.Issued[0]
+		code = strings.TrimSpace(one.Code)
+		prefix := strings.TrimSpace(one.CodePrefix)
+		if prefix == "" && len(code) >= 14 {
+			prefix = code[:14]
+		}
+		// 落本站码库，保证即使本条失败，这张码也能在 CDK 页面被找回复用
+		if err := db.SaveCardplatformCDKCode(one.ID, code, prefix, one.Plan, one.FeeAmountMinor); err != nil {
+			log.Printf("[batch-recharge] save cdk failed seq=%d: %v", job.seq, err)
+		}
+	} else {
+		patchItem(job.clientRequestID, itemStatusPreparing, "校验凭证…")
 	}
 	_ = db.PatchAdminRechargeItem(job.clientRequestID, db.AdminRechargeItemPatch{
 		CDKCode: strPtr(code), Status: strPtr(itemStatusPreparing), Message: strPtr("校验凭证…"),
@@ -762,6 +803,10 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 		return endJob(job, itemStatusFailed, "上游未返回 redemption_token："+upstreamMessage(pm))
 	}
 	job.redemptionToken = token
+	// 绑定 码↔token：客户凭卡密就能查兑换进度。只写 token，凭据仍不落库。
+	if err := db.BindCDKRedemptionToken(code, token); err != nil {
+		log.Printf("[batch-recharge] bind token failed seq=%d: %v", job.seq, err)
+	}
 	_ = db.PatchAdminRechargeItem(job.clientRequestID, db.AdminRechargeItemPatch{
 		RedemptionToken: strPtr(token), Message: strPtr("账号预检…"),
 	})
@@ -959,6 +1004,7 @@ func ResumeInFlightBatchRecharges(ctx context.Context) {
 			}
 			if allDone {
 				_ = db.SetAdminRechargeBatchStatus(batchID, batchStatusDone, "进程重启后已与上游对齐")
+				enqueueAgentBatchEvent(batchID)
 			}
 		}
 	}()

@@ -26,6 +26,8 @@ html {
   --page-pad: 22px 20px;
   --nav-height: 60px;
   --content-max: 1500px;
+  /* 统一单行控件高度：.input / .field-select / .btn-* 共享，根治混排错位 */
+  --control-h: 42px;
 
   --bg: #f2ede4;
   --bg-tint: radial-gradient(1200px 600px at 12% -10%, rgba(192, 86, 58, 0.06), transparent 60%),
@@ -293,6 +295,7 @@ button.card:hover {
 
 .btn-primary {
   @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold active:scale-[0.98];
+  min-height: var(--control-h);
   background: var(--primary);
   color: var(--primary-on);
   box-shadow: var(--shadow-sm);
@@ -302,6 +305,7 @@ button.card:hover {
 
 .btn-secondary {
   @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold active:scale-[0.98];
+  min-height: var(--control-h);
   background: transparent;
   color: var(--ink);
   border: 1px solid var(--brd-control);
@@ -320,6 +324,7 @@ button.card:hover {
 
 .btn-danger {
   @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 font-semibold active:scale-[0.98];
+  min-height: var(--control-h);
   background: var(--err-soft);
   color: var(--err);
   border: 1px solid var(--err);
@@ -328,7 +333,10 @@ button.card:hover {
 
 /* ── Inputs ── */
 .input {
-  @apply w-full rounded-xl px-4 py-3 text-sm;
+  @apply w-full rounded-xl px-4 text-sm;
+  min-height: var(--control-h);
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
   background: var(--surface);
   border: 1px solid var(--brd-control);
   color: var(--ink);
@@ -348,12 +356,80 @@ button.card:hover {
   color: var(--ink-3);
   cursor: not-allowed;
 }
-textarea.input { resize: vertical; }
+textarea.input { min-height: 72px; resize: vertical; }
+
+/* 原生下拉：复用 .input 外观 + 自绘箭头，替代 el-select，保证与其它控件同高 */
+.field-select {
+  @apply w-full rounded-xl pl-4 text-sm;
+  min-height: var(--control-h);
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+  padding-right: 2.25rem;
+  background-color: var(--surface);
+  border: 1px solid var(--brd-control);
+  color: var(--ink);
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  transition: border-color var(--dur-2) var(--ease-standard),
+    box-shadow var(--dur-2) var(--ease-standard);
+}
+.field-select:focus,
+.field-select:focus-visible {
+  border-color: var(--primary);
+  box-shadow: var(--ring);
+}
 
 .form-group { @apply space-y-2; }
 .form-group label {
   @apply block text-sm font-medium;
   color: var(--ink-2);
+}
+
+/* 筛选行：标签在上、控件同高、按钮底部对齐 */
+.filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  align-items: end;
+}
+/* 表单栅格：窄屏单列、宽屏双列 */
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+@media (min-width: 640px) {
+  .form-grid.form-grid-2 { grid-template-columns: 1fr 1fr; }
+}
+
+/* 复选卡片：替代 el-checkbox-group，可点整块 */
+.check-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--brd);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color var(--dur-2) var(--ease-standard),
+    background-color var(--dur-2) var(--ease-standard);
+}
+.check-tile:hover { border-color: color-mix(in srgb, var(--primary) 40%, var(--brd)); }
+.check-tile.is-checked {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+.check-tile input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+  flex-shrink: 0;
 }
 
 /* ── Pills / status chips ── */

@@ -349,6 +349,9 @@ func createTables() error {
 	if err := migrateAdminRechargeItemCredCols(); err != nil {
 		log.Printf("migrateAdminRechargeItemCredCols: %v", err)
 	}
+	if err := migrateAgentPortal(); err != nil {
+		log.Printf("migrateAgentPortal: %v", err)
+	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
 	}
@@ -455,7 +458,9 @@ func UpgradeAdminHash(username, newHash string) {
 }
 
 func randomPassword(n int) string {
-	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+	const letters = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz"
+	const digits = "23456789"
+	const alphabet = letters + digits
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
 		return "Chg-Me-" + legacySHA256(fmt.Sprintf("%d", time.Now().UnixNano()))[:12]
@@ -464,6 +469,11 @@ func randomPassword(n int) string {
 	for i, b := range buf {
 		out[i] = alphabet[int(b)%len(alphabet)]
 	}
+	// 生成的口令会直接进入「至少 12 位 + 同时含字母和数字」的强度校验，
+	// 而纯随机取样并不保证两类字符都出现（16 位约 9% 概率取不到数字）。
+	// 首尾各钉一位，保证任何一次生成都能通过校验。
+	out[0] = letters[int(buf[0])%len(letters)]
+	out[n-1] = digits[int(buf[n-1])%len(digits)]
 	return string(out)
 }
 
@@ -1693,16 +1703,19 @@ func migrateDefaultCardSelectionRules() error {
 
 // AdminRechargeBatch 一次批量充值任务。
 type AdminRechargeBatch struct {
-	BatchID   string `json:"batch_id"`
-	Operator  string `json:"operator"`
-	Plan      string `json:"plan"`
-	Total     int    `json:"total"`
-	Success   int    `json:"success"`
-	Failed    int    `json:"failed"`
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	BatchID     string `json:"batch_id"`
+	Operator    string `json:"operator"`
+	AgentUserID int64  `json:"agent_user_id,omitempty"`
+	AgentName   string `json:"agent_name,omitempty"`
+	Source      string `json:"source,omitempty"`
+	Plan        string `json:"plan"`
+	Total       int    `json:"total"`
+	Success     int    `json:"success"`
+	Failed      int    `json:"failed"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
 }
 
 // AdminRechargeItem 批次内一条充值明细。
@@ -1714,12 +1727,14 @@ type AdminRechargeItem struct {
 	BatchID         string `json:"batch_id"`
 	Seq             int    `json:"seq"`
 	ClientRequestID string `json:"client_request_id"`
+	ClientReference string `json:"client_reference,omitempty"`
 	Plan            string `json:"plan"`
 	CredMode        string `json:"cred_mode"`
 	AccountEmail    string `json:"account_email"`
 	GptPassword     string `json:"-"`
 	EmailPassword   string `json:"-"`
 	Session         string `json:"-"`
+	SessionHash     string `json:"-"`
 	CDKCode         string `json:"-"`
 	RedemptionToken string `json:"-"`
 	// CardID reserved for future card-platform card id write-back. Not selected or patched yet.
@@ -1727,6 +1742,7 @@ type AdminRechargeItem struct {
 	UpstreamOrderID string `json:"upstream_order_id"`
 	Status          string `json:"status"`
 	Message         string `json:"message"`
+	CreatedAt       string `json:"created_at"`
 	UpdatedAt       string `json:"updated_at"`
 }
 
@@ -1774,29 +1790,45 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`
-		INSERT INTO admin_recharge_batches (batch_id, operator, plan, total, status, fingerprint, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	`, b.BatchID, b.Operator, b.Plan, b.Total, b.Status, fingerprint); err != nil {
+		INSERT INTO admin_recharge_batches (batch_id, operator, agent_user_id, source, plan, total, status, fingerprint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, b.BatchID, b.Operator, b.AgentUserID, nullIfEmpty(b.Source), b.Plan, b.Total, b.Status, fingerprint); err != nil {
 		return err
 	}
 	stmt, err := tx.Prepare(`
 		INSERT INTO admin_recharge_items
-			(batch_id, seq, client_request_id, plan, cred_mode, account_email,
-			 gpt_password, email_password, session, status, message, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+			(batch_id, seq, client_request_id, client_reference, plan, cred_mode, account_email,
+			 gpt_password, email_password, session, session_hash, cdk_code, status, message, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 	`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, it := range items {
-		if _, err := stmt.Exec(it.BatchID, it.Seq, it.ClientRequestID, it.Plan,
-			it.CredMode, it.AccountEmail, it.GptPassword, it.EmailPassword, it.Session,
-			it.Status, it.Message); err != nil {
+		if _, err := stmt.Exec(it.BatchID, it.Seq, it.ClientRequestID, it.ClientReference, it.Plan,
+			it.CredMode, it.AccountEmail, it.GptPassword, it.EmailPassword, it.Session, it.SessionHash,
+			nullIfEmpty(it.CDKCode), it.Status, it.Message); err != nil {
 			return err
+		}
+		if code := strings.TrimSpace(it.CDKCode); code != "" {
+			row, ok := LookupStoredCDKDetail(code)
+			if !ok {
+				return fmt.Errorf("cdk not found: %s", code)
+			}
+			if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET status = 'reserved' WHERE upstream_id = ?`, row.UpstreamID); err != nil {
+				return err
+			}
 		}
 	}
 	return tx.Commit()
+}
+
+func nullIfEmpty(s string) interface{} {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
 }
 
 // FindRecentAdminRechargeBatchByFingerprint 查同一操作员在窗口期内提交过的相同批次（防误双击重复扣款）。
@@ -1838,21 +1870,48 @@ func GetAdminRechargeBatch(batchID string) (*AdminRechargeBatch, error) {
 }
 
 // ListAdminRechargeBatches 批次列表（倒序）。
-func ListAdminRechargeBatches(limit int) ([]AdminRechargeBatch, error) {
+// AdminBatchFilter 管理端批次列表筛选。Source: ""=全部 / "self"=自营 / "agent"=代理渠道。
+type AdminBatchFilter struct {
+	Limit       int
+	AgentUserID int64
+	Source      string
+}
+
+func ListAdminRechargeBatches(f AdminBatchFilter) ([]AdminRechargeBatch, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
+	limit := f.Limit
 	if limit < 1 || limit > 200 {
 		limit = 50
 	}
+	where := []string{"1=1"}
+	args := []interface{}{}
+	if f.AgentUserID > 0 {
+		where = append(where, "COALESCE(b.agent_user_id,0) = ?")
+		args = append(args, f.AgentUserID)
+	} else {
+		switch strings.ToLower(strings.TrimSpace(f.Source)) {
+		case "agent":
+			where = append(where, "COALESCE(b.agent_user_id,0) > 0")
+		case "self", "admin":
+			where = append(where, "COALESCE(b.agent_user_id,0) = 0")
+		}
+	}
+	args = append(args, limit)
+
 	rows, err := DB.Query(`
-		SELECT b.batch_id, COALESCE(b.operator,''), COALESCE(b.plan,''), b.total,
+		SELECT b.batch_id, COALESCE(b.operator,''), COALESCE(b.agent_user_id,0),
+		       COALESCE(a.display_name, a.username, ''),
+		       COALESCE(b.source,''), COALESCE(b.plan,''), b.total,
 		       COALESCE(b.status,''), COALESCE(b.message,''), COALESCE(b.created_at,''), COALESCE(b.updated_at,''),
 		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'success'), 0),
 		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'failed'), 0)
 		FROM admin_recharge_batches b
+		LEFT JOIN agent_users a ON a.id = b.agent_user_id
+		WHERE `+strings.Join(where, " AND ")+`
 		ORDER BY b.created_at DESC LIMIT ?
-	`, limit)
+	`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -1860,7 +1919,7 @@ func ListAdminRechargeBatches(limit int) ([]AdminRechargeBatch, error) {
 	out := make([]AdminRechargeBatch, 0, limit)
 	for rows.Next() {
 		var b AdminRechargeBatch
-		if err := rows.Scan(&b.BatchID, &b.Operator, &b.Plan, &b.Total,
+		if err := rows.Scan(&b.BatchID, &b.Operator, &b.AgentUserID, &b.AgentName, &b.Source, &b.Plan, &b.Total,
 			&b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt, &b.Success, &b.Failed); err != nil {
 			return nil, err
 		}
@@ -1913,6 +1972,27 @@ func ListAdminRechargeItems(batchID string) ([]AdminRechargeItem, error) {
 		out = append(out, it)
 	}
 	return out, rows.Err()
+}
+
+// GetAdminRechargeItemByClientRequestID 按 client_request_id 取单条明细。
+func GetAdminRechargeItemByClientRequestID(clientRequestID string) (*AdminRechargeItem, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	clientRequestID = strings.TrimSpace(clientRequestID)
+	if clientRequestID == "" {
+		return nil, nil
+	}
+	row := DB.QueryRow(`SELECT `+adminRechargeItemCols+`
+		FROM admin_recharge_items WHERE client_request_id = ? LIMIT 1`, clientRequestID)
+	it, err := scanAdminRechargeItem(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &it, nil
 }
 
 // ListInFlightAdminRechargeItems 取重启后仍需对齐上游状态的明细（已拿到 token 但未终态）。

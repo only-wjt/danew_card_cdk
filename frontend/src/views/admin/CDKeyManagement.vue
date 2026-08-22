@@ -421,8 +421,6 @@ const pageFullCodes = computed(() =>
 const selectedFullCodes = computed(() =>
   selectedRows.value.map((r) => String(r.fullCode || lookupFullCode(r) || '').trim()).filter((c) => isFullCode(c)),
 )
-const fullSelectableCount = computed(() => displayRows.value.filter((r) => !!r.fullCode).length)
-
 /** 可禁用：有 id 且状态为 unused */
 function canDisableRow(row: any) {
   const id = Number(row?.id)
@@ -500,6 +498,7 @@ function onRowCommand(cmd: string, row: any) {
   if (cmd === 'note') return editNoteOne(row)
   if (cmd === 'disable') return disableOne(row)
   if (cmd === 'enable') return enableOne(row)
+  return undefined
 }
 
 function downloadText(filename: string, text: string) {
@@ -842,11 +841,8 @@ async function batchClearNoteSelected() {
 }
 
 // ★服务费只认卡台下发的值，猜不到就显示「—」★
-// 原实现对任何未知档位一律返回 10：Codex 点数实际是 $0.10，
+// 曾对未知档位一律返回 10：Codex 点数实际是 $0.10，
 // 会被显示成 $10（差 100 倍），代理按这个数字定价就直接亏钱。
-function feeDefault(_k: string): number | null {
-  return null
-}
 function feeOf(k: string) {
   const p = plans.value[k]
   if (p?.service_fee_usd != null) return Number(p.service_fee_usd).toFixed(2)

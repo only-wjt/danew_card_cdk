@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/danew/cdk-recharge-system/internal/auth"
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
 // allowedOrigins 来自环境变量 CORS_ALLOWED_ORIGINS（逗号分隔），默认仅本地开发端口。
@@ -137,7 +138,77 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 
 		c.Set("user_id", claims.UserID)
 		c.Set("is_admin", claims.IsAdmin)
+		c.Set("is_agent", claims.IsAgent)
 		c.Set("username", claims.Username)
+		c.Next()
+	}
+}
+
+func AgentAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// API Key 优先
+		if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && parts[0] == "Bearer" && strings.HasPrefix(parts[1], "ak_live_") {
+				agentID, err := db.LookupAgentByAPIKey(parts[1])
+				if err != nil {
+					c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+					c.Abort()
+					return
+				}
+				c.Set("agent_user_id", agentID)
+				c.Set("auth_via", "api_key")
+				c.Next()
+				return
+			}
+		}
+
+		var tokenStr string
+		fromCookie := false
+		if authHeader := c.GetHeader("Authorization"); authHeader != "" {
+			parts := strings.Split(authHeader, " ")
+			if len(parts) != 2 || parts[0] != "Bearer" {
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization header"})
+				c.Abort()
+				return
+			}
+			tokenStr = parts[1]
+		} else if ck, err := c.Cookie("agent_auth_token"); err == nil && ck != "" {
+			tokenStr = ck
+			fromCookie = true
+		} else {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing authorization"})
+			c.Abort()
+			return
+		}
+
+		claims := &auth.CustomClaims{}
+		token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, jwt.ErrSignatureInvalid
+			}
+			return []byte(auth.JWTSecret()), nil
+		})
+		if err != nil || !token.Valid || !claims.IsAgent || claims.IsAdmin {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			c.Abort()
+			return
+		}
+
+		if fromCookie && isUnsafeMethod(c.Request.Method) {
+			csrfHeader := c.GetHeader("X-CSRF-Token")
+			csrfCookie, _ := c.Cookie("agent_csrf_token")
+			if csrfHeader == "" || csrfCookie == "" ||
+				subtle.ConstantTimeCompare([]byte(csrfHeader), []byte(csrfCookie)) != 1 {
+				c.JSON(http.StatusForbidden, gin.H{"error": "CSRF 校验失败"})
+				c.Abort()
+				return
+			}
+		}
+
+		c.Set("agent_user_id", claims.UserID)
+		c.Set("username", claims.Username)
+		c.Set("auth_via", "jwt")
 		c.Next()
 	}
 }

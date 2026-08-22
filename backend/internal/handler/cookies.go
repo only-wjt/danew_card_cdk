@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	authCookieName = "auth_token"
-	csrfCookieName = "csrf_token"
+	authCookieName      = "auth_token"
+	csrfCookieName      = "csrf_token"
+	agentAuthCookieName = "agent_auth_token"
+	agentCSRFCookieName = "agent_csrf_token"
 )
 
 // isSecureRequest 判断当前请求是否走 HTTPS（直连 TLS 或反代标记）。
@@ -43,4 +45,17 @@ func clearAuthCookies(c *gin.Context) {
 	c.SetSameSite(http.SameSiteLaxMode)
 	c.SetCookie(authCookieName, "", -1, "/", "", false, true)
 	c.SetCookie(csrfCookieName, "", -1, "/", "", false, false)
+}
+
+func setAgentAuthCookies(c *gin.Context, token, csrf string, maxAgeSeconds int) {
+	secure := isSecureRequest(c)
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(agentAuthCookieName, token, maxAgeSeconds, "/", "", secure, true)
+	c.SetCookie(agentCSRFCookieName, csrf, maxAgeSeconds, "/", "", secure, false)
+}
+
+func clearAgentAuthCookies(c *gin.Context) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	c.SetCookie(agentAuthCookieName, "", -1, "/", "", false, true)
+	c.SetCookie(agentCSRFCookieName, "", -1, "/", "", false, false)
 }

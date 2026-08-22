@@ -146,7 +146,22 @@
 
     <!-- ── 批次列表 ── -->
     <div class="card !p-0 overflow-hidden">
-      <div class="px-4 py-3 border-b bd text-sm font-semibold text-ink">{{ t('batchRecharge.listTitle') }}</div>
+      <div class="px-4 py-3 border-b bd flex flex-wrap items-center gap-3">
+        <span class="text-sm font-semibold text-ink">{{ t('batchRecharge.listTitle') }}</span>
+        <div class="flex flex-wrap items-center gap-2 ml-auto">
+          <span class="text-xs text-muted">{{ t('batchRecharge.filterSource') }}</span>
+          <el-select v-model="filterSource" size="small" style="width: 130px" @change="onFilterChange">
+            <el-option :label="t('batchRecharge.sourceAll')" value="" />
+            <el-option :label="t('batchRecharge.sourceSelf')" value="self" />
+            <el-option :label="t('batchRecharge.sourceAgent')" value="agent" />
+          </el-select>
+          <span class="text-xs text-muted">{{ t('batchRecharge.filterAgent') }}</span>
+          <el-select v-model="filterAgentId" size="small" style="width: 160px" @change="onFilterChange">
+            <el-option :label="t('batchRecharge.agentAll')" :value="0" />
+            <el-option v-for="a in agentOptions" :key="a.id" :label="a.label" :value="a.id" />
+          </el-select>
+        </div>
+      </div>
       <div v-if="listError" class="p-4"><p class="alert alert-error">{{ listError }}</p></div>
       <div class="overflow-x-auto">
         <table class="data-table">
@@ -158,6 +173,7 @@
               <th class="num">{{ t('batchRecharge.colSuccess') }}</th>
               <th class="num">{{ t('batchRecharge.colFailed') }}</th>
               <th>{{ t('batchRecharge.colStatus') }}</th>
+              <th>{{ t('batchRecharge.colChannel') }}</th>
               <th>{{ t('batchRecharge.colOperator') }}</th>
               <th>{{ t('batchRecharge.colUpdated') }}</th>
               <th>{{ t('batchRecharge.colNote') }}</th>
@@ -166,7 +182,7 @@
           </thead>
           <tbody>
             <tr v-if="!batches.length">
-              <td colspan="10" class="text-center text-muted">{{ t('batchRecharge.emptyList') }}</td>
+              <td colspan="11" class="text-center text-muted">{{ t('batchRecharge.emptyList') }}</td>
             </tr>
             <tr v-for="b in batches" :key="b.batch_id">
               <td class="mono">{{ b.batch_id }}</td>
@@ -175,6 +191,12 @@
               <td class="num stat-success">{{ b.success ?? 0 }}</td>
               <td class="num stat-failed">{{ b.failed ?? 0 }}</td>
               <td><span class="pill" :class="batchPillClass(b.status)">{{ batchStatusLabel(b.status) }}</span></td>
+              <td>
+                <span v-if="b.agent_user_id" class="pill pill-info">
+                  {{ b.agent_name || `#${b.agent_user_id}` }}
+                </span>
+                <span v-else class="text-muted text-xs">{{ t('batchRecharge.channelSelf') }}</span>
+              </td>
               <td>{{ b.operator || '—' }}</td>
               <td class="text-xs text-muted">{{ fmtTime(b.updated_at) }}</td>
               <td class="text-xs text-muted">{{ b.message || '—' }}</td>
@@ -357,6 +379,8 @@ const ITEM_TERMINAL = new Set(['success', 'failed', 'skipped', 'unknown'])
 interface BatchRow {
   batch_id: string
   operator: string
+  agent_user_id?: number
+  agent_name?: string
   plan: string
   total: number
   success?: number
@@ -409,6 +433,9 @@ const mailboxFileRef = ref<HTMLInputElement | null>(null)
 const batches = ref<BatchRow[]>([])
 const listLoading = ref(false)
 const listError = ref('')
+const filterSource = ref('')
+const filterAgentId = ref(0)
+const agentOptions = ref<{ id: number; label: string }[]>([])
 
 const detailOpen = ref(false)
 const detailId = ref('')
@@ -645,11 +672,32 @@ async function submitBatch() {
   }
 }
 
+async function loadAgentOptions() {
+  try {
+    const r = await authFetch('/api/v1/admin/agents?limit=200')
+    if (!r.ok) return
+    const d = await r.json()
+    agentOptions.value = (d.list || []).map((a: any) => ({
+      id: a.id,
+      label: a.display_name || a.username,
+    }))
+  } catch {
+    agentOptions.value = []
+  }
+}
+
+function onFilterChange() {
+  void loadBatches()
+}
+
 async function loadBatches() {
   listLoading.value = true
   listError.value = ''
   try {
-    const r = await authFetch(`${API}?limit=50`)
+    const params = new URLSearchParams({ limit: '50' })
+    if (filterAgentId.value) params.set('agent_user_id', String(filterAgentId.value))
+    else if (filterSource.value) params.set('source', filterSource.value)
+    const r = await authFetch(`${API}?${params}`)
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
       listError.value = d.error || d.msg || t('batchRecharge.errLoad')
@@ -769,6 +817,7 @@ async function exportExcel() {
 
 onUnmounted(stopPoll)
 void loadBatches()
+void loadAgentOptions()
 </script>
 
 <style scoped>

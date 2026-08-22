@@ -8,6 +8,7 @@ import App from './App.vue'
 import router from './router'
 import './style.css'
 import { useAuthStore } from './stores/auth'
+import { useAgentAuthStore } from './stores/agentAuth'
 import { initTheme, setSiteBrand, setSkin, setTheme, type SkinId, type ThemeMode } from './theme'
 import { i18n } from './i18n'
 
@@ -40,6 +41,7 @@ for (const [name, comp] of Object.entries(ElIcons)) app.component(name, comp as 
 
 const authStore = useAuthStore(pinia)
 authStore.restore()
+useAgentAuthStore(pinia).restore()
 
 loadPublicSite().finally(() => {
   app.mount('#app')

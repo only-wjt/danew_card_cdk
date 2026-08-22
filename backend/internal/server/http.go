@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/danew/cdk-recharge-system/internal/agentwebhook"
 	"github.com/danew/cdk-recharge-system/internal/config"
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/handler"
@@ -54,6 +55,9 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	// 重启后把仍在途的批量充值明细与上游状态对齐一次
 	handler.ResumeInFlightBatchRecharges(ctx)
+
+	// 代理回调投递 worker：消费 agent_webhook_deliveries outbox
+	agentwebhook.Start(ctx)
 
 	return &Server{
 		engine: engine,
@@ -127,6 +131,11 @@ func setupRoutes(r *gin.Engine) {
 			auth.POST("/admin/logout", handler.AdminLogout)
 			auth.GET("/admin/me", JWTAuthMiddleware(), handler.AdminMe)
 			auth.POST("/admin/change-password", JWTAuthMiddleware(), AdminAuthMiddleware(), handler.AdminChangePassword)
+
+			auth.POST("/agent/login", handler.AgentLogin)
+			auth.POST("/agent/logout", AgentAuthMiddleware(), handler.AgentLogout)
+			auth.GET("/agent/me", AgentAuthMiddleware(), handler.AgentMe)
+			auth.POST("/agent/change-password", AgentAuthMiddleware(), handler.AgentChangePassword)
 		}
 
 		// 首次安装向导（仅 pending；完成后 410）
@@ -167,6 +176,36 @@ func setupRoutes(r *gin.Engine) {
 		// 账单：粘贴 session 查 ChatGPT 订阅 + hosted_invoice（小助手同款）
 		api.POST("/public/billing/check", handler.SessionBillingCheck)
 		api.POST("/billing/check", handler.SessionBillingCheck)
+
+		// 代理门户 / API（账号由站长创建）
+		agent := api.Group("/agent")
+		agent.Use(AgentAuthMiddleware(), handler.AgentRateLimit())
+		{
+			agent.GET("/plans", handler.AgentListPlans)
+			agent.POST("/recharge", handler.AgentCreateRecharge)
+			agent.GET("/recharge/:request_id", handler.AgentGetRecharge)
+			agent.GET("/records", handler.AgentListRecords)
+			agent.POST("/records/search-session", handler.AgentSearchRecordsBySession)
+			agent.GET("/settings", handler.AgentGetSettings)
+			agent.PUT("/settings", handler.AgentPutSettings)
+			agent.POST("/settings/webhook-secret/rotate", handler.AgentRotateWebhookSecret)
+			agent.GET("/api-keys", handler.AgentListAPIKeys)
+			agent.POST("/api-keys", handler.AgentCreateAPIKey)
+			agent.DELETE("/api-keys/:id", handler.AgentRevokeAPIKey)
+
+			agent.POST("/batch-recharge", handler.AgentBatchCreate)
+			agent.POST("/cdk/validate", handler.AgentValidateCDKs)
+			agent.GET("/batch-recharge", handler.AgentBatchList)
+			agent.GET("/batch-recharge/:batch_id", handler.AgentBatchDetail)
+			agent.GET("/batch-recharge/:batch_id/export", handler.AgentBatchExport)
+
+			agent.GET("/webhooks/deliveries", handler.AgentListWebhookDeliveries)
+			agent.POST("/webhooks/deliveries/:id/retry", handler.AgentRetryWebhookDelivery)
+
+			agent.GET("/openapi.json", handler.AgentOpenAPIJSON)
+			agent.GET("/openapi.yaml", handler.AgentOpenAPIYAML)
+			agent.GET("/openapi.md", handler.AgentOpenAPIMarkdown)
+		}
 
 		// Stats routes
 		stats := api.Group("/stats")
@@ -240,6 +279,21 @@ func setupRoutes(r *gin.Engine) {
 			admin.PUT("/card-health/policy", handler.AdminPutCardHealthPolicy)
 			admin.POST("/card-health/unblock", handler.AdminUnblockCard)
 			admin.POST("/card-health/observe", handler.AdminReobserveCardOrder)
+
+			// 代理账号管理
+			admin.GET("/agents", handler.AdminListAgents)
+			admin.POST("/agents", handler.AdminCreateAgent)
+			admin.PUT("/agents/:id/status", handler.AdminUpdateAgentStatus)
+			admin.POST("/agents/:id/reset-password", handler.AdminResetAgentPassword)
+			admin.PUT("/agents/:id/plans", handler.AdminUpdateAgentPlans)
+			admin.PUT("/agents/:id/limits", handler.AdminUpdateAgentLimits)
+			admin.POST("/agents/:id/assign-cdks", handler.AdminAssignAgentCDKs)
+			admin.POST("/agents/:id/unassign-cdks", handler.AdminUnassignAgentCDKs)
+			admin.GET("/agents/:id/records", handler.AdminListAgentRecords)
+
+			// 代理渠道策略（已分配卡密是否禁止公开兑换）
+			admin.GET("/agent-policy", handler.AdminGetAgentCDKPolicy)
+			admin.PUT("/agent-policy", handler.AdminPutAgentCDKPolicy)
 		}
 	}
 

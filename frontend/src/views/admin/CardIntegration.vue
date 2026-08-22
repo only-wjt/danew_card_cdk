@@ -86,7 +86,7 @@
           <div class="flex flex-wrap items-center gap-2 w-full">
             <el-input :model-value="agentSwapUrl" readonly size="large" class="!flex-1 mono" />
             <el-button type="primary" size="large" @click="copyText(agentSwapUrl)">复制链接</el-button>
-            <el-button size="large" @click="window.open(agentSwapUrl, '_blank')">打开</el-button>
+            <el-button size="large" @click="openAgentSwap()">打开</el-button>
           </div>
           <p class="text-xs text-subtle mt-1">
             路径固定 <code class="mono">/partner/swap</code>（短链 <code class="mono">/a/swap</code>）。导航栏不展示，把完整链接 + 密码发给代理即可。
@@ -301,6 +301,10 @@ async function copyText(t: string) {
   } catch {
     dialog.toast('复制失败', 'err')
   }
+}
+
+function openAgentSwap() {
+  window.open(agentSwapUrl.value, '_blank')
 }
 
 async function loadNetwork() {

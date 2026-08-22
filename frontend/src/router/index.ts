@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { useAgentAuthStore } from '../stores/agentAuth'
 
 // 管理端入口故意不用 /admin，降低扫路径风险。API 仍为 /api/v1/admin/*（服务端鉴权）。
 const OPS_BASE = '/ops'
@@ -70,6 +71,25 @@ const routes: RouteRecordRaw[] = [
     redirect: '/partner/swap',
   },
   {
+    path: '/partner/login',
+    name: 'PartnerLogin',
+    component: () => import('../views/partner/LoginView.vue'),
+    meta: { partnerGuest: true },
+  },
+  {
+    path: '/partner',
+    component: () => import('../layouts/PartnerLayout.vue'),
+    meta: { requiresAgent: true },
+    children: [
+      { path: '', name: 'PartnerHome', component: () => import('../views/partner/PartnerHome.vue') },
+      { path: 'batch', name: 'PartnerBatch', component: () => import('../views/partner/BatchView.vue') },
+      { path: 'records', name: 'PartnerRecords', component: () => import('../views/partner/RecordsView.vue') },
+      { path: 'api-keys', name: 'PartnerApiKeys', component: () => import('../views/partner/ApiKeysView.vue') },
+      { path: 'api-docs', name: 'PartnerApiDocs', component: () => import('../views/partner/ApiDocsView.vue') },
+      { path: 'settings', name: 'PartnerSettings', component: () => import('../views/partner/SettingsView.vue') },
+    ],
+  },
+  {
     path: OPS_BASE,
     component: () => import('../layouts/AdminLayout.vue'),
     meta: { requiresAuth: true, requiresAdmin: true },
@@ -77,6 +97,7 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'AdminDashboard', component: () => import('../views/admin/AdminDashboard.vue') },
       { path: 'cdkeys', name: 'CDKeyManagement', component: () => import('../views/admin/CDKeyManagement.vue') },
       { path: 'batch-recharge', name: 'BatchRecharge', component: () => import('../views/admin/BatchRechargeView.vue') },
+      { path: 'agents', name: 'AgentManagement', component: () => import('../views/admin/AgentManagement.vue') },
       { path: 'orders', name: 'OrderReconcile', component: () => import('../views/admin/OrderReconcile.vue') },
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
       { path: 'integration', name: 'CardIntegration', component: () => import('../views/admin/CardIntegration.vue') },
@@ -124,6 +145,7 @@ async function ensureSetupStatus(): Promise<boolean> {
 
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+  const agentStore = useAgentAuthStore()
   const installed = await ensureSetupStatus()
 
   // 未安装：强制进安装向导（登录页除外可看，但推荐 setup）
@@ -143,6 +165,13 @@ router.beforeEach(async (to) => {
 
   if ((to.path === `${OPS_BASE}/login` || to.path === '/auth/login') && authStore.isLoggedIn) {
     return OPS_BASE
+  }
+
+  if (to.meta.requiresAgent && !agentStore.isLoggedIn) {
+    return { path: '/partner/login', query: { redirect: to.fullPath } }
+  }
+  if (to.meta.partnerGuest && agentStore.isLoggedIn && to.path === '/partner/login') {
+    return '/partner'
   }
   return true
 })

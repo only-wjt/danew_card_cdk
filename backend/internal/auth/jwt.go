@@ -9,6 +9,7 @@ import (
 type CustomClaims struct {
 	UserID   int64  `json:"user_id"`
 	IsAdmin  bool   `json:"is_admin"`
+	IsAgent  bool   `json:"is_agent"`
 	Username string `json:"username"`
 	jwt.RegisteredClaims
 }

@@ -885,6 +885,9 @@ func PublicCDKPreview(c *gin.Context) {
 		return
 	}
 	code := str(body["code"])
+	if guardAgentAssignedCDK(c, code) {
+		return
+	}
 	cli := cardplatform.NewFromSettings()
 	st, raw, err := cli.Preview(c.Request.Context(), code, deviceFrom(c))
 	if err != nil {
@@ -909,6 +912,9 @@ func PublicCDKPreflight(c *gin.Context) {
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	if guardAgentAssignedCDK(c, str(body["code"])) {
 		return
 	}
 	cli := cardplatform.NewFromSettings()
@@ -945,6 +951,16 @@ func PublicCDKRedeem(c *gin.Context) {
 	var body map[string]any
 	if err := c.ShouldBindJSON(&body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	// 分配给代理后才 preview 的码也要挡住，这里按 token 反查
+	redeemCode := str(body["code"])
+	if redeemCode == "" {
+		if found, err := db.FindCodeByRedemptionToken(str(body["redemption_token"])); err == nil {
+			redeemCode = found
+		}
+	}
+	if guardAgentAssignedCDK(c, redeemCode) {
 		return
 	}
 	// 本站策略：启用时默认向卡台声明 no_auto_card_switch（不依赖 ACC 换卡策略）
