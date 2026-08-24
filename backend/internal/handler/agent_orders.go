@@ -78,7 +78,23 @@ func buildAgentOrderPayURL(c *gin.Context, order db.AgentOrder) (string, error) 
 		label = order.Plan
 	}
 	name := fmt.Sprintf("CDK %s x%d", label, order.Count)
-	return cfg.BuildPayURL(order.OrderNo, name, epay.MoneyYuan(order.TotalAmountCents), notifyURL, returnURL, order.PayType), nil
+	result, err := cfg.CreateMapiPay(
+		c.Request.Context(),
+		order.OrderNo,
+		name,
+		epay.MoneyYuan(order.TotalAmountCents),
+		notifyURL,
+		returnURL,
+		order.PayType,
+		c.ClientIP(),
+	)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(result.PayURL) != "" {
+		return result.PayURL, nil
+	}
+	return result.QRCode, nil
 }
 
 // AgentCreateOrder POST /api/v1/agent/orders
@@ -383,4 +399,35 @@ func AdminRetryAgentOrder(c *gin.Context) {
 	}
 	auditAdmin(c, "agent_order_retry", orderNo)
 	c.JSON(http.StatusOK, gin.H{"ok": true, "order": agentOrderJSON(order)})
+}
+
+// AdminEpayTest POST /api/v1/admin/epay/test — 用 mapi.php 校验 PID/Key 与签名
+func AdminEpayTest(c *gin.Context) {
+	cfg := loadEpayConfig()
+	if !cfg.Ready() {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": "易支付未配置完整（网关、PID、Key）"})
+		return
+	}
+	base := sitePublicBase(c)
+	orderNo := fmt.Sprintf("TEST%d", time.Now().Unix())
+	result, err := cfg.CreateMapiPay(
+		c.Request.Context(),
+		orderNo,
+		"配置测试",
+		"0.01",
+		base+"/api/v1/webhooks/epay",
+		base+"/partner/orders",
+		"alipay",
+		c.ClientIP(),
+	)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"message":  "签名校验通过，易支付配置正确",
+		"trade_no": result.TradeNo,
+		"payurl":   result.PayURL,
+	})
 }

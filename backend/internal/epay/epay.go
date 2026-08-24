@@ -1,12 +1,17 @@
 package epay
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Config 标准易支付（彩虹/码支付/七相聚合等）商户配置。
@@ -31,9 +36,83 @@ func (c Config) signMode() string {
 	return "append"
 }
 
-// BuildPayURL 生成跳转支付的 GET URL（submit.php）。
+// BuildPayURL 生成页面跳转支付 GET URL（submit.php，兼容旧接入）。
 func (c Config) BuildPayURL(outTradeNo, name, money, notifyURL, returnURL, payType string) string {
-	params := map[string]string{
+	params := buildSubmitParams(c, outTradeNo, name, money, notifyURL, returnURL, payType)
+	params["sign"] = SignWithMode(params, c.Key, c.signMode())
+	params["sign_type"] = "MD5"
+	return strings.TrimRight(c.APIBase, "/") + "/submit.php?" + encodeForm(params)
+}
+
+// MapiPayResult 统一下单（mapi.php）返回。
+type MapiPayResult struct {
+	Code    int    `json:"code"`
+	Msg     string `json:"msg"`
+	TradeNo string `json:"trade_no"`
+	PayURL  string `json:"payurl"`
+	QRCode  string `json:"qrcode"`
+}
+
+// CreateMapiPay 调用七相/易支付统一下单（POST mapi.php，文档推荐）。
+// device=jump 返回自适应 payurl，clientip 不强求真实。
+func (c Config) CreateMapiPay(ctx context.Context, outTradeNo, name, money, notifyURL, returnURL, payType, clientIP string) (*MapiPayResult, error) {
+	if !c.Ready() {
+		return nil, fmt.Errorf("epay not configured")
+	}
+	params := buildSubmitParams(c, outTradeNo, name, money, notifyURL, returnURL, payType)
+	params["clientip"] = strings.TrimSpace(clientIP)
+	if params["clientip"] == "" {
+		params["clientip"] = "127.0.0.1"
+	}
+	params["device"] = "jump"
+	params["sign"] = SignWithMode(params, c.Key, c.signMode())
+	params["sign_type"] = "MD5"
+
+	form := url.Values{}
+	for k, v := range params {
+		form.Set(k, v)
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.APIBase, "/")+"/mapi.php", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var out MapiPayResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		snippet := strings.TrimSpace(string(raw))
+		if len(snippet) > 200 {
+			snippet = snippet[:200] + "…"
+		}
+		return nil, fmt.Errorf("invalid mapi response: %s", snippet)
+	}
+	if out.Code != 1 {
+		msg := strings.TrimSpace(out.Msg)
+		if msg == "" {
+			msg = "unknown error"
+		}
+		if strings.Contains(msg, "签名") {
+			return &out, fmt.Errorf("易支付签名校验失败：请核对商户 PID 与密钥 Key 是否与七相后台完全一致（%s）", msg)
+		}
+		return &out, fmt.Errorf("易支付下单失败：%s", msg)
+	}
+	if strings.TrimSpace(out.PayURL) == "" && strings.TrimSpace(out.QRCode) == "" {
+		return &out, fmt.Errorf("易支付未返回 payurl")
+	}
+	return &out, nil
+}
+
+func buildSubmitParams(c Config, outTradeNo, name, money, notifyURL, returnURL, payType string) map[string]string {
+	return map[string]string{
 		"pid":          strings.TrimSpace(c.PID),
 		"type":         strings.TrimSpace(payType),
 		"out_trade_no": strings.TrimSpace(outTradeNo),
@@ -42,9 +121,6 @@ func (c Config) BuildPayURL(outTradeNo, name, money, notifyURL, returnURL, payTy
 		"name":         truncate(name, 127),
 		"money":        strings.TrimSpace(money),
 	}
-	params["sign"] = SignWithMode(params, c.Key, c.signMode())
-	params["sign_type"] = "MD5"
-	return strings.TrimRight(c.APIBase, "/") + "/submit.php?" + encodeForm(params)
 }
 
 // VerifyNotify 校验异步通知签名与支付成功状态。

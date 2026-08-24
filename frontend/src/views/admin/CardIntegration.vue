@@ -129,7 +129,7 @@
         </el-form-item>
         <el-form-item label="易支付网关地址">
           <el-input v-model="epayForm.epay_api_base" placeholder="https://api.payqixiang.cn" size="large" clearable />
-          <p class="text-xs text-subtle mt-1">七相聚合填 <code class="mono">https://api.payqixiang.cn</code>（不要带 submit.php）。保存后重新发起支付。</p>
+          <p class="text-xs text-subtle mt-1">七相聚合填 <code class="mono">https://api.payqixiang.cn</code>（不要带 submit.php）。下单走文档推荐的 <code class="mono">mapi.php</code> 统一下单。</p>
         </el-form-item>
         <el-form-item label="商户 PID">
           <el-input v-model="epayForm.epay_pid" class="mono" size="large" clearable />
@@ -152,6 +152,8 @@
           <p class="text-xs text-subtle mt-1">代理购卡页只展示已勾选的通道；未开通微信时可只保留支付宝。</p>
         </el-form-item>
         <el-button type="primary" size="large" :loading="savingEpay" @click="saveEpay">保存易支付配置</el-button>
+        <el-button size="large" :loading="testingEpay" @click="testEpay">测试签名/下单</el-button>
+        <p class="text-xs text-subtle mt-1">测试会向七相发起 0.01 元 mapi 下单；若报「签名校验失败」，请到七相商户后台复制 PID 与 Key 重新粘贴保存。</p>
       </el-form>
     </div>
 
@@ -272,6 +274,7 @@ const epayForm = reactive({ epay_api_base: '', epay_pid: '', public_base_url: ''
 const epaySecrets = reactive({ epay_key: '' })
 const epayPayTypes = ref<Array<'alipay' | 'wxpay'>>(['alipay'])
 const savingEpay = ref(false)
+const testingEpay = ref(false)
 const hints = reactive<Record<string, any>>({})
 const saving = ref(false)
 const busy = ref(false)
@@ -403,6 +406,21 @@ async function loadSettings() {
   epayPayTypes.value = (types.length ? types : ['alipay']) as Array<'alipay' | 'wxpay'>
   Object.assign(hints, d)
   normalizeBase()
+}
+
+async function testEpay() {
+  testingEpay.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/epay/test', { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok || !d.ok) {
+      dialog.toast(d.error || '易支付测试失败', 'err')
+      return
+    }
+    dialog.toast(d.message || '易支付配置正确', 'ok')
+  } finally {
+    testingEpay.value = false
+  }
 }
 
 async function saveEpay() {

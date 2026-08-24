@@ -271,6 +271,7 @@ func setupRoutes(r *gin.Engine) {
 			// 站点设置（品牌/皮肤/卡台密钥保险箱）
 			admin.GET("/settings", handler.AdminGetSettings)
 			admin.PUT("/settings", handler.AdminPutSettings)
+			admin.POST("/epay/test", handler.AdminEpayTest)
 
 			// 自动选卡权重配置
 			admin.GET("/card-selection/rules", handler.AdminGetCardSelectionRules)
