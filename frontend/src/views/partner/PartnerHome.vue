@@ -7,7 +7,7 @@
         <p class="welcome-hint">在这里查看可用套餐、最近兑换记录，以及 API 对接说明。</p>
       </div>
       <div class="welcome-actions">
-        <router-link to="/partner/records" class="btn-primary">查看记录</router-link>
+        <router-link to="/partner/orders" class="btn-primary">购卡下单</router-link>
         <router-link to="/partner/cdks" class="btn-secondary">我的卡密</router-link>
         <router-link to="/partner/api-keys" class="btn-secondary">管理 API Key</router-link>
       </div>
@@ -27,21 +27,24 @@
     <div class="grid gap-5 xl:grid-cols-5">
       <section class="card xl:col-span-3 space-y-4">
         <div class="flex items-center justify-between gap-3">
-          <h3 class="section-title">可用套餐</h3>
-          <span class="text-xs text-muted">{{ plans.length }} 个档位</span>
+          <h3 class="section-title">{{ t('partner.plansTitle') }}</h3>
+          <span class="text-xs text-muted">{{ t('partner.planCount', { n: pricedPlans.length }) }}</span>
         </div>
-        <div v-if="loading" class="py-8 text-center text-muted text-sm">加载中…</div>
-        <div v-else-if="!plans.length" class="empty-block">暂无可用套餐，请联系管理员配置权限。</div>
-        <div v-else class="plan-grid">
-          <div v-for="p in plans" :key="p.key" class="plan-tile">
-            <div class="plan-tile-head">
-              <span class="plan-key mono">{{ p.key }}</span>
-              <span v-if="p.is_credit" class="pill pill-info">点数</span>
+        <div v-if="loading" class="py-8 text-center text-muted text-sm">{{ t('partner.plansLoading') }}</div>
+        <div v-else-if="!pricedPlans.length" class="empty-block">{{ t('partner.plansEmpty') }}</div>
+        <div v-else class="space-y-3">
+          <div class="plan-grid">
+            <div v-for="p in pricedPlans" :key="p.key" class="plan-tile">
+              <div class="plan-tile-head">
+                <span class="plan-key mono">{{ p.key }}</span>
+                <span v-if="p.is_credit" class="pill pill-info">点数</span>
+              </div>
+              <div class="plan-label">{{ p.label || p.key }}</div>
+              <div class="plan-fee mono">¥{{ formatYuan(p) }}</div>
+              <div class="text-xs text-subtle">{{ t('partner.agentPrice') }} / {{ t('partner.currency') }}</div>
             </div>
-            <div class="plan-label">{{ p.label || p.key }}</div>
-            <div class="plan-fee mono">${{ formatFee(p.fee_usd) }}</div>
-            <div class="text-xs text-subtle">服务费 / 次</div>
           </div>
+          <router-link to="/partner/orders" class="block text-center text-sm app-link">去购卡 →</router-link>
         </div>
       </section>
 
@@ -84,9 +87,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { agentFetch } from '../../lib/agentApi'
+import { dialog } from '../../lib/dialog'
 import { useAgentAuthStore } from '../../stores/agentAuth'
 import { statusClass, statusLabel } from './partnerUi'
+
+const { t } = useI18n({ useScope: 'global' })
 
 const auth = useAgentAuthStore()
 const plans = ref<any[]>([])
@@ -96,15 +103,21 @@ const loading = ref(true)
 const limits = ref({ rpm: 60, concurrent: 2 })
 const unusedCdks = ref<number | null>(null)
 
+const pricedPlans = computed(() =>
+  plans.value.filter((p) => (p.price_cny_cents || 0) > 0),
+)
+
 const statCards = computed(() => [
   { label: '可用卡密', value: unusedCdks.value != null ? String(unusedCdks.value) : '—', hint: '站长已分配、未使用', icon: '🎫', bg: 'var(--good-soft, #ecfdf5)' },
-  { label: '可用套餐', value: String(plans.value.length), hint: '当前账号可发码档位', icon: '📦', bg: 'var(--primary-soft)' },
+  { label: '可用套餐', value: String(pricedPlans.value.length), hint: '已定价可购档位', icon: '📦', bg: 'var(--primary-soft)' },
   { label: '累计记录', value: String(recentTotal.value), hint: '历史兑换总条数', icon: '📋', bg: 'var(--warn-soft, #fffbeb)' },
   { label: '请求配额', value: `${limits.value.rpm}/min`, hint: 'API 每分钟上限', icon: '⚡', bg: 'var(--surface-2)' },
 ])
 
-function formatFee(v: number) {
-  return v != null ? Number(v).toFixed(2) : '—'
+function formatYuan(p: { price_yuan?: string; price_cny_cents?: number }) {
+  if (p.price_yuan) return p.price_yuan
+  if (p.price_cny_cents != null) return (p.price_cny_cents / 100).toFixed(2)
+  return '0.00'
 }
 
 function formatDate(v: string) {
@@ -119,11 +132,17 @@ onMounted(async () => {
       agentFetch('/api/v1/agent/records?page_size=5'),
       agentFetch('/api/v1/auth/agent/me'),
     ])
-    if (pRes.ok) plans.value = (await pRes.json()).plans || []
+    if (pRes.ok) {
+      plans.value = (await pRes.json()).plans || []
+    } else {
+      dialog.toast('加载套餐失败', 'err')
+    }
     if (rRes.ok) {
       const d = await rRes.json()
       recentRows.value = d.list || []
       recentTotal.value = d.total || 0
+    } else {
+      dialog.toast('加载记录失败', 'err')
     }
     if (mRes.ok) {
       const m = await mRes.json()
@@ -132,6 +151,10 @@ onMounted(async () => {
         concurrent: m.max_concurrent_recharge || 2,
       }
       unusedCdks.value = m.unused_cdk_count ?? null
+    } else if (mRes.status === 401) {
+      // agentFetch 会处理登出
+    } else {
+      dialog.toast('加载账号信息失败', 'err')
     }
   } finally {
     loading.value = false

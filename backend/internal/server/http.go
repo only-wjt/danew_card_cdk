@@ -172,6 +172,8 @@ func setupRoutes(r *gin.Engine) {
 
 		// 卡台 Webhook（须在卡台开发者页配置 https://你的域名/api/v1/webhooks/cardplatform）
 		api.POST("/webhooks/cardplatform", handler.CardPlatformWebhook)
+		// 易支付异步通知（代理购卡）
+		api.Any("/webhooks/epay", handler.EpayNotify)
 
 		// 账单：粘贴 session 查 ChatGPT 订阅 + hosted_invoice（小助手同款）
 		api.POST("/public/billing/check", handler.SessionBillingCheck)
@@ -182,6 +184,10 @@ func setupRoutes(r *gin.Engine) {
 		agent.Use(AgentAuthMiddleware(), handler.AgentRateLimit())
 		{
 			agent.GET("/plans", handler.AgentListPlans)
+			agent.POST("/orders", handler.AgentCreateOrder)
+			agent.GET("/orders", handler.AgentListOrders)
+			agent.GET("/orders/:order_no", handler.AgentGetOrder)
+			agent.POST("/orders/:order_no/repay", handler.AgentRepayOrder)
 			agent.POST("/recharge", handler.AgentCreateRecharge)
 			agent.GET("/recharge/:request_id", handler.AgentGetRecharge)
 			agent.GET("/records", handler.AgentListRecords)
@@ -287,6 +293,8 @@ func setupRoutes(r *gin.Engine) {
 			admin.PUT("/agents/:id/status", handler.AdminUpdateAgentStatus)
 			admin.POST("/agents/:id/reset-password", handler.AdminResetAgentPassword)
 			admin.PUT("/agents/:id/plans", handler.AdminUpdateAgentPlans)
+			admin.GET("/agents/:id/plan-fees", handler.AdminGetAgentPlanFees)
+			admin.PUT("/agents/:id/plan-fees", handler.AdminPutAgentPlanFees)
 			admin.PUT("/agents/:id/limits", handler.AdminUpdateAgentLimits)
 			admin.POST("/agents/:id/assign-cdks", handler.AdminAssignAgentCDKs)
 			admin.POST("/agents/:id/unassign-cdks", handler.AdminUnassignAgentCDKs)
@@ -295,6 +303,14 @@ func setupRoutes(r *gin.Engine) {
 			// 代理渠道策略（已分配卡密是否禁止公开兑换）
 			admin.GET("/agent-policy", handler.AdminGetAgentCDKPolicy)
 			admin.PUT("/agent-policy", handler.AdminPutAgentCDKPolicy)
+
+			// 套餐代理价：全局默认 + 每代理覆盖
+			admin.GET("/agent-plan-fees", handler.AdminGetAgentDefaultPlanFees)
+			admin.PUT("/agent-plan-fees", handler.AdminPutAgentDefaultPlanFees)
+
+			// 代理购卡订单
+			admin.GET("/agent-orders", handler.AdminListAgentOrders)
+			admin.POST("/agent-orders/:order_no/retry", handler.AdminRetryAgentOrder)
 		}
 	}
 

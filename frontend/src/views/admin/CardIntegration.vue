@@ -104,6 +104,43 @@
       </el-form>
     </div>
 
+    <!-- 易支付（代理购卡） -->
+    <div class="card space-y-4">
+      <div>
+        <h2 class="text-xl font-bold text-ink">易支付 · 代理购卡</h2>
+        <p class="text-sm text-muted mt-1">
+          与卡网同一商户即可；本站订单号以 <code class="mono">AG</code> 开头，与卡网订单区分。
+          异步通知地址：<code class="mono">{{ epayNotifyUrl }}</code>
+        </p>
+      </div>
+      <el-form label-position="top" class="max-w-xl" @submit.prevent>
+        <el-form-item label="易支付网关地址">
+          <el-input v-model="epayForm.epay_api_base" placeholder="https://pay.example.com" size="large" clearable />
+        </el-form-item>
+        <el-form-item label="商户 PID">
+          <el-input v-model="epayForm.epay_pid" class="mono" size="large" clearable />
+        </el-form-item>
+        <el-form-item label="商户密钥 Key">
+          <el-input
+            v-model="epaySecrets.epay_key"
+            type="password"
+            show-password
+            size="large"
+            :placeholder="epayKeyHint"
+            autocomplete="off"
+          />
+        </el-form-item>
+        <el-form-item label="已开通支付方式">
+          <el-checkbox-group v-model="epayPayTypes">
+            <el-checkbox label="alipay">支付宝</el-checkbox>
+            <el-checkbox label="wxpay">微信</el-checkbox>
+          </el-checkbox-group>
+          <p class="text-xs text-subtle mt-1">代理购卡页只展示已勾选的通道；未开通微信时可只保留支付宝。</p>
+        </el-form-item>
+        <el-button type="primary" size="large" :loading="savingEpay" @click="saveEpay">保存易支付配置</el-button>
+      </el-form>
+    </div>
+
     <!-- 状态摘要卡片（精简，详情进弹窗） -->
     <div class="grid gap-3 sm:grid-cols-3">
       <button type="button" class="status-card" @click="openStatusDialog">
@@ -217,6 +254,10 @@ const PRESETS: Record<string, string> = {
 
 const form = reactive({ card_api_base: PRESETS.prod })
 const secrets = reactive({ card_api_key: '', agent_swap_password: '' })
+const epayForm = reactive({ epay_api_base: '', epay_pid: '' })
+const epaySecrets = reactive({ epay_key: '' })
+const epayPayTypes = ref<Array<'alipay' | 'wxpay'>>(['alipay'])
+const savingEpay = ref(false)
 const hints = reactive<Record<string, any>>({})
 const saving = ref(false)
 const busy = ref(false)
@@ -247,6 +288,13 @@ const agentSwapUrl = computed(() => {
   if (typeof window === 'undefined') return '/partner/swap'
   return `${window.location.origin}/partner/swap`
 })
+const epayNotifyUrl = computed(() => {
+  if (typeof window === 'undefined') return '/api/v1/webhooks/epay'
+  return `${window.location.origin}/api/v1/webhooks/epay`
+})
+const epayKeyHint = computed(() =>
+  hints.epay_key_configured ? `已配置 ${hints.epay_key_hint || ''}`.trim() : '粘贴商户密钥',
+)
 
 const siteRoot = computed(() => {
   let b = (form.card_api_base || '').trim().replace(/\/+$/, '')
@@ -323,8 +371,42 @@ async function loadSettings() {
   if (!r.ok) return
   const d = await r.json()
   form.card_api_base = d.card_api_base || PRESETS.prod
+  epayForm.epay_api_base = d.epay_api_base || ''
+  epayForm.epay_pid = d.epay_pid || ''
+  const types = String(d.epay_pay_types || 'alipay')
+    .split(',')
+    .map((v: string) => v.trim().toLowerCase())
+    .filter((v: string) => v === 'alipay' || v === 'wxpay')
+  epayPayTypes.value = (types.length ? types : ['alipay']) as Array<'alipay' | 'wxpay'>
   Object.assign(hints, d)
   normalizeBase()
+}
+
+async function saveEpay() {
+  if (!epayPayTypes.value.length) {
+    dialog.toast('请至少勾选一种支付方式', 'warn')
+    return
+  }
+  savingEpay.value = true
+  try {
+    const body: Record<string, string> = {
+      epay_api_base: epayForm.epay_api_base.trim(),
+      epay_pid: epayForm.epay_pid.trim(),
+      epay_pay_types: epayPayTypes.value.join(','),
+    }
+    if (epaySecrets.epay_key.trim()) body.epay_key = epaySecrets.epay_key.trim()
+    const r = await authFetch('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    Object.assign(hints, d)
+    epaySecrets.epay_key = ''
+    dialog.toast('易支付配置已保存', 'ok')
+  } finally {
+    savingEpay.value = false
+  }
 }
 
 async function save() {

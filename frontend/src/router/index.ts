@@ -83,6 +83,7 @@ const routes: RouteRecordRaw[] = [
     children: [
       { path: '', name: 'PartnerHome', component: () => import('../views/partner/PartnerHome.vue') },
       { path: 'batch', name: 'PartnerBatch', component: () => import('../views/partner/BatchView.vue') },
+      { path: 'orders', name: 'PartnerOrders', component: () => import('../views/partner/PartnerOrdersView.vue') },
       { path: 'cdks', name: 'PartnerCdks', component: () => import('../views/partner/CdkInventoryView.vue') },
       { path: 'records', name: 'PartnerRecords', component: () => import('../views/partner/RecordsView.vue') },
       { path: 'api-keys', name: 'PartnerApiKeys', component: () => import('../views/partner/ApiKeysView.vue') },
@@ -99,6 +100,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'cdkeys', name: 'CDKeyManagement', component: () => import('../views/admin/CDKeyManagement.vue') },
       { path: 'batch-recharge', name: 'BatchRecharge', component: () => import('../views/admin/BatchRechargeView.vue') },
       { path: 'agents', name: 'AgentManagement', component: () => import('../views/admin/AgentManagement.vue') },
+      { path: 'agent-orders', name: 'AdminAgentOrders', component: () => import('../views/admin/AdminAgentOrders.vue') },
       { path: 'orders', name: 'OrderReconcile', component: () => import('../views/admin/OrderReconcile.vue') },
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
       { path: 'integration', name: 'CardIntegration', component: () => import('../views/admin/CardIntegration.vue') },

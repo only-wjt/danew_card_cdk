@@ -32,8 +32,14 @@ info:
     但这只兜误双击，不能替代 `Idempotency-Key`。
 
     ## 卡密（拿货模式）
-    代理充值**必须**提交站长线下分配的卡密 `cdk_code`。服务端不会代代理自动发码扣费。
+    代理充值**须**提交站长线下分配的卡密 `cdk_code`。充值链路不会代代理自动发码扣费。
     站长在管理后台「CDK 卡密」页发码/入库后，到「代理管理 → 发卡密」划给对应代理。
+
+    ## 在线购卡（易支付）
+    代理还可在门户「购卡下单」用易支付购买 CDK，支付成功后**自动发码并入库**到「我的卡密」，
+    无需站长手工分配。对应 API 为 `POST /agent/orders`（见下方「购卡订单」）。
+    须先在管理后台配置易支付与卡台；套餐售价见 `GET /agent/plans` 的 `price_yuan`（人民币元）。
+
     门户「设置」可查看 `unused_cdk_count`（名下仍可用卡密数量）。
     完整卡密列表见 `GET /agent/cdks`（代理门户「我的卡密」页）。
 
@@ -107,6 +113,8 @@ security:
 tags:
   - name: 充值
     description: 单条与批量充值
+  - name: 购卡订单
+    description: 易支付在线购卡（自动发码入库）
   - name: 对账
     description: 记录查询与导出
   - name: 回调
@@ -117,7 +125,10 @@ paths:
     get:
       tags: [充值]
       summary: 查询可售套餐
-      description: 返回「卡台在售 ∩ 该代理白名单」的套餐列表。下单前应先取此列表，不要硬编码套餐 key。
+      description: |
+        返回「卡台在售 ∩ 该代理白名单」的套餐列表；卡台不可用时回落 plus / pro_5x / pro_20x 等常用档位。
+        `price_cny_cents` / `price_yuan` 为该代理的有效售价（单代理覆盖 → 全局默认 → 0，单位人民币）。
+        下单前应先取此列表，不要硬编码套餐 key。
       responses:
         "200":
           description: OK
@@ -138,19 +149,150 @@ paths:
                         label:
                           type: string
                           example: ChatGPT Plus
-                        fee_usd:
-                          type: number
-                          format: double
-                          example: 1.0
-                          description: 每条的服务费（美元），不含上游订阅实付
+                        price_cny_cents:
+                          type: integer
+                          format: int64
+                          example: 6800
+                          description: 该代理的有效套餐售价（分，CNY）
+                        price_yuan:
+                          type: string
+                          example: "68.00"
+                          description: 同上，元字符串（展示用）
                         is_credit:
                           type: boolean
+                  purchase:
+                    type: object
+                    description: 在线购卡前置检查（易支付 + 卡台）
+                    properties:
+                      ready:
+                        type: boolean
+                      reason:
+                        type: string
+                        description: ready=false 时的说明
+                      pay_types:
+                        type: array
+                        items:
+                          type: string
+                          enum: [alipay, wxpay]
+                        example: [alipay]
+                  currency:
+                    type: string
+                    example: CNY
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "502":
-          description: 卡台档位暂不可用
+
+  /agent/orders:
+    get:
+      tags: [购卡订单]
+      summary: 我的购卡订单列表
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, default: 1 }
+        - name: page_size
+          in: query
+          schema: { type: integer, default: 20, maximum: 100 }
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending_pay, paid, issuing, delivered, paid_undelivered, expired, cancelled]
+      responses:
+        "200":
+          description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+              schema:
+                type: object
+                properties:
+                  list:
+                    type: array
+                    items: { $ref: "#/components/schemas/AgentOrder" }
+                  total: { type: integer }
+                  page: { type: integer }
+                  page_size: { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      tags: [购卡订单]
+      summary: 创建购卡订单并获取支付链接
+      description: |
+        创建待支付订单，返回易支付跳转 URL（`pay_url`）。支付成功后 webhook 自动发码入库。
+        订单号前缀 `AG`，待支付有效期 30 分钟。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan, count]
+              properties:
+                plan:
+                  type: string
+                  example: pro_5x
+                count:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                  example: 2
+                pay_type:
+                  type: string
+                  enum: [alipay, wxpay]
+                  default: alipay
+                  description: 须在站点已开通的 pay_types 内
+      responses:
+        "200":
+          description: 已创建，跳转 pay_url 完成支付
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: "#/components/schemas/AgentOrder" }
+                  pay_url: { type: string, format: uri }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /agent/orders/{order_no}:
+    get:
+      tags: [购卡订单]
+      summary: 查询单条购卡订单
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentOrder" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /agent/orders/{order_no}/repay:
+    post:
+      tags: [购卡订单]
+      summary: 继续支付待支付订单
+      description: 复用原订单号重新生成 pay_url，不会创建新订单。订单已过期返回 400。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: "#/components/schemas/AgentOrder" }
+                  pay_url: { type: string, format: uri }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /agent/recharge:
     post:
@@ -792,6 +934,34 @@ components:
           type: string
           description: 机器可判断的错误码，程序分支请用这个字段而非 error 文案。取值见文档开头「错误码」一节。
           example: CONCURRENCY_LIMIT
+
+    AgentOrder:
+      type: object
+      description: 代理在线购卡订单（易支付）
+      properties:
+        order_no: { type: string, example: AG1724500000a1b2c3d4 }
+        plan: { type: string }
+        plan_label: { type: string }
+        count: { type: integer }
+        unit_price_cents: { type: integer, format: int64 }
+        total_amount_cents: { type: integer, format: int64 }
+        unit_price_yuan: { type: string, example: "68.00" }
+        total_amount_yuan: { type: string, example: "136.00" }
+        status:
+          type: string
+          enum: [pending_pay, paid, issuing, delivered, paid_undelivered, expired, cancelled]
+        pay_type: { type: string, enum: [alipay, wxpay] }
+        issued_count: { type: integer }
+        issued_codes:
+          type: array
+          items: { type: string }
+          description: 已发完整卡密（敏感，请妥善保管）
+        fail_reason: { type: string }
+        expires_at: { type: string, format: date-time }
+        paid_at: { type: string, format: date-time }
+        delivered_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
   responses:
     BadRequest:

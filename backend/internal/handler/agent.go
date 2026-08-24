@@ -15,6 +15,7 @@ import (
 	"github.com/danew/cdk-recharge-system/internal/auth"
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/epay"
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -200,13 +201,13 @@ func AgentMe(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"user_id":       agent.ID,
-		"username":      agent.Username,
-		"name":          agent.DisplayName,
-		"status":        agent.Status,
-		"allowed_plans": agent.AllowedPlans,
-		"webhook_url":   agent.WebhookURL,
-		"ref_prefix":    agent.RefPrefix,
+		"user_id":                 agent.ID,
+		"username":                agent.Username,
+		"name":                    agent.DisplayName,
+		"status":                  agent.Status,
+		"allowed_plans":           agent.AllowedPlans,
+		"webhook_url":             agent.WebhookURL,
+		"ref_prefix":              agent.RefPrefix,
 		"rate_limit_rpm":          agent.RateLimitRPM,
 		"max_concurrent_recharge": agent.MaxConcurrentRecharge,
 		"max_batch_items":         agent.MaxBatchItems,
@@ -330,7 +331,7 @@ func AgentCreateAPIKey(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, gin.H{
-		"key": key,
+		"key":     key,
 		"api_key": plain,
 		"message": "请妥善保存 API Key，仅展示一次",
 	})
@@ -416,9 +417,9 @@ func AgentListRecords(c *gin.Context) {
 
 func AgentSearchRecordsBySession(c *gin.Context) {
 	var req struct {
-		Session string `json:"session"`
-		Page    int    `json:"page"`
-		PageSize int   `json:"page_size"`
+		Session  string `json:"session"`
+		Page     int    `json:"page"`
+		PageSize int    `json:"page_size"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.Session) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "session required"})
@@ -534,27 +535,45 @@ func AgentListPlans(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
 		return
 	}
-	cli := cardplatform.NewFromSettings()
-	plans, err := cli.GetPlans(c.Request.Context())
-	if err != nil || plans == nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "卡台档位暂不可用，请稍后重试"})
-		return
+	// 卡台在线：用实时可售档位；卡台不可用：回落 plus / pro_5x / pro_20x 等常用套餐。
+	// fee_usd 是该代理的有效售价（覆盖 → 全局默认 → 0），不是卡台服务费。
+	catalog := resolveAgentPlanCatalog(c, agent)
+	keys := make([]string, 0, len(catalog))
+	for _, p := range catalog {
+		keys = append(keys, p.Key)
 	}
-	// 档位清单完全以卡台注册表为准，代理侧只按白名单做减法。
-	sellable := plans.SellablePlans()
-	out := make([]gin.H, 0, len(sellable))
-	for _, p := range sellable {
-		if !agentPlanAllowed(agent, p.Key, nil) {
-			continue
-		}
+	effective, _, _, err := db.LoadAgentEffectivePlanPrices(agent.ID, keys)
+	if err != nil {
+		log.Printf("[agent] load plan prices failed agent=%d: %v", agent.ID, err)
+		effective = db.AgentPlanPriceMap{}
+	}
+	out := make([]gin.H, 0, len(catalog))
+	for _, p := range catalog {
+		cents := effective[p.Key]
 		out = append(out, gin.H{
-			"key":       p.Key,
-			"label":     p.Label,
-			"fee_usd":   p.ServiceFeeUSD,
-			"is_credit": p.IsCredit,
+			"key":             p.Key,
+			"label":           p.Label,
+			"price_cny_cents": cents,
+			"price_yuan":      fmt.Sprintf("%.2f", float64(cents)/100),
+			"is_credit":       p.IsCredit,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"plans": out})
+	payTypes := epay.ParsePayTypes(settingOr("epay_pay_types", "alipay"))
+	purchase := gin.H{"ready": true, "pay_types": payTypes}
+	if cardplatform.LoadConfig().APIKey == "" {
+		purchase = gin.H{
+			"ready":     false,
+			"reason":    "卡台未配置，暂无法自动发码",
+			"pay_types": payTypes,
+		}
+	} else if epayCfg := loadEpayConfig(); !epayCfg.Ready() {
+		purchase = gin.H{
+			"ready":     false,
+			"reason":    "易支付未配置，请联系站长",
+			"pay_types": payTypes,
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"plans": out, "purchase": purchase})
 }
 
 func submitAgentRecharge(c *gin.Context, operator string, agentID int64, source, plan string, cred batchRechargeCredential, clientRef string) (gin.H, int, error) {

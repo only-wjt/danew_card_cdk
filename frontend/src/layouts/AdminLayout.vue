@@ -104,6 +104,7 @@ const navItems = [
   { path: '/ops/cdkeys', label: 'CDK卡密', icon: 'Key' },
   { path: '/ops/batch-recharge', label: '批量充值', icon: 'Upload' },
   { path: '/ops/agents', label: '代理管理', icon: 'User' },
+  { path: '/ops/agent-orders', label: '代理购卡', icon: 'ShoppingCart' },
   { path: '/ops/orders', label: '兑换对账', icon: 'Document' },
   { path: '/ops/integration', label: '卡台接入', icon: 'Link' },
   { path: '/ops/card-selection', label: '选卡配置', icon: 'CreditCard' },

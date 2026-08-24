@@ -26,6 +26,10 @@ var secretSettingKeys = map[string]bool{
 	"webhook_secret":   true, // 卡台开发者页 whsec_…
 	"telegram_token":   true,
 	"telegram_chat_id": false,
+	"epay_api_base":    false,
+	"epay_pid":         false,
+	"epay_key":         true,
+	"epay_pay_types":   false,
 	// agent_swap handled specially (hash)
 }
 
@@ -72,6 +76,10 @@ type adminSettingsBody struct {
 	TelegramToken  *string `json:"telegram_token"`
 	TelegramChatID *string `json:"telegram_chat_id"`
 	WebhookSecret  *string `json:"webhook_secret"`
+	EpayAPIBase    *string `json:"epay_api_base"`
+	EpayPID        *string `json:"epay_pid"`
+	EpayKey        *string `json:"epay_key"`
+	EpayPayTypes   *string `json:"epay_pay_types"` // alipay,wxpay
 	// 代理失败换码密码（明文一次写入，存 bcrypt；空=不改）
 	AgentSwapPassword *string `json:"agent_swap_password"`
 }
@@ -127,6 +135,30 @@ func AdminPutSettings(c *gin.Context) {
 	_ = setIf("telegram_token", body.TelegramToken, 200)
 	_ = setIf("telegram_chat_id", body.TelegramChatID, 64)
 	_ = setIf("webhook_secret", body.WebhookSecret, 200)
+	_ = setIf("epay_api_base", body.EpayAPIBase, 200)
+	_ = setIf("epay_pid", body.EpayPID, 64)
+	_ = setIf("epay_key", body.EpayKey, 200)
+	if body.EpayPayTypes != nil {
+		allowed := map[string]bool{}
+		for _, p := range strings.Split(strings.ToLower(strings.TrimSpace(*body.EpayPayTypes)), ",") {
+			p = strings.TrimSpace(p)
+			if p == "alipay" || p == "wxpay" {
+				allowed[p] = true
+			}
+		}
+		if len(allowed) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请至少开通一种支付方式（alipay 或 wxpay）"})
+			return
+		}
+		types := make([]string, 0, len(allowed))
+		if allowed["alipay"] {
+			types = append(types, "alipay")
+		}
+		if allowed["wxpay"] {
+			types = append(types, "wxpay")
+		}
+		_ = db.SetSetting("epay_pay_types", strings.Join(types, ","))
+	}
 	if body.AgentSwapPassword != nil {
 		pw := strings.TrimSpace(*body.AgentSwapPassword)
 		if pw != "" {

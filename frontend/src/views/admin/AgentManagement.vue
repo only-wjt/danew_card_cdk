@@ -27,6 +27,40 @@
       </label>
     </div>
 
+    <div class="card space-y-4">
+      <div>
+        <h2 class="text-lg font-semibold text-ink">{{ t('adminAgents.globalFeesTitle') }}</h2>
+        <p class="text-xs text-muted mt-1">{{ t('adminAgents.globalFeesHint') }}</p>
+      </div>
+      <p v-if="!catalogFromLive" class="text-xs text-muted">{{ t('adminAgents.catalogFallbackHint') }}</p>
+      <div v-if="!feePlanRows.length" class="text-sm text-muted">{{ t('adminAgents.noPlans') }}</div>
+      <div v-else class="fee-grid">
+        <div v-for="p in feePlanRows" :key="p.key" class="fee-row">
+          <div>
+            <div class="font-medium text-ink">{{ p.label }}</div>
+            <div class="text-xs text-muted mono">{{ p.key }}</div>
+          </div>
+          <div class="form-group !mb-0">
+            <label class="!text-xs">{{ t('adminAgents.feeCny') }}</label>
+            <input
+              v-model="globalFeeForm[p.key]"
+              class="input mono"
+              type="number"
+              min="0"
+              max="100000"
+              step="0.01"
+              :placeholder="t('adminAgents.globalFeesPlaceholder')"
+            />
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end">
+        <button class="btn-primary" :disabled="globalFeesSaving" @click="submitGlobalFees">
+          {{ globalFeesSaving ? t('adminAgents.savingFees') : t('adminAgents.saveFees') }}
+        </button>
+      </div>
+    </div>
+
     <div class="card overflow-hidden !p-0">
       <div class="overflow-x-auto">
         <table class="data-table">
@@ -74,6 +108,7 @@
                 <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="openRecords(row)">查订单</button>
                 <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="openAssignCdks(row)">发卡密</button>
                 <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="openPlans(row)">套餐</button>
+                <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="openAgentFees(row)">{{ t('adminAgents.perAgentBtn') }}</button>
                 <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="openLimits(row)">限流</button>
                 <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="toggleStatus(row)">{{ row.status === 'active' ? '停用' : '启用' }}</button>
                 <button class="btn-ghost !px-2.5 !py-1.5 text-sm" @click="resetPassword(row)">重置密码</button>
@@ -138,6 +173,42 @@
       <template #footer>
         <button class="btn-secondary" @click="plansOpen = false">取消</button>
         <button class="btn-primary" :disabled="plansSaving" @click="submitPlans">{{ plansSaving ? '保存中…' : '保存' }}</button>
+      </template>
+    </Modal>
+
+    <!-- 单代理套餐定价 -->
+    <Modal :open="agentFeesOpen" :title="t('adminAgents.perAgentTitle', { name: editingAgent?.username || '' })" wide @close="agentFeesOpen = false">
+      <p class="text-sm text-muted mb-4">{{ t('adminAgents.perAgentHint') }}</p>
+      <div v-if="!feePlanRows.length" class="alert alert-error">{{ t('adminAgents.noPlans') }}</div>
+      <div v-else class="fee-grid">
+        <div v-for="p in feePlanRows" :key="p.key" class="fee-row">
+          <div>
+            <div class="font-medium text-ink">
+              {{ p.label }}
+              <span v-if="agentFeeForm[p.key] !== ''" class="pill pill-info ml-2">{{ t('adminAgents.overrideTag') }}</span>
+              <span v-else class="pill ml-2">{{ t('adminAgents.usingDefault') }}</span>
+            </div>
+            <div class="text-xs text-muted mono">{{ p.key }} · {{ t('adminAgents.defaultHint', { fee: formatFee(globalFeeNumber(p.key)) }) }}</div>
+          </div>
+          <div class="form-group !mb-0">
+            <label class="!text-xs">{{ t('adminAgents.feeCny') }}</label>
+            <input
+              v-model="agentFeeForm[p.key]"
+              class="input mono"
+              type="number"
+              min="0"
+              max="100000"
+              step="0.01"
+              :placeholder="t('adminAgents.defaultHint', { fee: formatFee(globalFeeNumber(p.key)) })"
+            />
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <button class="btn-secondary" @click="agentFeesOpen = false">取消</button>
+        <button class="btn-primary" :disabled="agentFeesSaving" @click="submitAgentFees">
+          {{ agentFeesSaving ? t('adminAgents.savingFees') : t('adminAgents.saveFees') }}
+        </button>
       </template>
     </Modal>
 
@@ -279,10 +350,13 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import Modal from '../../components/Modal.vue'
 import Pagination from '../../components/Pagination.vue'
+
+const { t } = useI18n({ useScope: 'global' })
 
 interface CDKStock {
   total: number
@@ -318,6 +392,23 @@ interface PlanOption {
   key: string
   label: string
   service_fee_usd: number | null
+}
+
+/** 卡台未配置时也能填价的稳定清单，与后端 corePricedPlans 对齐。 */
+const CORE_PRICE_PLANS: PlanOption[] = [
+  { key: 'plus', label: 'Plus', service_fee_usd: null },
+  { key: 'pro_5x', label: 'Pro 5x', service_fee_usd: null },
+  { key: 'pro_20x', label: 'Pro 20x', service_fee_usd: null },
+  { key: 'pro', label: 'Pro', service_fee_usd: null },
+  { key: 'go', label: 'Go', service_fee_usd: null },
+  { key: 'credit250', label: 'Codex 点数 250', service_fee_usd: null },
+  { key: 'credit500', label: 'Codex 点数 500', service_fee_usd: null },
+  { key: 'credit1000', label: 'Codex 点数 1000', service_fee_usd: null },
+]
+
+interface PriceCatalogRow {
+  key: string
+  label?: string
 }
 
 const list = ref<AgentRow[]>([])
@@ -362,6 +453,89 @@ const recordsFilters = reactive({ email: '', cdk: '', status: '' })
 
 const policy = reactive({ block_public_redeem: true })
 
+const globalFeeForm = reactive<Record<string, string>>({})
+const globalFeesSaving = ref(false)
+const agentFeesOpen = ref(false)
+const agentFeesSaving = ref(false)
+const agentFeeForm = reactive<Record<string, string>>({})
+const priceCatalog = ref<PriceCatalogRow[]>([])
+const catalogFromLive = ref(false)
+
+const feePlanRows = computed(() => {
+  const seen = new Set<string>()
+  const rows: PlanOption[] = []
+  const push = (key: string, label?: string) => {
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    rows.push({
+      key,
+      label: label || planLabelMap.value[key] || key,
+      service_fee_usd: null,
+    })
+  }
+  for (const p of CORE_PRICE_PLANS) push(p.key, p.label)
+  for (const p of priceCatalog.value) push(p.key, p.label)
+  for (const p of planOptions.value) push(p.key, p.label)
+  for (const key of Object.keys(globalFeeForm)) push(key)
+  for (const key of Object.keys(agentFeeForm)) push(key)
+  return rows
+})
+
+function feeFieldValue(raw: unknown) {
+  if (raw == null || raw === '') return ''
+  const n = Number(raw)
+  return Number.isFinite(n) ? String(n) : ''
+}
+
+function ensureFeeFields(target: Record<string, string>, incoming?: Record<string, unknown>, replace = false) {
+  for (const p of CORE_PRICE_PLANS) {
+    if (target[p.key] === undefined) target[p.key] = ''
+  }
+  for (const p of priceCatalog.value) {
+    if (p.key && target[p.key] === undefined) target[p.key] = ''
+  }
+  for (const p of planOptions.value) {
+    if (target[p.key] === undefined) target[p.key] = ''
+  }
+  if (!incoming) return
+  if (replace) {
+    const keys = new Set([
+      ...Object.keys(target),
+      ...Object.keys(incoming),
+      ...CORE_PRICE_PLANS.map((p) => p.key),
+      ...priceCatalog.value.map((p) => p.key),
+      ...planOptions.value.map((p) => p.key),
+    ])
+    for (const key of keys) {
+      if (!key) continue
+      target[key] = feeFieldValue(incoming[key])
+    }
+    return
+  }
+  for (const [key, raw] of Object.entries(incoming)) {
+    if (target[key] === undefined) target[key] = ''
+    const next = feeFieldValue(raw)
+    if (next !== '') target[key] = next
+  }
+}
+
+function collectFeePayload(form: Record<string, string>) {
+  const fees: Record<string, number> = {}
+  for (const [key, raw] of Object.entries(form)) {
+    const s = String(raw ?? '').trim()
+    if (s === '') continue
+    const n = Number(s)
+    if (!Number.isFinite(n)) continue
+    fees[key] = n
+  }
+  return fees
+}
+
+function globalFeeNumber(key: string) {
+  const n = Number(globalFeeForm[key])
+  return Number.isFinite(n) && String(globalFeeForm[key] ?? '').trim() !== '' ? n : 0
+}
+
 const passwordOpen = ref(false)
 const passwordInfo = reactive({ username: '', password: '' })
 
@@ -375,7 +549,7 @@ function formatFee(v: number | null | undefined) {
 }
 
 function planLabel(key: string) {
-  return planLabelMap.value[key] || key
+  return planLabelMap.value[key] || CORE_PRICE_PLANS.find((p) => p.key === key)?.label || key
 }
 
 function statusLabel(s: string) {
@@ -427,6 +601,8 @@ async function loadPlans() {
         label: r.label || plans[r.key]?.label || r.key,
         service_fee_usd: plans[r.key]?.service_fee_usd ?? (plans[r.key]?.serviceFeeUsdMinor != null ? plans[r.key].serviceFeeUsdMinor / 100 : null),
       }))
+    ensureFeeFields(globalFeeForm)
+    ensureFeeFields(agentFeeForm)
   } catch {
     planOptions.value = []
   }
@@ -582,6 +758,7 @@ async function submitAssign() {
     }
     assignForm.codesText = ''
     dialog.toast(assignResult.value.msg, 'ok')
+    await load()
   } finally {
     assignSaving.value = false
   }
@@ -667,6 +844,84 @@ function onRecordsPage(p: number) {
   void loadRecords()
 }
 
+function applyPriceCatalog(d: { plans?: PriceCatalogRow[]; catalog_source?: string }) {
+  priceCatalog.value = Array.isArray(d.plans) ? d.plans.filter((p) => p?.key) : []
+  catalogFromLive.value = d.catalog_source === 'live'
+}
+
+async function loadDefaultFees() {
+  try {
+    const res = await authFetch('/api/v1/admin/agent-plan-fees')
+    if (!res.ok) {
+      ensureFeeFields(globalFeeForm)
+      return
+    }
+    const d = await res.json()
+    applyPriceCatalog(d)
+    ensureFeeFields(globalFeeForm, d.fees || {}, true)
+  } catch {
+    ensureFeeFields(globalFeeForm)
+  }
+}
+
+async function submitGlobalFees() {
+  globalFeesSaving.value = true
+  try {
+    const res = await authFetch('/api/v1/admin/agent-plan-fees', {
+      method: 'PUT',
+      body: JSON.stringify({ fees: collectFeePayload(globalFeeForm) }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      dialog.toast(d.error || t('adminAgents.feesSaveFail'), 'err')
+      return
+    }
+    applyPriceCatalog(d)
+    ensureFeeFields(globalFeeForm, d.fees || {}, true)
+    dialog.toast(t('adminAgents.feesSaved'), 'ok')
+  } finally {
+    globalFeesSaving.value = false
+  }
+}
+
+async function openAgentFees(row: AgentRow) {
+  editingAgent.value = row
+  for (const key of Object.keys(agentFeeForm)) delete agentFeeForm[key]
+  ensureFeeFields(agentFeeForm)
+  agentFeesOpen.value = true
+  try {
+    const res = await authFetch(`/api/v1/admin/agents/${row.id}/plan-fees`)
+    if (!res.ok) return
+    const d = await res.json()
+    applyPriceCatalog(d)
+    ensureFeeFields(agentFeeForm, d.overrides || {}, true)
+  } catch {
+    /* 对话框仍可编辑，保存时再报错 */
+  }
+}
+
+async function submitAgentFees() {
+  if (!editingAgent.value) return
+  agentFeesSaving.value = true
+  try {
+    const res = await authFetch(`/api/v1/admin/agents/${editingAgent.value.id}/plan-fees`, {
+      method: 'PUT',
+      body: JSON.stringify({ fees: collectFeePayload(agentFeeForm) }),
+    })
+    const d = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      dialog.toast(d.error || t('adminAgents.feesSaveFail'), 'err')
+      return
+    }
+    applyPriceCatalog(d)
+    ensureFeeFields(agentFeeForm, d.overrides || {}, true)
+    agentFeesOpen.value = false
+    dialog.toast(t('adminAgents.feesSaved'), 'ok')
+  } finally {
+    agentFeesSaving.value = false
+  }
+}
+
 async function loadPolicy() {
   try {
     const res = await authFetch('/api/v1/admin/agent-policy')
@@ -742,7 +997,9 @@ async function copyPassword() {
 }
 
 onMounted(async () => {
+  ensureFeeFields(globalFeeForm)
   await Promise.all([load(), loadPlans(), loadPolicy()])
+  await loadDefaultFees()
 })
 </script>
 
@@ -751,5 +1008,19 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 10px;
+}
+.fee-grid {
+  display: grid;
+  gap: 12px;
+}
+.fee-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(180px, 220px);
+  gap: 16px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--brd);
+  border-radius: var(--radius-md, 12px);
+  background: var(--surface-2);
 }
 </style>

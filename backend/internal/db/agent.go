@@ -34,19 +34,19 @@ const agentUserCols = `id, username, display_name, status, allowed_plans, webhoo
 
 // AgentUser 代理账号（由站长创建，无自助注册）。
 type AgentUser struct {
-	ID            int64    `json:"id"`
-	Username      string   `json:"username"`
-	DisplayName   string   `json:"display_name"`
-	Status        string   `json:"status"`
-	AllowedPlans  []string `json:"allowed_plans"`
-	WebhookURL    string   `json:"webhook_url"`
-	RefPrefix              string   `json:"ref_prefix"`
-	RateLimitRPM           int      `json:"rate_limit_rpm"`
-	MaxConcurrentRecharge  int      `json:"max_concurrent_recharge"`
-	MaxBatchItems          int      `json:"max_batch_items"`
-	CreatedAt              string   `json:"created_at"`
-	UpdatedAt     string   `json:"updated_at"`
-	HasWebhookKey bool     `json:"has_webhook_secret"`
+	ID                    int64    `json:"id"`
+	Username              string   `json:"username"`
+	DisplayName           string   `json:"display_name"`
+	Status                string   `json:"status"`
+	AllowedPlans          []string `json:"allowed_plans"`
+	WebhookURL            string   `json:"webhook_url"`
+	RefPrefix             string   `json:"ref_prefix"`
+	RateLimitRPM          int      `json:"rate_limit_rpm"`
+	MaxConcurrentRecharge int      `json:"max_concurrent_recharge"`
+	MaxBatchItems         int      `json:"max_batch_items"`
+	CreatedAt             string   `json:"created_at"`
+	UpdatedAt             string   `json:"updated_at"`
+	HasWebhookKey         bool     `json:"has_webhook_secret"`
 }
 
 // AgentAPIKey 代理 API 密钥元数据（不含明文）。
@@ -189,6 +189,12 @@ func migrateAgentPortal() error {
 		if _, err := DB.Exec(q); err != nil {
 			log.Printf("agent portal index: %v", err)
 		}
+	}
+	if err := migrateAgentPlanFees(); err != nil {
+		return err
+	}
+	if err := migrateAgentOrders(); err != nil {
+		return err
 	}
 	return migrateAgentCDKInventory()
 }
