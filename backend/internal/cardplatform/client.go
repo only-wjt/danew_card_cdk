@@ -130,7 +130,7 @@ func (c *Client) doOpenAPI(ctx context.Context, method, path string, body any, i
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	var env envelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return nil, &APIError{HTTPStatus: resp.StatusCode, Msg: "invalid json from card platform: " + truncate(string(raw), 200)}
+		return nil, &APIError{HTTPStatus: resp.StatusCode, Msg: formatCardPlatformBodyError(resp.StatusCode, raw)}
 	}
 	// Open API：成功 code=0（HTTP 可能 200/202）；失败 code!=0 或 HTTP 4xx/5xx
 	if resp.StatusCode == 401 || env.Code == 401 {
@@ -161,6 +161,21 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+func formatCardPlatformBodyError(status int, raw []byte) string {
+	s := string(raw)
+	lower := strings.ToLower(s)
+	if strings.Contains(lower, "error 1016") || strings.Contains(lower, "origin dns error") {
+		return "卡台 API 域名无法解析（DNS/Cloudflare 1016），请到「卡台接入」检查 API 地址是否正确"
+	}
+	if strings.Contains(lower, "cloudflare") && (status >= 500 || status == 530) {
+		return fmt.Sprintf("卡台 API 不可达（HTTP %d / Cloudflare 网关错误），请检查 card_api_base 是否为有效卡台域名", status)
+	}
+	if strings.HasPrefix(strings.TrimSpace(s), "<") {
+		return fmt.Sprintf("卡台返回了 HTML 而非 JSON（HTTP %d），请检查 API 地址与密钥", status)
+	}
+	return "invalid json from card platform: " + truncate(s, 200)
 }
 
 // PlanInfo 套餐实时配置（服务费 + 参考区间）

@@ -15,10 +15,33 @@ func TestSignAndVerify(t *testing.T) {
 	}
 	params["sign"] = Sign(params, key)
 	params["sign_type"] = "MD5"
-	cfg := Config{Key: key}
+	cfg := Config{Key: key, SignMode: "append"}
 	ok, msg := cfg.VerifyNotify(params)
 	if !ok {
 		t.Fatalf("verify failed: %s sign=%s", msg, params["sign"])
+	}
+}
+
+func TestSignPayqixiangAppendMode(t *testing.T) {
+	params := map[string]string{
+		"money":        "0.01",
+		"name":         "VIP",
+		"notify_url":   "http://www.example.com/notify",
+		"out_trade_no": "20160806151343349",
+		"pid":          "1003",
+		"return_url":   "http://www.example.com/return",
+		"type":         "alipay",
+	}
+	key := "fnv5Xf0BnV5n5bGzFf7V7Fvn9tVtzn9v"
+	if SignWithMode(params, key, "append") == SignWithMode(params, key, "key_param") {
+		t.Fatal("append and key_param modes must differ")
+	}
+	params["sign"] = SignWithMode(params, key, "append")
+	params["sign_type"] = "MD5"
+	cfg := Config{Key: key, SignMode: "append"}
+	ok, msg := cfg.VerifyNotify(params)
+	if !ok {
+		t.Fatalf("payqixiang verify: %s sign=%s", msg, params["sign"])
 	}
 }
 

@@ -9,17 +9,26 @@ import (
 	"strings"
 )
 
-// Config 标准易支付（彩虹/码支付）商户配置。
+// Config 标准易支付（彩虹/码支付/七相聚合等）商户配置。
 type Config struct {
-	APIBase string // 如 https://pay.example.com （无尾斜杠）
-	PID     string
-	Key     string
+	APIBase  string // 如 https://api.payqixiang.cn （无尾斜杠）
+	PID      string
+	Key      string
+	SignMode string // append（默认，七相/彩虹）| key_param（少数平台 &key=）
 }
 
 func (c Config) Ready() bool {
 	return strings.TrimSpace(c.APIBase) != "" &&
 		strings.TrimSpace(c.PID) != "" &&
 		strings.TrimSpace(c.Key) != ""
+}
+
+func (c Config) signMode() string {
+	m := strings.ToLower(strings.TrimSpace(c.SignMode))
+	if m == "key_param" {
+		return "key_param"
+	}
+	return "append"
 }
 
 // BuildPayURL 生成跳转支付的 GET URL（submit.php）。
@@ -33,7 +42,7 @@ func (c Config) BuildPayURL(outTradeNo, name, money, notifyURL, returnURL, payTy
 		"name":         truncate(name, 127),
 		"money":        strings.TrimSpace(money),
 	}
-	params["sign"] = Sign(params, c.Key)
+	params["sign"] = SignWithMode(params, c.Key, c.signMode())
 	params["sign_type"] = "MD5"
 	return strings.TrimRight(c.APIBase, "/") + "/submit.php?" + encodeForm(params)
 }
@@ -47,7 +56,7 @@ func (c Config) VerifyNotify(params map[string]string) (ok bool, errMsg string) 
 	if got == "" {
 		return false, "missing sign"
 	}
-	expect := Sign(params, c.Key)
+	expect := SignWithMode(params, c.Key, c.signMode())
 	if !strings.EqualFold(got, expect) {
 		return false, "invalid sign"
 	}
@@ -58,8 +67,22 @@ func (c Config) VerifyNotify(params map[string]string) (ok bool, errMsg string) 
 	return true, ""
 }
 
-// Sign 易支付 MD5：剔除 sign/sign_type/空值，key 升序，& 拼接，末尾 &key=商户密钥。
+// Sign 易支付 MD5（默认 append 模式，兼容 payqixiang/七相/彩虹）。
 func Sign(params map[string]string, merchantKey string) string {
+	return SignWithMode(params, merchantKey, "append")
+}
+
+// SignWithMode 生成签名。append: md5(a=b&c=d + KEY)；key_param: md5(a=b&c=d&key=KEY)。
+func SignWithMode(params map[string]string, merchantKey string, mode string) string {
+	base := signBaseString(params)
+	key := strings.TrimSpace(merchantKey)
+	if strings.ToLower(strings.TrimSpace(mode)) == "key_param" {
+		return md5Hex(base + "&key=" + key)
+	}
+	return md5Hex(base + key)
+}
+
+func signBaseString(params map[string]string) string {
 	keys := make([]string, 0, len(params))
 	for k, v := range params {
 		k = strings.TrimSpace(k)
@@ -81,9 +104,11 @@ func Sign(params map[string]string, merchantKey string) string {
 		b.WriteByte('=')
 		b.WriteString(strings.TrimSpace(params[k]))
 	}
-	b.WriteString("&key=")
-	b.WriteString(strings.TrimSpace(merchantKey))
-	sum := md5.Sum([]byte(b.String()))
+	return b.String()
+}
+
+func md5Hex(s string) string {
+	sum := md5.Sum([]byte(s))
 	return hex.EncodeToString(sum[:])
 }
 

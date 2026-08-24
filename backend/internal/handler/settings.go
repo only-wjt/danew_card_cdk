@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -30,6 +31,7 @@ var secretSettingKeys = map[string]bool{
 	"epay_pid":         false,
 	"epay_key":         true,
 	"epay_pay_types":   false,
+	"public_base_url":  false, // 对外站点根 URL（易支付回调/跳转）
 	// agent_swap handled specially (hash)
 }
 
@@ -63,6 +65,7 @@ func AdminGetSettings(c *gin.Context) {
 		}
 	}
 	out["agent_swap_password_configured"] = agentSwapPasswordConfigured()
+	out["public_base_url_effective"] = ResolvePublicBase(c)
 	c.JSON(http.StatusOK, out)
 }
 
@@ -80,6 +83,7 @@ type adminSettingsBody struct {
 	EpayPID        *string `json:"epay_pid"`
 	EpayKey        *string `json:"epay_key"`
 	EpayPayTypes   *string `json:"epay_pay_types"` // alipay,wxpay
+	PublicBaseURL  *string `json:"public_base_url"` // 易支付 notify/return 根地址，留空=当前访问地址
 	// 代理失败换码密码（明文一次写入，存 bcrypt；空=不改）
 	AgentSwapPassword *string `json:"agent_swap_password"`
 }
@@ -159,6 +163,17 @@ func AdminPutSettings(c *gin.Context) {
 		}
 		_ = db.SetSetting("epay_pay_types", strings.Join(types, ","))
 	}
+	if body.PublicBaseURL != nil {
+		v := strings.TrimRight(strings.TrimSpace(*body.PublicBaseURL), "/")
+		if v == "" {
+			_ = db.DeleteSetting("public_base_url")
+		} else if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "站点对外地址须以 http:// 或 https:// 开头"})
+			return
+		} else {
+			_ = db.SetSetting("public_base_url", v)
+		}
+	}
 	if body.AgentSwapPassword != nil {
 		pw := strings.TrimSpace(*body.AgentSwapPassword)
 		if pw != "" {
@@ -190,4 +205,30 @@ func maskSecret(v string) string {
 		return "****"
 	}
 	return "****" + v[len(v)-4:]
+}
+
+// ResolvePublicBase 生成对外站点根 URL（无尾斜杠）。
+// 优先级：管理端 public_base_url → 环境变量 PUBLIC_BASE_URL → 当前请求 Host（IP/域名+端口）。
+func ResolvePublicBase(c *gin.Context) string {
+	if v, _ := db.GetSetting("public_base_url"); strings.TrimSpace(v) != "" {
+		return strings.TrimRight(strings.TrimSpace(v), "/")
+	}
+	if v := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	scheme := "http"
+	if c.Request.TLS != nil {
+		scheme = "https"
+	}
+	if xf := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")); xf != "" {
+		scheme = strings.Split(xf, ",")[0]
+	}
+	host := c.Request.Host
+	if xh := strings.TrimSpace(c.GetHeader("X-Forwarded-Host")); xh != "" {
+		host = strings.Split(xh, ",")[0]
+	}
+	return scheme + "://" + strings.TrimSpace(host)
 }

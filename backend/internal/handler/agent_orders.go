@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -18,29 +17,21 @@ import (
 )
 
 func loadEpayConfig() epay.Config {
+	base := strings.TrimSpace(settingOr("epay_api_base", ""))
+	signMode := strings.TrimSpace(settingOr("epay_sign_mode", ""))
+	if signMode == "" && strings.Contains(strings.ToLower(base), "payqixiang") {
+		signMode = "append"
+	}
 	return epay.Config{
-		APIBase: strings.TrimSpace(settingOr("epay_api_base", "")),
-		PID:     strings.TrimSpace(settingOr("epay_pid", "")),
-		Key:     strings.TrimSpace(settingOr("epay_key", "")),
+		APIBase:  base,
+		PID:      strings.TrimSpace(settingOr("epay_pid", "")),
+		Key:      strings.TrimSpace(settingOr("epay_key", "")),
+		SignMode: signMode,
 	}
 }
 
 func sitePublicBase(c *gin.Context) string {
-	if v := strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")); v != "" {
-		return strings.TrimRight(v, "/")
-	}
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	if xf := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")); xf != "" {
-		scheme = strings.Split(xf, ",")[0]
-	}
-	host := c.Request.Host
-	if xh := strings.TrimSpace(c.GetHeader("X-Forwarded-Host")); xh != "" {
-		host = strings.Split(xh, ",")[0]
-	}
-	return scheme + "://" + strings.TrimSpace(host)
+	return ResolvePublicBase(c)
 }
 
 func newAgentOrderNo() string {

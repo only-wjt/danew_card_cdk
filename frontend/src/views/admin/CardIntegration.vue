@@ -110,12 +110,26 @@
         <h2 class="text-xl font-bold text-ink">易支付 · 代理购卡</h2>
         <p class="text-sm text-muted mt-1">
           与卡网同一商户即可；本站订单号以 <code class="mono">AG</code> 开头，与卡网订单区分。
-          异步通知地址：<code class="mono">{{ epayNotifyUrl }}</code>
+          异步通知：<code class="mono">{{ epayNotifyUrl }}</code>
+          · 支付跳转：<code class="mono">{{ epayReturnUrl }}</code>
         </p>
       </div>
       <el-form label-position="top" class="max-w-xl" @submit.prevent>
+        <el-form-item label="站点对外地址">
+          <el-input
+            v-model="epayForm.public_base_url"
+            placeholder="留空则使用当前访问地址（IP/域名+端口）"
+            size="large"
+            clearable
+          />
+          <p class="text-xs text-subtle mt-1">
+            易支付 notify / return 使用该根地址。留空时默认 <code class="mono">{{ publicBaseDefault }}</code>。
+            若 Cloudflare 拦截回调，可填直连 IP 或灰云子域（如 <code class="mono">https://pay.example.com</code>）。
+          </p>
+        </el-form-item>
         <el-form-item label="易支付网关地址">
-          <el-input v-model="epayForm.epay_api_base" placeholder="https://pay.example.com" size="large" clearable />
+          <el-input v-model="epayForm.epay_api_base" placeholder="https://api.payqixiang.cn" size="large" clearable />
+          <p class="text-xs text-subtle mt-1">七相聚合填 <code class="mono">https://api.payqixiang.cn</code>（不要带 submit.php）。保存后重新发起支付。</p>
         </el-form-item>
         <el-form-item label="商户 PID">
           <el-input v-model="epayForm.epay_pid" class="mono" size="large" clearable />
@@ -254,7 +268,7 @@ const PRESETS: Record<string, string> = {
 
 const form = reactive({ card_api_base: PRESETS.prod })
 const secrets = reactive({ card_api_key: '', agent_swap_password: '' })
-const epayForm = reactive({ epay_api_base: '', epay_pid: '' })
+const epayForm = reactive({ epay_api_base: '', epay_pid: '', public_base_url: '' })
 const epaySecrets = reactive({ epay_key: '' })
 const epayPayTypes = ref<Array<'alipay' | 'wxpay'>>(['alipay'])
 const savingEpay = ref(false)
@@ -288,10 +302,18 @@ const agentSwapUrl = computed(() => {
   if (typeof window === 'undefined') return '/partner/swap'
   return `${window.location.origin}/partner/swap`
 })
-const epayNotifyUrl = computed(() => {
-  if (typeof window === 'undefined') return '/api/v1/webhooks/epay'
-  return `${window.location.origin}/api/v1/webhooks/epay`
+const publicBaseDefault = computed(() =>
+  typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8080',
+)
+const epayPublicBase = computed(() => {
+  const effective = String(hints.public_base_url_effective || '').trim().replace(/\/+$/, '')
+  if (effective) return effective
+  return publicBaseDefault.value
 })
+const epayNotifyUrl = computed(() => `${epayPublicBase.value}/api/v1/webhooks/epay`)
+const epayReturnUrl = computed(
+  () => `${epayPublicBase.value}/partner/orders?paid=1&order_no=…`,
+)
 const epayKeyHint = computed(() =>
   hints.epay_key_configured ? `已配置 ${hints.epay_key_hint || ''}`.trim() : '粘贴商户密钥',
 )
@@ -373,6 +395,7 @@ async function loadSettings() {
   form.card_api_base = d.card_api_base || PRESETS.prod
   epayForm.epay_api_base = d.epay_api_base || ''
   epayForm.epay_pid = d.epay_pid || ''
+  epayForm.public_base_url = d.public_base_url || ''
   const types = String(d.epay_pay_types || 'alipay')
     .split(',')
     .map((v: string) => v.trim().toLowerCase())
@@ -393,6 +416,7 @@ async function saveEpay() {
       epay_api_base: epayForm.epay_api_base.trim(),
       epay_pid: epayForm.epay_pid.trim(),
       epay_pay_types: epayPayTypes.value.join(','),
+      public_base_url: epayForm.public_base_url.trim(),
     }
     if (epaySecrets.epay_key.trim()) body.epay_key = epaySecrets.epay_key.trim()
     const r = await authFetch('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
