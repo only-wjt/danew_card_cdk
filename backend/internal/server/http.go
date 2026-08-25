@@ -192,6 +192,7 @@ func setupRoutes(r *gin.Engine) {
 			agent.GET("/recharge/:request_id", handler.AgentGetRecharge)
 			agent.GET("/records", handler.AgentListRecords)
 			agent.POST("/records/search-session", handler.AgentSearchRecordsBySession)
+			agent.POST("/session/check", handler.AgentCheckSession)
 			agent.GET("/settings", handler.AgentGetSettings)
 			agent.PUT("/settings", handler.AgentPutSettings)
 			agent.POST("/settings/webhook-secret/rotate", handler.AgentRotateWebhookSecret)

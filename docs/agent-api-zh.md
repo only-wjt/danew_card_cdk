@@ -107,6 +107,7 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 | `GET` | `/agent/recharge/{request_id}` | 查询单条充值状态 |
 | `GET` | `/agent/records` | 兑换记录查询 |
 | `POST` | `/agent/records/search-session` | 按 session 检索记录 |
+| `POST` | `/agent/session/check` | 校验 ChatGPT Session |
 | `GET` | `/agent/webhooks/deliveries` | 回调投递日志 |
 | `POST` | `/agent/webhooks/deliveries/{id}/retry` | 手动重投回调 |
 
@@ -379,6 +380,45 @@ session 只以哈希形式存储与比对，服务端不留明文，也不会回
 | --- | --- |
 | `200` | OK |
 | `400` | 请求参数有误 |
+| `401` | API Key 缺失、无效或已吊销 |
+
+---
+
+### `POST /agent/session/check` 校验 ChatGPT Session
+
+提交充值前校验客户 session 是否可用。服务端会解析 accessToken（过期则用 sessionToken 刷新），向 ChatGPT 拉取订阅摘要。**不落库、不回显明文 session**，也不拉账单发票。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `session` | string | 与 `token_input` 二选一 | `chatgpt.com/api/auth/session` 完整 JSON（推荐） |
+| `token_input` | string | 与 `session` 二选一 | 完整 JSON 或裸 accessToken |
+
+**成功响应示例**
+
+```json
+{
+  "ok": true,
+  "email": "a@b.com",
+  "summary": {
+    "email": "a@b.com",
+    "plan_type": "plus",
+    "has_active_subscription": true,
+    "expires_at": "...",
+    "account_id": "..."
+  }
+}
+```
+
+**失败时** `ok=false`，`error_code` 为 `SESSION_REQUIRED` / `SESSION_INVALID` / `INVALID_REQUEST`。
+
+**响应**
+
+| 状态码 | 说明 |
+| --- | --- |
+| `200` | session 有效 |
+| `400` | 缺少 session 或校验失败 |
 | `401` | API Key 缺失、无效或已吊销 |
 
 ---
