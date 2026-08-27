@@ -12,8 +12,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const webhookTimestampSkewSec = 300
+
 func webhookSignatureCandidates(c *gin.Context) []string {
-	names := []string{"X-Signature", "X-Avanfinity-Signature", "X-Webhook-Signature"}
+	names := []string{
+		"X-Avanfinity-Signature",
+		"X-Signature",
+		"X-Webhook-Signature",
+	}
 	out := make([]string, 0, 8)
 	seen := map[string]bool{}
 	var add func(string)
@@ -40,23 +46,60 @@ func webhookSignatureCandidates(c *gin.Context) []string {
 	return out
 }
 
+func webhookTimestampHeaderNames() []string {
+	return []string{
+		"X-Avanfinity-Webhook-Timestamp",
+		"X-Webhook-Timestamp",
+		"X-Avanfinity-Timestamp",
+		"X-Timestamp",
+	}
+}
+
 func webhookTimestamps(c *gin.Context) []string {
-	names := []string{"X-Webhook-Timestamp", "X-Avanfinity-Timestamp", "X-Timestamp"}
-	out := make([]string, 0, 3)
+	out := make([]string, 0, 4)
 	seen := map[string]bool{}
-	now := time.Now().Unix()
-	for _, name := range names {
+	for _, name := range webhookTimestampHeaderNames() {
 		ts := strings.TrimSpace(c.GetHeader(name))
 		if ts == "" || seen[ts] {
 			continue
 		}
 		seen[ts] = true
-		if unix, err := strconv.ParseInt(ts, 10, 64); err == nil {
-			if delta := now - unix; delta > 300 || delta < -300 {
-				continue
-			}
-		}
 		out = append(out, ts)
+	}
+	return out
+}
+
+func webhookTimestampSkewOK(ts string, now time.Time) bool {
+	unix, err := strconv.ParseInt(strings.TrimSpace(ts), 10, 64)
+	if err != nil {
+		return true
+	}
+	if unix > 1_000_000_000_000 {
+		unix /= 1000
+	}
+	delta := now.Unix() - unix
+	if delta < 0 {
+		delta = -delta
+	}
+	return delta <= webhookTimestampSkewSec
+}
+
+func presentWebhookHeaderNames(c *gin.Context) []string {
+	names := []string{
+		"X-Avanfinity-Signature",
+		"X-Avanfinity-Webhook-Timestamp",
+		"X-Avanfinity-Webhook-Id",
+		"X-Signature",
+		"X-Webhook-Signature",
+		"X-Webhook-Timestamp",
+		"X-Avanfinity-Timestamp",
+		"X-Timestamp",
+	}
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		if strings.TrimSpace(c.GetHeader(name)) != "" {
+			out = append(out, name)
+		}
 	}
 	return out
 }
@@ -77,13 +120,19 @@ func webhookSecretVariants(secret string) []string {
 }
 
 func webhookSignedMessages(raw []byte, timestamps []string) [][]byte {
-	msgs := [][]byte{raw}
+	msgs := make([][]byte, 0, 1+len(timestamps))
+	if len(timestamps) == 0 {
+		msgs = append(msgs, raw)
+	}
 	for _, ts := range timestamps {
 		buf := make([]byte, 0, len(ts)+1+len(raw))
 		buf = append(buf, ts...)
 		buf = append(buf, '.')
 		buf = append(buf, raw...)
 		msgs = append(msgs, buf)
+	}
+	if len(timestamps) > 0 {
+		msgs = append(msgs, raw)
 	}
 	return msgs
 }

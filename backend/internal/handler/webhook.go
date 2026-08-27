@@ -51,7 +51,7 @@ func CardPlatformWebhook(c *gin.Context) {
 	}
 	gots := webhookSignatureCandidates(c)
 	if len(gots) == 0 {
-		log.Printf("webhook: missing signature header account=%d", wantAccountID)
+		log.Printf("webhook: missing signature header account=%d present=%v", wantAccountID, presentWebhookHeaderNames(c))
 		c.Status(http.StatusUnauthorized)
 		return
 	}
@@ -69,7 +69,13 @@ func CardPlatformWebhook(c *gin.Context) {
 		break
 	}
 	if !matched {
-		log.Printf("webhook: signature mismatch account=%d headers=%d", wantAccountID, len(gots))
+		log.Printf("webhook: signature mismatch account=%d present=%v ts=%d body=%d",
+			wantAccountID, presentWebhookHeaderNames(c), len(timestamps), len(raw))
+		c.Status(http.StatusUnauthorized)
+		return
+	}
+	if ts := strings.TrimSpace(c.GetHeader("X-Avanfinity-Webhook-Timestamp")); ts != "" && !webhookTimestampSkewOK(ts, time.Now()) {
+		log.Printf("webhook: timestamp skew account=%d", wantAccountID)
 		c.Status(http.StatusUnauthorized)
 		return
 	}
@@ -92,6 +98,9 @@ func CardPlatformWebhook(c *gin.Context) {
 	}
 	// 幂等键
 	idem := webhookIdemKey(payload, eventType)
+	if avID := strings.TrimSpace(c.GetHeader("X-Avanfinity-Webhook-Id")); avID != "" {
+		idem = "avanfinity|" + avID
+	}
 	if err := db.InsertWebhookEvent(matchedAccountID, eventType, idem, string(raw)); err != nil {
 		// 唯一冲突视为已处理（幂等）
 		if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "unique") {
