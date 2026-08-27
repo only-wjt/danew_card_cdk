@@ -24,7 +24,7 @@ func CardPlatformWebhook(c *gin.Context) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	wantAccountID, _ := strconv.ParseInt(strings.TrimSpace(c.Param("accountId")), 10, 64)
+	wantAccountID := resolveWebhookAccountID(c)
 	accounts, _ := db.ListCardPlatformAccounts()
 	type webhookCredential struct {
 		accountID int64
@@ -229,6 +229,7 @@ func AdminListWebhooks(c *gin.Context) {
 		})
 	}
 	urlHint := cardPlatformWebhookURL(c)
+	origin := strings.TrimSuffix(urlHint, "/api/v1/webhooks/cardplatform")
 	accOut := make([]gin.H, 0, len(accounts))
 	anySet := false
 	for _, a := range accounts {
@@ -236,10 +237,7 @@ func AdminListWebhooks(c *gin.Context) {
 		if set {
 			anySet = true
 		}
-		accountURL := urlHint
-		if urlHint != "" {
-			accountURL = urlHint + "/" + strconv.FormatInt(a.ID, 10)
-		}
+		accountURL := db.AccountWebhookPublicURL(origin, a.WebhookPath, a.ID)
 		accOut = append(accOut, gin.H{
 			"id":                  a.ID,
 			"name":                a.Name,
@@ -266,6 +264,21 @@ func AdminListWebhooks(c *gin.Context) {
 		"webhook_secret_set":  anySet,
 		"webhook_secret_hint": maskSecret(legacy),
 	})
+}
+
+func resolveWebhookAccountID(c *gin.Context) int64 {
+	if id, err := strconv.ParseInt(strings.TrimSpace(c.Param("accountId")), 10, 64); err == nil && id > 0 {
+		return id
+	}
+	hook := strings.Trim(strings.TrimSpace(c.Param("hookPath")), "/")
+	if hook == "" || hook == "cardplatform" {
+		return 0
+	}
+	full := "/api/v1/webhooks/" + hook
+	if acc, err := db.FindCardPlatformAccountByWebhookPath(full); err == nil {
+		return acc.ID
+	}
+	return 0
 }
 
 func cardPlatformWebhookURL(c *gin.Context) string {

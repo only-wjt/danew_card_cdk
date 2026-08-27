@@ -170,12 +170,10 @@ func setupRoutes(r *gin.Engine) {
 			lookup.GET("/task", handler.LookupCDKStatus)
 		}
 
-		// 卡台 Webhook。共享入口 + 按账户专属路径；Avanfinity 可用别名。
-		api.POST("/webhooks/cardplatform", handler.CardPlatformWebhook)
-		api.POST("/webhooks/cardplatform/:accountId", handler.CardPlatformWebhook)
-		api.POST("/webhooks/avanfinity", handler.CardPlatformWebhook)
-		// 易支付异步通知（代理购卡）
+		// 易支付先注册，避免被 webhook 通配吃掉。
 		api.Any("/webhooks/epay", handler.EpayNotify)
+		// 卡台 Webhook：共享 / 按账户 / 自定义路径都走同一验签入口。
+		api.POST("/webhooks/*hookPath", handler.CardPlatformWebhook)
 
 		// 账单：粘贴 session 查 ChatGPT 订阅 + hosted_invoice（小助手同款）
 		api.POST("/public/billing/check", handler.SessionBillingCheck)
@@ -292,6 +290,7 @@ func setupRoutes(r *gin.Engine) {
 			admin.GET("/card-platforms", handler.AdminListCardPlatforms)
 			admin.POST("/card-platforms/upsert", handler.AdminUpsertCardPlatform)
 			admin.POST("/card-platforms/webhook-secret", handler.AdminSetCardPlatformWebhookSecret)
+			admin.POST("/card-platforms/webhook-url", handler.AdminSetCardPlatformWebhookURL)
 			admin.POST("/card-platforms/status", handler.AdminSetCardPlatformStatus)
 			admin.POST("/card-platforms/reset-circuit", handler.AdminResetCardPlatformCircuit)
 			admin.POST("/card-platforms/ping", handler.AdminPingCardPlatform)

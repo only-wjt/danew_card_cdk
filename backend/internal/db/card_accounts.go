@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"log"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ type CardPlatformAccount struct {
 	CredPublic       string `json:"cred_public,omitempty"`
 	CredSecret       string `json:"-"`
 	WebhookSecret    string `json:"-"`
+	WebhookPath      string `json:"webhook_path,omitempty"`
 	Status           string `json:"status"`
 	Priority         int    `json:"priority"`
 	IsPrimaryDefault bool   `json:"is_primary_default"`
@@ -66,12 +68,95 @@ func migrateCardPlatformAccounts() error {
 	if err != nil {
 		return err
 	}
+	if err := ensureCardPlatformWebhookPathCol(); err != nil {
+		return err
+	}
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_cpa_status ON card_platform_accounts(status)`)
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_cpa_priority ON card_platform_accounts(priority)`)
+	_, _ = DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cpa_webhook_path ON card_platform_accounts(webhook_path) WHERE webhook_path != ''`)
 	if err := seedDefaultCardPlatformAccount(); err != nil {
 		return err
 	}
 	return ensurePrimaryAccount()
+}
+
+func ensureCardPlatformWebhookPathCol() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('card_platform_accounts') WHERE name='webhook_path'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := DB.Exec(`ALTER TABLE card_platform_accounts ADD COLUMN webhook_path TEXT NOT NULL DEFAULT ''`)
+	return err
+}
+
+func DefaultAccountWebhookPath(id int64) string {
+	return "/api/v1/webhooks/cardplatform/" + strconv.FormatInt(id, 10)
+}
+
+func NormalizeAccountWebhookPath(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", fmt.Errorf("回调 URL 必填")
+	}
+	path := raw
+	if strings.HasPrefix(strings.ToLower(raw), "http://") || strings.HasPrefix(strings.ToLower(raw), "https://") {
+		u, err := url.Parse(raw)
+		if err != nil || strings.TrimSpace(u.Path) == "" {
+			return "", fmt.Errorf("回调 URL 无效")
+		}
+		path = u.Path
+	}
+	path = strings.TrimRight(path, "/")
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if !strings.HasPrefix(path, "/api/v1/webhooks/") {
+		return "", fmt.Errorf("回调路径必须在 /api/v1/webhooks/ 下")
+	}
+	rest := strings.TrimPrefix(path, "/api/v1/webhooks/")
+	if rest == "" || rest == "epay" || strings.HasPrefix(rest, "epay/") {
+		return "", fmt.Errorf("该路径不可用")
+	}
+	for _, r := range rest {
+		ok := r == '/' || r == '-' || r == '_' ||
+			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if !ok {
+			return "", fmt.Errorf("路径含非法字符")
+		}
+	}
+	return path, nil
+}
+
+func AccountWebhookPublicURL(origin, path string, id int64) string {
+	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	if path == "" {
+		path = DefaultAccountWebhookPath(id)
+	}
+	return strings.TrimRight(strings.TrimSpace(origin), "/") + path
+}
+
+func FindCardPlatformAccountByWebhookPath(path string) (CardPlatformAccount, error) {
+	path = strings.TrimRight(strings.TrimSpace(path), "/")
+	all, err := ListCardPlatformAccounts()
+	if err != nil {
+		return CardPlatformAccount{}, err
+	}
+	for _, acc := range all {
+		stored := strings.TrimRight(strings.TrimSpace(acc.WebhookPath), "/")
+		if stored == "" {
+			stored = DefaultAccountWebhookPath(acc.ID)
+		}
+		if stored == path {
+			return acc, nil
+		}
+	}
+	return CardPlatformAccount{}, fmt.Errorf("账户不存在")
 }
 
 func seedDefaultCardPlatformAccount() error {
@@ -108,7 +193,7 @@ func ListCardPlatformAccounts() ([]CardPlatformAccount, error) {
 	}
 	rows, err := DB.Query(`
 		SELECT id, name, protocol, site_base, COALESCE(cred_public,''), COALESCE(cred_secret,''),
-		       COALESCE(webhook_secret,''), COALESCE(status,'active'), COALESCE(priority,100),
+		       COALESCE(webhook_secret,''), COALESCE(webhook_path,''), COALESCE(status,'active'), COALESCE(priority,100),
 		       COALESCE(is_primary_default,0), COALESCE(force_new_card,0),
 		       COALESCE(last_ok_at,''), COALESCE(last_error,''), COALESCE(last_error_at,''),
 		       COALESCE(circuit_state,'closed'), COALESCE(circuit_fail_count,0), COALESCE(circuit_opened_at,''),
@@ -125,7 +210,7 @@ func ListCardPlatformAccounts() ([]CardPlatformAccount, error) {
 		var a CardPlatformAccount
 		var priDef, force int
 		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Protocol, &a.SiteBase, &a.CredPublic, &a.CredSecret, &a.WebhookSecret,
+			&a.ID, &a.Name, &a.Protocol, &a.SiteBase, &a.CredPublic, &a.CredSecret, &a.WebhookSecret, &a.WebhookPath,
 			&a.Status, &a.Priority, &priDef, &force,
 			&a.LastOKAt, &a.LastError, &a.LastErrorAt,
 			&a.CircuitState, &a.CircuitFailCount, &a.CircuitOpenedAt,
@@ -319,6 +404,52 @@ func SetCardPlatformWebhookSecret(id int64, secret string) error {
 	}
 	if isPrimary != 0 {
 		return syncPrimaryAccountLegacySettings(id)
+	}
+	return nil
+}
+
+func SetCardPlatformWebhookPath(id int64, rawURL string) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	if id <= 0 {
+		return fmt.Errorf("invalid account id")
+	}
+	path, err := NormalizeAccountWebhookPath(rawURL)
+	if err != nil {
+		return err
+	}
+	effective := path
+	if path == DefaultAccountWebhookPath(id) {
+		path = ""
+	}
+	all, err := ListCardPlatformAccounts()
+	if err != nil {
+		return err
+	}
+	for _, acc := range all {
+		if acc.ID == id {
+			continue
+		}
+		stored := strings.TrimRight(strings.TrimSpace(acc.WebhookPath), "/")
+		if stored == "" {
+			stored = DefaultAccountWebhookPath(acc.ID)
+		}
+		if stored == effective {
+			return fmt.Errorf("该回调路径已被其他卡台使用")
+		}
+	}
+	res, err := DB.Exec(`
+		UPDATE card_platform_accounts
+		SET webhook_path = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, path, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("账户不存在")
 	}
 	return nil
 }

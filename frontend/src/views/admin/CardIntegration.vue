@@ -117,7 +117,7 @@
       </div>
 
       <p class="text-sm text-muted">
-        每台开发者页填<strong>该台专属回调 URL</strong> 和该台 <code>whsec_…</code>。共享地址也能收，但 Avanfinity 和新台建议用专属路径。
+        每台回调 URL 可改，保存后把同一条贴到该台开发者页。路径须在 <code>/api/v1/webhooks/</code> 下。
         最近事件在
         <router-link class="app-link" to="/ops/webhooks">Webhook 事件</router-link>。
       </p>
@@ -196,8 +196,11 @@
           </div>
           <div class="mt-3 space-y-2">
             <div class="flex flex-wrap items-center gap-2">
-              <el-input :model-value="accountWebhookUrl(acc)" readonly class="!max-w-2xl mono" />
-              <el-button @click="copyText(accountWebhookUrl(acc))">复制该台 URL</el-button>
+              <el-input v-model="webhookUrlInputs[acc.id]" class="!max-w-2xl mono" placeholder="该台回调 URL" />
+              <el-button @click="copyText(webhookUrlInputs[acc.id] || accountWebhookUrl(acc))">复制</el-button>
+              <el-button type="primary" plain :loading="savingWebhookUrlId === acc.id" @click="saveAccountWebhookUrl(acc)">
+                保存 URL
+              </el-button>
             </div>
             <div class="flex flex-wrap items-center gap-2">
               <el-input
@@ -458,7 +461,9 @@ const accPing = ref<Record<number, { spendable_usd?: string; message?: string }>
 const dualBind = reactive({ enabled: false, allowSingle: false })
 const webhookUrl = ref('')
 const webhookInputs = reactive<Record<number, string>>({})
+const webhookUrlInputs = reactive<Record<number, string>>({})
 const savingWebhookId = ref<number | null>(null)
+const savingWebhookUrlId = ref<number | null>(null)
 const legacySecretSet = ref(false)
 const legacySecretHint = ref('')
 const webhookEvents = ref<Array<{ id: number; account_id?: number; event_type?: string; created_at?: string; payload?: any }>>([])
@@ -721,6 +726,7 @@ function applyPlatforms(d: any) {
   if (d.legacy_secret_hint !== undefined) legacySecretHint.value = d.legacy_secret_hint || ''
   for (const acc of platformAccounts.value) {
     if (webhookInputs[acc.id] === undefined) webhookInputs[acc.id] = ''
+    webhookUrlInputs[acc.id] = acc.webhook_url || accountWebhookUrl(acc)
   }
 }
 
@@ -736,6 +742,30 @@ async function loadPlatforms() {
     applyPlatforms(d)
   } finally {
     loadingPlatforms.value = false
+  }
+}
+
+async function saveAccountWebhookUrl(acc: PlatformAccountRow) {
+  const url = (webhookUrlInputs[acc.id] || '').trim()
+  if (!url) {
+    dialog.toast('请填写该台回调 URL', 'err')
+    return
+  }
+  savingWebhookUrlId.value = acc.id
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms/webhook-url', {
+      method: 'POST',
+      body: JSON.stringify({ id: acc.id, webhook_url: url }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    applyPlatforms(d)
+    dialog.toast(`已保存 ${acc.name} 的回调 URL`, 'ok')
+  } finally {
+    savingWebhookUrlId.value = null
   }
 }
 

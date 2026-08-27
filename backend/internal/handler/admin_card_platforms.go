@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,12 +24,10 @@ func AdminListCardPlatforms(c *gin.Context) {
 	// 顺手暴露哪些账户构造不出 adapter：协议没接入时开双发只会整单失败。
 	_, skipped, _ := provider.LoadRegistry()
 	sharedURL := cardPlatformWebhookURL(c)
+	origin := strings.TrimSuffix(sharedURL, "/api/v1/webhooks/cardplatform")
 	out := make([]gin.H, 0, len(accounts))
 	for _, a := range accounts {
-		accountURL := sharedURL
-		if sharedURL != "" {
-			accountURL = sharedURL + "/" + strconv.FormatInt(a.ID, 10)
-		}
+		accountURL := db.AccountWebhookPublicURL(origin, a.WebhookPath, a.ID)
 		out = append(out, gin.H{
 			"id": a.ID, "name": a.Name, "protocol": a.Protocol, "site_base": a.SiteBase,
 			"status": a.Status, "priority": a.Priority,
@@ -38,6 +35,7 @@ func AdminListCardPlatforms(c *gin.Context) {
 			"has_credential":     strings.TrimSpace(a.CredSecret) != "",
 			"has_webhook_secret": strings.TrimSpace(a.WebhookSecret) != "",
 			"webhook_secret_hint": maskSecret(a.WebhookSecret),
+			"webhook_path":        a.WebhookPath,
 			"webhook_url":         accountURL,
 			"circuit_state":       a.CircuitState, "circuit_fail_count": a.CircuitFailCount,
 			"last_ok_at": a.LastOKAt, "last_error": a.LastError, "last_error_at": a.LastErrorAt,
@@ -105,6 +103,24 @@ func AdminSetCardPlatformWebhookSecret(c *gin.Context) {
 		return
 	}
 	auditAdmin(c, "set_card_platform_webhook_secret", fmt.Sprintf("id=%d", req.ID))
+	AdminListCardPlatforms(c)
+}
+
+// AdminSetCardPlatformWebhookURL POST /api/v1/admin/card-platforms/webhook-url
+func AdminSetCardPlatformWebhookURL(c *gin.Context) {
+	var req struct {
+		ID         int64  `json:"id"`
+		WebhookURL string `json:"webhook_url"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.ID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+		return
+	}
+	if err := db.SetCardPlatformWebhookPath(req.ID, req.WebhookURL); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	auditAdmin(c, "set_card_platform_webhook_url", fmt.Sprintf("id=%d", req.ID))
 	AdminListCardPlatforms(c)
 }
 
