@@ -267,15 +267,14 @@ func AdminListWebhooks(c *gin.Context) {
 }
 
 func resolveWebhookAccountID(c *gin.Context) int64 {
-	if id, err := strconv.ParseInt(strings.TrimSpace(c.Param("accountId")), 10, 64); err == nil && id > 0 {
-		return id
-	}
-	hook := strings.Trim(strings.TrimSpace(c.Param("hookPath")), "/")
-	if hook == "" || hook == "cardplatform" {
+	key := strings.Trim(strings.TrimSpace(c.Param("accountId")), "/")
+	if key == "" {
 		return 0
 	}
-	full := "/api/v1/webhooks/" + hook
-	if acc, err := db.FindCardPlatformAccountByWebhookPath(full); err == nil {
+	if id, err := strconv.ParseInt(key, 10, 64); err == nil && id > 0 {
+		return id
+	}
+	if acc, err := db.FindCardPlatformAccountByWebhookPath("/api/v1/webhooks/cardplatform/" + key); err == nil {
 		return acc.ID
 	}
 	return 0

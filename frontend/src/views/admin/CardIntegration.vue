@@ -117,7 +117,9 @@
       </div>
 
       <p class="text-sm text-muted">
-        每台回调 URL 可改，保存后把同一条贴到该台开发者页。路径须在 <code>/api/v1/webhooks/</code> 下。
+        每台回调 URL 可改，保存后把同一条贴到该台开发者页。路径须在
+        <code>/api/v1/webhooks/cardplatform/</code> 下，不要改成
+        <code>/webhooks/epay</code> 或站点根路径。
         最近事件在
         <router-link class="app-link" to="/ops/webhooks">Webhook 事件</router-link>。
       </p>

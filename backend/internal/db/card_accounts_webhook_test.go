@@ -60,23 +60,23 @@ func TestSetCardPlatformWebhookPathIsEditableAndUnique(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := NormalizeAccountWebhookPath("/avanfinity"); err == nil {
-		t.Fatal("path outside /api/v1/webhooks/ should be rejected")
+	if _, err := NormalizeAccountWebhookPath("/api/v1/webhooks/zavacard"); err == nil {
+		t.Fatal("path outside /api/v1/webhooks/cardplatform/ should be rejected")
 	}
-	if err := SetCardPlatformWebhookPath(aID, "https://cdk.example/api/v1/webhooks/zavacard"); err != nil {
+	if err := SetCardPlatformWebhookPath(aID, "https://cdk.example/api/v1/webhooks/cardplatform/zavacard"); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetCardPlatformWebhookPath(bID, "https://cdk.example/api/v1/webhooks/zavacard"); err == nil {
+	if err := SetCardPlatformWebhookPath(bID, "https://cdk.example/api/v1/webhooks/cardplatform/zavacard"); err == nil {
 		t.Fatal("duplicate path should be rejected")
 	}
 	a, err := GetCardPlatformAccount(aID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.WebhookPath != "/api/v1/webhooks/zavacard" {
+	if a.WebhookPath != "/api/v1/webhooks/cardplatform/zavacard" {
 		t.Fatalf("saved path = %q", a.WebhookPath)
 	}
-	found, err := FindCardPlatformAccountByWebhookPath("/api/v1/webhooks/zavacard")
+	found, err := FindCardPlatformAccountByWebhookPath("/api/v1/webhooks/cardplatform/zavacard")
 	if err != nil || found.ID != aID {
 		t.Fatalf("lookup custom path: %+v %v", found, err)
 	}

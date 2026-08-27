@@ -116,15 +116,19 @@ func NormalizeAccountWebhookPath(raw string) (string, error) {
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	if !strings.HasPrefix(path, "/api/v1/webhooks/") {
-		return "", fmt.Errorf("回调路径必须在 /api/v1/webhooks/ 下")
+	if path == "/api/v1/webhooks/avanfinity" {
+		return path, nil
 	}
-	rest := strings.TrimPrefix(path, "/api/v1/webhooks/")
-	if rest == "" || rest == "epay" || strings.HasPrefix(rest, "epay/") {
-		return "", fmt.Errorf("该路径不可用")
+	const prefix = "/api/v1/webhooks/cardplatform/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", fmt.Errorf("回调路径必须在 /api/v1/webhooks/cardplatform/ 下")
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if rest == "" || strings.Contains(rest, "/") {
+		return "", fmt.Errorf("回调路径只能有一段，例如 /api/v1/webhooks/cardplatform/1")
 	}
 	for _, r := range rest {
-		ok := r == '/' || r == '-' || r == '_' ||
+		ok := r == '-' || r == '_' ||
 			(r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 		if !ok {
 			return "", fmt.Errorf("路径含非法字符")

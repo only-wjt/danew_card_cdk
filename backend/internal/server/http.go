@@ -92,6 +92,15 @@ func splitAndTrim(s string) []string {
 	return out
 }
 
+// 卡台回调只挂在 /webhooks/cardplatform 下，不能和 /webhooks/epay 抢同一层通配，
+// 否则 gin 启动会直接 panic（32068d5）。
+func registerWebhookRoutes(api *gin.RouterGroup) {
+	api.Any("/webhooks/epay", handler.EpayNotify)
+	api.POST("/webhooks/cardplatform", handler.CardPlatformWebhook)
+	api.POST("/webhooks/cardplatform/:accountId", handler.CardPlatformWebhook)
+	api.POST("/webhooks/avanfinity", handler.CardPlatformWebhook)
+}
+
 func setupRoutes(r *gin.Engine) {
 	webDir := strings.TrimSpace(os.Getenv("WEB_DIR"))
 
@@ -170,10 +179,7 @@ func setupRoutes(r *gin.Engine) {
 			lookup.GET("/task", handler.LookupCDKStatus)
 		}
 
-		// 易支付先注册，避免被 webhook 通配吃掉。
-		api.Any("/webhooks/epay", handler.EpayNotify)
-		// 卡台 Webhook：共享 / 按账户 / 自定义路径都走同一验签入口。
-		api.POST("/webhooks/*hookPath", handler.CardPlatformWebhook)
+		registerWebhookRoutes(api)
 
 		// 账单：粘贴 session 查 ChatGPT 订阅 + hosted_invoice（小助手同款）
 		api.POST("/public/billing/check", handler.SessionBillingCheck)
