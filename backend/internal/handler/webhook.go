@@ -1,9 +1,7 @@
 package handler
 
 import (
-	"crypto/hmac"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -18,15 +16,15 @@ import (
 )
 
 // CardPlatformWebhook POST /api/v1/webhooks/cardplatform
-// 卡台开发者页配置的回调地址指向此处。
-// 验签：X-Signature = hex(HMAC-SHA256(webhook_secret, raw body))
-// 文档：danew-openapi-zh.md §7
+// 以及 POST /api/v1/webhooks/cardplatform/:accountId、/api/v1/webhooks/avanfinity
+// 验签兼容旧台 HMAC(secret, body) 与 Avanfinity HMAC(secret, ts + '.' + body)。
 func CardPlatformWebhook(c *gin.Context) {
 	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
 	if err != nil {
 		c.Status(http.StatusBadRequest)
 		return
 	}
+	wantAccountID, _ := strconv.ParseInt(strings.TrimSpace(c.Param("accountId")), 10, 64)
 	accounts, _ := db.ListCardPlatformAccounts()
 	type webhookCredential struct {
 		accountID int64
@@ -34,39 +32,44 @@ func CardPlatformWebhook(c *gin.Context) {
 	}
 	credentials := make([]webhookCredential, 0, len(accounts)+1)
 	for _, acc := range accounts {
+		if wantAccountID > 0 && acc.ID != wantAccountID {
+			continue
+		}
 		if secret := strings.TrimSpace(acc.WebhookSecret); secret != "" {
 			credentials = append(credentials, webhookCredential{accountID: acc.ID, secret: secret})
 		}
 	}
-	if legacySecret, _ := db.GetSetting("webhook_secret"); strings.TrimSpace(legacySecret) != "" {
-		credentials = append(credentials, webhookCredential{secret: strings.TrimSpace(legacySecret)})
+	if wantAccountID <= 0 {
+		if legacySecret, _ := db.GetSetting("webhook_secret"); strings.TrimSpace(legacySecret) != "" {
+			credentials = append(credentials, webhookCredential{secret: strings.TrimSpace(legacySecret)})
+		}
 	}
 	if len(credentials) == 0 {
-		// 未配置密钥时拒绝，避免裸奔
-		log.Printf("webhook: webhook_secret not configured")
+		log.Printf("webhook: webhook_secret not configured account=%d", wantAccountID)
 		c.Status(http.StatusServiceUnavailable)
 		return
 	}
-	got := strings.TrimSpace(c.GetHeader("X-Signature"))
-	if got == "" {
+	gots := webhookSignatureCandidates(c)
+	if len(gots) == 0 {
+		log.Printf("webhook: missing signature header account=%d", wantAccountID)
 		c.Status(http.StatusUnauthorized)
 		return
 	}
+	timestamps := webhookTimestamps(c)
 	var matchedAccountID int64
 	matched := false
 	for _, credential := range credentials {
-		mac := hmac.New(sha256.New, []byte(credential.secret))
-		_, _ = mac.Write(raw)
-		expect := hex.EncodeToString(mac.Sum(nil))
-		if subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(strings.ToLower(expect))) == 1 {
-			matched = true
-			if credential.accountID > 0 {
-				matchedAccountID = credential.accountID
-			}
-			break
+		if !webhookSignatureMatches(credential.secret, raw, timestamps, gots) {
+			continue
 		}
+		matched = true
+		if credential.accountID > 0 {
+			matchedAccountID = credential.accountID
+		}
+		break
 	}
 	if !matched {
+		log.Printf("webhook: signature mismatch account=%d headers=%d", wantAccountID, len(gots))
 		c.Status(http.StatusUnauthorized)
 		return
 	}
@@ -233,6 +236,10 @@ func AdminListWebhooks(c *gin.Context) {
 		if set {
 			anySet = true
 		}
+		accountURL := urlHint
+		if urlHint != "" {
+			accountURL = urlHint + "/" + strconv.FormatInt(a.ID, 10)
+		}
 		accOut = append(accOut, gin.H{
 			"id":                  a.ID,
 			"name":                a.Name,
@@ -241,6 +248,7 @@ func AdminListWebhooks(c *gin.Context) {
 			"is_primary_default":  a.IsPrimaryDefault,
 			"has_webhook_secret":  set,
 			"webhook_secret_hint": maskSecret(a.WebhookSecret),
+			"webhook_url":         accountURL,
 		})
 	}
 	legacy, _ := db.GetSetting("webhook_secret")

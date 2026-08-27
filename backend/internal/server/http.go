@@ -170,8 +170,10 @@ func setupRoutes(r *gin.Engine) {
 			lookup.GET("/task", handler.LookupCDKStatus)
 		}
 
-		// 卡台 Webhook（须在卡台开发者页配置 https://你的域名/api/v1/webhooks/cardplatform）
+		// 卡台 Webhook。共享入口 + 按账户专属路径；Avanfinity 可用别名。
 		api.POST("/webhooks/cardplatform", handler.CardPlatformWebhook)
+		api.POST("/webhooks/cardplatform/:accountId", handler.CardPlatformWebhook)
+		api.POST("/webhooks/avanfinity", handler.CardPlatformWebhook)
 		// 易支付异步通知（代理购卡）
 		api.Any("/webhooks/epay", handler.EpayNotify)
 

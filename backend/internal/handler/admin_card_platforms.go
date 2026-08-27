@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,8 +24,13 @@ func AdminListCardPlatforms(c *gin.Context) {
 	}
 	// 顺手暴露哪些账户构造不出 adapter：协议没接入时开双发只会整单失败。
 	_, skipped, _ := provider.LoadRegistry()
+	sharedURL := cardPlatformWebhookURL(c)
 	out := make([]gin.H, 0, len(accounts))
 	for _, a := range accounts {
+		accountURL := sharedURL
+		if sharedURL != "" {
+			accountURL = sharedURL + "/" + strconv.FormatInt(a.ID, 10)
+		}
 		out = append(out, gin.H{
 			"id": a.ID, "name": a.Name, "protocol": a.Protocol, "site_base": a.SiteBase,
 			"status": a.Status, "priority": a.Priority,
@@ -32,6 +38,7 @@ func AdminListCardPlatforms(c *gin.Context) {
 			"has_credential":     strings.TrimSpace(a.CredSecret) != "",
 			"has_webhook_secret": strings.TrimSpace(a.WebhookSecret) != "",
 			"webhook_secret_hint": maskSecret(a.WebhookSecret),
+			"webhook_url":         accountURL,
 			"circuit_state":       a.CircuitState, "circuit_fail_count": a.CircuitFailCount,
 			"last_ok_at": a.LastOKAt, "last_error": a.LastError, "last_error_at": a.LastErrorAt,
 		})
@@ -43,7 +50,7 @@ func AdminListCardPlatforms(c *gin.Context) {
 		"dual_bind":          siteDualBindEnabled(),
 		"allow_single":       allowDegradedSingleBind(),
 		"eligible_issuer":    len(accounts),
-		"webhook_url":        cardPlatformWebhookURL(c),
+		"webhook_url":        sharedURL,
 		"legacy_secret_set":  strings.TrimSpace(legacy) != "",
 		"legacy_secret_hint": maskSecret(legacy),
 	})

@@ -116,18 +116,11 @@
         <span class="text-muted">活跃账户 {{ activePlatformCount }} / {{ platformAccounts.length }}</span>
       </div>
 
-      <div>
-        <div class="text-sm font-medium text-ink mb-1">Webhook 回调 URL</div>
-        <div class="flex flex-wrap items-center gap-2">
-          <el-input :model-value="webhookUrl" readonly class="!max-w-2xl mono" />
-          <el-button type="primary" @click="copyText(webhookUrl)">复制</el-button>
-        </div>
-        <p class="text-xs text-subtle mt-1">
-          A/B 开发者页都填这一条。Secret 各台各填各台的 <code>whsec_…</code>，本站按验签归到对应账户。
-          最近事件在
-          <router-link class="app-link" to="/ops/webhooks">Webhook 事件</router-link>。
-        </p>
-      </div>
+      <p class="text-sm text-muted">
+        每台开发者页填<strong>该台专属回调 URL</strong> 和该台 <code>whsec_…</code>。共享地址也能收，但 Avanfinity 和新台建议用专属路径。
+        最近事件在
+        <router-link class="app-link" to="/ops/webhooks">Webhook 事件</router-link>。
+      </p>
 
       <el-alert
         v-if="missingWebhookNames"
@@ -201,22 +194,28 @@
               </el-button>
             </div>
           </div>
-          <div class="mt-3 flex flex-wrap items-center gap-2">
-            <el-input
-              v-model="webhookInputs[acc.id]"
-              type="password"
-              show-password
-              class="!max-w-md"
-              :placeholder="acc.has_webhook_secret ? `已配置 ${acc.webhook_secret_hint || ''}，留空不改` : '粘贴该台开发者页的 whsec_…'"
-            />
-            <el-button
-              type="primary"
-              plain
-              :loading="savingWebhookId === acc.id"
-              @click="saveAccountWebhook(acc)"
-            >
-              保存该台 Secret
-            </el-button>
+          <div class="mt-3 space-y-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <el-input :model-value="accountWebhookUrl(acc)" readonly class="!max-w-2xl mono" />
+              <el-button @click="copyText(accountWebhookUrl(acc))">复制该台 URL</el-button>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+              <el-input
+                v-model="webhookInputs[acc.id]"
+                type="password"
+                show-password
+                class="!max-w-md"
+                :placeholder="acc.has_webhook_secret ? `已配置 ${acc.webhook_secret_hint || ''}，留空不改` : '粘贴该台开发者页的 whsec_…'"
+              />
+              <el-button
+                type="primary"
+                plain
+                :loading="savingWebhookId === acc.id"
+                @click="saveAccountWebhook(acc)"
+              >
+                保存该台 Secret
+              </el-button>
+            </div>
           </div>
           <div class="mt-3 text-xs">
             <div class="text-muted mb-1">该台最近事件</div>
@@ -443,6 +442,7 @@ interface PlatformAccountRow {
   has_credential: boolean
   has_webhook_secret?: boolean
   webhook_secret_hint?: string
+  webhook_url?: string
   circuit_state: string
   circuit_fail_count: number
   last_error?: string
@@ -678,6 +678,13 @@ function normalizeAccountBase() {
   let b = (accountForm.site_base || '').trim().replace(/\/+$/, '')
   b = b.replace(/\/openapi\/v1$/i, '').replace(/\/openapi$/i, '')
   accountForm.site_base = b
+}
+
+function accountWebhookUrl(acc: PlatformAccountRow) {
+  if (acc.webhook_url) return acc.webhook_url
+  const base = (webhookUrl.value || '').replace(/\/+$/, '')
+  if (!base) return ''
+  return `${base}/${acc.id}`
 }
 
 function eventsFor(accountId: number) {
