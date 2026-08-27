@@ -93,20 +93,26 @@ func ParseAccessToken(raw string) (string, error) {
 	return v, nil
 }
 
-// parseSessionToken 从 session JSON 提取 sessionToken。
+// parseSessionToken 从 session JSON 或裸五段 JWE 提取 sessionToken。
 func parseSessionToken(raw string) string {
 	v := strings.TrimSpace(raw)
-	if !strings.HasPrefix(v, "{") {
+	if v == "" {
 		return ""
 	}
-	var data map[string]interface{}
-	if json.Unmarshal([]byte(v), &data) != nil {
-		return ""
-	}
-	for _, k := range []string{"sessionToken", "session_token"} {
-		if t, _ := data[k].(string); strings.TrimSpace(t) != "" {
-			return strings.TrimSpace(t)
+	if strings.HasPrefix(v, "{") {
+		var data map[string]interface{}
+		if json.Unmarshal([]byte(v), &data) != nil {
+			return ""
 		}
+		for _, k := range []string{"sessionToken", "session_token"} {
+			if t, _ := data[k].(string); strings.TrimSpace(t) != "" {
+				return strings.TrimSpace(t)
+			}
+		}
+		return ""
+	}
+	if strings.Count(v, ".") >= 4 {
+		return v
 	}
 	return ""
 }
@@ -131,8 +137,12 @@ func sessionTokenCookies(token string) []*fhttp.Cookie {
 	return cookies
 }
 
-// refreshAccessToken 用 sessionToken 换取新 accessToken。
-func refreshAccessToken(sessionToken string) (string, error) {
+// RefreshSession 用 sessionToken 向 ChatGPT 换取完整 session JSON（含新 accessToken）。
+func RefreshSession(raw string) (map[string]interface{}, error) {
+	sessionToken := parseSessionToken(raw)
+	if sessionToken == "" {
+		return nil, fmt.Errorf("缺少 sessionToken")
+	}
 	cookies := sessionTokenCookies(sessionToken)
 	st, body, err := requestWithCookies(fhttp.MethodGet, sessionAuthURL, map[string]string{
 		"Accept":     "application/json",
@@ -140,20 +150,28 @@ func refreshAccessToken(sessionToken string) (string, error) {
 		"Referer":    "https://chatgpt.com/",
 	}, cookies)
 	if err != nil {
-		return "", fmt.Errorf("刷新 session 失败: %v", err)
+		return nil, fmt.Errorf("刷新 session 失败: %v", err)
 	}
 	if st != 200 {
-		return "", fmt.Errorf("刷新 session 失败 HTTP %d", st)
+		return nil, fmt.Errorf("刷新 session 失败 HTTP %d", st)
 	}
 	var data map[string]interface{}
 	if json.Unmarshal(body, &data) != nil {
-		return "", fmt.Errorf("刷新 session 返回非 JSON")
+		return nil, fmt.Errorf("刷新 session 返回非 JSON")
 	}
-	token := firstString(data["accessToken"], data["access_token"])
-	if token == "" {
-		return "", fmt.Errorf("刷新 session 未返回 accessToken")
+	if firstString(data["accessToken"], data["access_token"]) == "" {
+		return nil, fmt.Errorf("刷新 session 未返回 accessToken，登录态可能已失效")
 	}
-	return token, nil
+	return data, nil
+}
+
+// refreshAccessToken 用 sessionToken 换取新 accessToken。
+func refreshAccessToken(sessionToken string) (string, error) {
+	data, err := RefreshSession(sessionToken)
+	if err != nil {
+		return "", err
+	}
+	return firstString(data["accessToken"], data["access_token"]), nil
 }
 
 func asMap(v interface{}) map[string]interface{} {
@@ -210,11 +228,19 @@ type Result struct {
 }
 
 // Check 对齐小助手 gptCheck：订阅 + invoices（含 hosted_invoice_url / invoice_pdf）。
-// 若 accessToken 已过期（403/401），自动用 sessionToken 刷新后重试一次。
+// 无 accessToken 时先用 sessionToken 换票；accessToken 过期（403/401）也会再刷一次。
 func Check(tokenInput string) (*Result, error) {
 	accessToken, err := ParseAccessToken(tokenInput)
 	if err != nil {
-		return nil, err
+		sessionToken := parseSessionToken(tokenInput)
+		if sessionToken == "" {
+			return nil, err
+		}
+		fresh, rerr := refreshAccessToken(sessionToken)
+		if rerr != nil {
+			return nil, fmt.Errorf("%s；刷新失败: %v", err.Error(), rerr)
+		}
+		accessToken = fresh
 	}
 
 	checkHeaders := map[string]string{

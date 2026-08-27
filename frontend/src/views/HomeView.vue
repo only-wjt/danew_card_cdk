@@ -55,6 +55,36 @@
         </router-link>
       </div>
 
+      <!-- Account tools (not part of the CDK loop) -->
+      <div class="mt-14 animate-slideInUp">
+        <h3 class="text-lg font-bold text-ink mb-4">{{ t('home.toolsTitle') }}</h3>
+        <div class="grid md:grid-cols-2 gap-6">
+          <router-link
+            v-for="tool in tools"
+            :key="tool.to"
+            :to="tool.to"
+            class="card card-hover group flex flex-col"
+          >
+            <span
+              class="grid h-12 w-12 place-items-center rounded-2xl"
+              style="background: var(--primary-soft); color: var(--primary)"
+              v-html="tool.icon"
+            />
+            <div class="mt-4 flex flex-wrap items-baseline gap-2">
+              <h3 class="text-xl font-bold text-ink">{{ tool.title }}</h3>
+              <p class="text-sm text-subtle">{{ tool.en }}</p>
+            </div>
+            <div class="mt-3 space-y-2 text-sm text-muted flex-1">
+              <div v-for="line in tool.points" :key="line" class="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 shrink-0" style="color: var(--primary)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                <span>{{ line }}</span>
+              </div>
+            </div>
+            <div class="mt-6 text-sm font-medium app-link">{{ tool.cta }} →</div>
+          </router-link>
+        </div>
+      </div>
+
       <!-- Flow Section -->
       <div class="mt-20 pt-16 border-t bd">
         <h3 class="text-2xl font-bold text-ink mb-10 text-center">{{ t('home.flowTitle') }}</h3>
@@ -129,6 +159,25 @@ const services = computed(() => [
     cta: t('home.services.billing.cta'),
     icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>',
     points: [t('home.services.billing.p1'), t('home.services.billing.p2'), t('home.services.billing.p3')],
+  },
+])
+
+const tools = computed(() => [
+  {
+    to: '/convert',
+    title: t('home.tools.convert.title'),
+    en: t('home.tools.convert.en'),
+    cta: t('home.tools.convert.cta'),
+    icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><path d="M7 12h10"/><path d="m14 9 3 3-3 3"/></svg>',
+    points: [t('home.tools.convert.p1'), t('home.tools.convert.p2'), t('home.tools.convert.p3')],
+  },
+  {
+    to: '/inspect',
+    title: t('home.tools.inspect.title'),
+    en: t('home.tools.inspect.en'),
+    cta: t('home.tools.inspect.cta'),
+    icon: '<svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>',
+    points: [t('home.tools.inspect.p1'), t('home.tools.inspect.p2'), t('home.tools.inspect.p3')],
   },
 ])
 

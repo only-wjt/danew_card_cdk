@@ -178,6 +178,8 @@ func setupRoutes(r *gin.Engine) {
 		// 账单：粘贴 session 查 ChatGPT 订阅 + hosted_invoice（小助手同款）
 		api.POST("/public/billing/check", handler.SessionBillingCheck)
 		api.POST("/billing/check", handler.SessionBillingCheck)
+		// Session 工具：用 sessionToken 换新 accessToken（不落库）
+		api.POST("/public/session/refresh", handler.PublicSessionRefresh)
 
 		// 代理门户 / API（账号由站长创建）
 		agent := api.Group("/agent")

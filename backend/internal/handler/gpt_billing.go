@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/gptcheck"
+	"github.com/gin-gonic/gin"
 )
 
 func accounthubBaseURL() string {
@@ -63,7 +63,9 @@ func queryAccounthubInvoices(email string) (*acchubInvoiceResp, error) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != 200 {
-		var errResp struct{ Error string `json:"error"` }
+		var errResp struct {
+			Error string `json:"error"`
+		}
 		json.Unmarshal(body, &errResp)
 		return nil, fmt.Errorf("accounthub %d: %s", resp.StatusCode, errResp.Error)
 	}
@@ -174,4 +176,75 @@ func respondAccounthubInvoices(c *gin.Context, email string) bool {
 		"auth_source": "accounthub",
 	})
 	return true
+}
+
+const sessionRefreshMax = 20
+
+// PublicSessionRefresh POST /api/v1/public/session/refresh
+// 用 sessionToken 向 ChatGPT 换新 session JSON。不落库。
+func PublicSessionRefresh(c *gin.Context) {
+	var req struct {
+		SessionJSON string   `json:"session_json"`
+		TokenInput  string   `json:"token_input"`
+		Session     string   `json:"session"`
+		Sessions    []string `json:"sessions"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+
+	items := make([]string, 0, len(req.Sessions)+1)
+	for _, s := range []string{req.SessionJSON, req.TokenInput, req.Session} {
+		if t := strings.TrimSpace(s); t != "" {
+			items = append(items, t)
+			break
+		}
+	}
+	for _, s := range req.Sessions {
+		if t := strings.TrimSpace(s); t != "" {
+			items = append(items, t)
+		}
+	}
+	if len(items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请粘贴 session JSON 或 sessionToken"})
+		return
+	}
+	if len(items) > sessionRefreshMax {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("一次最多刷新 %d 条", sessionRefreshMax)})
+		return
+	}
+
+	type row struct {
+		OK      bool                   `json:"ok"`
+		Email   string                 `json:"email,omitempty"`
+		Error   string                 `json:"error,omitempty"`
+		Session map[string]interface{} `json:"session,omitempty"`
+	}
+	out := make([]row, 0, len(items))
+	for _, raw := range items {
+		data, err := gptcheck.RefreshSession(raw)
+		if err != nil {
+			out = append(out, row{OK: false, Error: err.Error()})
+			continue
+		}
+		email := firstStringMap(data, "email")
+		if email == "" {
+			if user, ok := data["user"].(map[string]interface{}); ok {
+				email = firstStringMap(user, "email")
+			}
+		}
+		out = append(out, row{OK: true, Email: email, Session: data})
+	}
+	c.JSON(http.StatusOK, gin.H{"results": out})
+}
+
+func firstStringMap(m map[string]interface{}, key string) string {
+	if m == nil {
+		return ""
+	}
+	if s, ok := m[key].(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return ""
 }

@@ -42,6 +42,16 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/user/BillingCheckView.vue'),
   },
   {
+    path: '/convert',
+    name: 'SessionConvert',
+    component: () => import('../views/user/SessionConvertView.vue'),
+  },
+  {
+    path: '/inspect',
+    name: 'SessionInspect',
+    component: () => import('../views/user/SessionInspectView.vue'),
+  },
+  {
     path: '/recharge',
     name: 'Recharge',
     component: () => import('../views/user/RechargeView.vue'),
