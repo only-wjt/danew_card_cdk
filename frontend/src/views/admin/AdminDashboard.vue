@@ -31,7 +31,7 @@
             <router-link to="/ops/cdkeys" class="btn-primary">CDK 卡密</router-link>
             <router-link to="/ops/orders" class="btn-secondary">兑换对账</router-link>
             <router-link to="/ops/integration" class="btn-secondary">卡台接入</router-link>
-            <router-link to="/ops/webhooks" class="btn-secondary">Webhook</router-link>
+            <router-link to="/ops/webhooks" class="btn-secondary">Webhook 事件</router-link>
             <router-link to="/ops/appearance" class="btn-secondary">外观</router-link>
             <router-link to="/billing" class="btn-secondary">Session 账单</router-link>
           </div>

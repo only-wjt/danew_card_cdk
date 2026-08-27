@@ -289,6 +289,7 @@ func setupRoutes(r *gin.Engine) {
 			// 和 :id 混在一起会让路由变歧义。
 			admin.GET("/card-platforms", handler.AdminListCardPlatforms)
 			admin.POST("/card-platforms/upsert", handler.AdminUpsertCardPlatform)
+			admin.POST("/card-platforms/webhook-secret", handler.AdminSetCardPlatformWebhookSecret)
 			admin.POST("/card-platforms/status", handler.AdminSetCardPlatformStatus)
 			admin.POST("/card-platforms/reset-circuit", handler.AdminResetCardPlatformCircuit)
 			admin.POST("/card-platforms/ping", handler.AdminPingCardPlatform)

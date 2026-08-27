@@ -29,17 +29,23 @@ func AdminListCardPlatforms(c *gin.Context) {
 			"id": a.ID, "name": a.Name, "protocol": a.Protocol, "site_base": a.SiteBase,
 			"status": a.Status, "priority": a.Priority,
 			"is_primary_default": a.IsPrimaryDefault, "force_new_card": a.ForceNewCard,
-			"has_credential": strings.TrimSpace(a.CredSecret) != "",
-			"circuit_state":  a.CircuitState, "circuit_fail_count": a.CircuitFailCount,
+			"has_credential":     strings.TrimSpace(a.CredSecret) != "",
+			"has_webhook_secret": strings.TrimSpace(a.WebhookSecret) != "",
+			"webhook_secret_hint": maskSecret(a.WebhookSecret),
+			"circuit_state":       a.CircuitState, "circuit_fail_count": a.CircuitFailCount,
 			"last_ok_at": a.LastOKAt, "last_error": a.LastError, "last_error_at": a.LastErrorAt,
 		})
 	}
+	legacy, _ := db.GetSetting("webhook_secret")
 	c.JSON(http.StatusOK, gin.H{
-		"accounts":        out,
-		"unusable":        skipped,
-		"dual_bind":       siteDualBindEnabled(),
-		"allow_single":    allowDegradedSingleBind(),
-		"eligible_issuer": len(accounts),
+		"accounts":           out,
+		"unusable":           skipped,
+		"dual_bind":          siteDualBindEnabled(),
+		"allow_single":       allowDegradedSingleBind(),
+		"eligible_issuer":    len(accounts),
+		"webhook_url":        cardPlatformWebhookURL(c),
+		"legacy_secret_set":  strings.TrimSpace(legacy) != "",
+		"legacy_secret_hint": maskSecret(legacy),
 	})
 }
 
@@ -74,6 +80,24 @@ func AdminUpsertCardPlatform(c *gin.Context) {
 		return
 	}
 	auditAdmin(c, "upsert_card_platform", fmt.Sprintf("id=%d name=%s priority=%d", id, req.Name, req.Priority))
+	AdminListCardPlatforms(c)
+}
+
+// AdminSetCardPlatformWebhookSecret POST /api/v1/admin/card-platforms/webhook-secret
+func AdminSetCardPlatformWebhookSecret(c *gin.Context) {
+	var req struct {
+		ID            int64  `json:"id"`
+		WebhookSecret string `json:"webhook_secret"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.ID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
+		return
+	}
+	if err := db.SetCardPlatformWebhookSecret(req.ID, req.WebhookSecret); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	auditAdmin(c, "set_card_platform_webhook_secret", fmt.Sprintf("id=%d", req.ID))
 	AdminListCardPlatforms(c)
 }
 

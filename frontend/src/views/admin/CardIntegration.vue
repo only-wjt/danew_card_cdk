@@ -116,6 +116,34 @@
         <span class="text-muted">活跃账户 {{ activePlatformCount }} / {{ platformAccounts.length }}</span>
       </div>
 
+      <div>
+        <div class="text-sm font-medium text-ink mb-1">Webhook 回调 URL</div>
+        <div class="flex flex-wrap items-center gap-2">
+          <el-input :model-value="webhookUrl" readonly class="!max-w-2xl mono" />
+          <el-button type="primary" @click="copyText(webhookUrl)">复制</el-button>
+        </div>
+        <p class="text-xs text-subtle mt-1">
+          A/B 开发者页都填这一条。Secret 各台各填各台的 <code>whsec_…</code>，本站按验签归到对应账户。
+          最近事件在
+          <router-link class="app-link" to="/ops/webhooks">Webhook 事件</router-link>。
+        </p>
+      </div>
+
+      <el-alert
+        v-if="missingWebhookNames"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="`启用中尚未配置 Webhook Secret：${missingWebhookNames}。未配时该台回调会被 503/401 拒绝。`"
+      />
+      <el-alert
+        v-else-if="legacySecretSet && !platformAccounts.some((a) => a.has_webhook_secret)"
+        type="info"
+        :closable="false"
+        show-icon
+        :title="`仍在用旧的全局 Secret（${legacySecretHint || '已配置'}）。建议按卡台各填一份，避免 A/B 串台。`"
+      />
+
       <el-empty v-if="!platformAccounts.length && !loadingPlatforms" description="尚未添加卡台账户">
         <el-button type="primary" @click="openAccountForm()">添加第一台</el-button>
       </el-empty>
@@ -138,6 +166,9 @@
                   {{ acc.status === 'active' ? '启用' : '停用' }}
                 </el-tag>
                 <el-tag v-if="acc.circuit_state === 'open'" size="small" type="danger" effect="plain">熔断</el-tag>
+                <el-tag size="small" :type="acc.has_webhook_secret ? 'success' : 'danger'" effect="plain">
+                  {{ acc.has_webhook_secret ? `Webhook ${acc.webhook_secret_hint || '已配'}` : 'Webhook 未配' }}
+                </el-tag>
               </div>
               <div class="text-xs text-muted mt-1 mono">{{ acc.site_base }}</div>
               <div class="text-xs text-subtle mt-1">
@@ -168,6 +199,30 @@
               >
                 {{ acc.status === 'active' ? '停用' : '启用' }}
               </el-button>
+            </div>
+          </div>
+          <div class="mt-3 flex flex-wrap items-center gap-2">
+            <el-input
+              v-model="webhookInputs[acc.id]"
+              type="password"
+              show-password
+              class="!max-w-md"
+              :placeholder="acc.has_webhook_secret ? `已配置 ${acc.webhook_secret_hint || ''}，留空不改` : '粘贴该台开发者页的 whsec_…'"
+            />
+            <el-button
+              type="primary"
+              plain
+              :loading="savingWebhookId === acc.id"
+              @click="saveAccountWebhook(acc)"
+            >
+              保存该台 Secret
+            </el-button>
+          </div>
+          <div class="mt-3 text-xs">
+            <div class="text-muted mb-1">该台最近事件</div>
+            <div v-if="!eventsFor(acc.id).length" class="text-subtle">暂无该台回调</div>
+            <div v-for="e in eventsFor(acc.id)" :key="e.id" class="text-subtle mono leading-5">
+              {{ e.created_at }} · {{ e.event_type || '—' }} · {{ summarizeWebhook(e.payload) }}
             </div>
           </div>
         </div>
@@ -207,7 +262,7 @@
 
     <div class="flex flex-wrap gap-2">
       <router-link class="btn-primary" to="/ops/cdkeys">去发码</router-link>
-      <router-link class="btn-secondary" to="/ops/webhooks">Webhook</router-link>
+      <router-link class="btn-secondary" to="/ops/webhooks">Webhook 事件</router-link>
       <router-link class="btn-secondary" to="/ops/appearance">整站主题</router-link>
     </div>
 
@@ -386,6 +441,8 @@ interface PlatformAccountRow {
   priority: number
   is_primary_default: boolean
   has_credential: boolean
+  has_webhook_secret?: boolean
+  webhook_secret_hint?: string
   circuit_state: string
   circuit_fail_count: number
   last_error?: string
@@ -399,6 +456,12 @@ const savingAccount = ref(false)
 const accPingLoading = ref<number | null>(null)
 const accPing = ref<Record<number, { spendable_usd?: string; message?: string }>>({})
 const dualBind = reactive({ enabled: false, allowSingle: false })
+const webhookUrl = ref('')
+const webhookInputs = reactive<Record<number, string>>({})
+const savingWebhookId = ref<number | null>(null)
+const legacySecretSet = ref(false)
+const legacySecretHint = ref('')
+const webhookEvents = ref<Array<{ id: number; account_id?: number; event_type?: string; created_at?: string; payload?: any }>>([])
 const accountForm = reactive({
   id: 0,
   name: '',
@@ -413,6 +476,12 @@ const accountForm = reactive({
 
 const activePlatformCount = computed(
   () => platformAccounts.value.filter((a) => a.status === 'active' && a.circuit_state !== 'open').length,
+)
+const missingWebhookNames = computed(() =>
+  platformAccounts.value
+    .filter((a) => a.status === 'active' && !a.has_webhook_secret)
+    .map((a) => a.name)
+    .join('、'),
 )
 
 const swapPwHint = computed(() =>
@@ -611,6 +680,43 @@ function normalizeAccountBase() {
   accountForm.site_base = b
 }
 
+function eventsFor(accountId: number) {
+  return webhookEvents.value.filter((e) => e.account_id === accountId).slice(0, 5)
+}
+
+function summarizeWebhook(p: any) {
+  if (!p || typeof p !== 'object') return '—'
+  if (p.type === 'gpt_direct.completed' || p.order_id) {
+    return `order=${p.order_id || ''} plan=${p.plan || ''} status=${p.status || ''}`
+  }
+  if (p.event === 'card_transaction') {
+    return `${p.type || ''} ${p.status || ''} ${p.merchant_name || p.merchant || ''}`
+  }
+  return Object.keys(p).slice(0, 4).join(',')
+}
+
+async function loadWebhookEvents() {
+  const r = await authFetch('/api/v1/admin/webhooks/events')
+  const d = await r.json().catch(() => ({}))
+  if (r.ok) webhookEvents.value = d.events || []
+}
+
+function applyPlatforms(d: any) {
+  platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : platformAccounts.value
+  platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : platformUnusable.value
+  if (d.dual_bind !== undefined) dualBind.enabled = !!d.dual_bind
+  if (d.allow_single !== undefined) dualBind.allowSingle = !!d.allow_single
+  if (d.webhook_url) webhookUrl.value = d.webhook_url
+  else if (!webhookUrl.value && typeof window !== 'undefined') {
+    webhookUrl.value = `${window.location.origin}/api/v1/webhooks/cardplatform`
+  }
+  if (d.legacy_secret_set !== undefined) legacySecretSet.value = !!d.legacy_secret_set
+  if (d.legacy_secret_hint !== undefined) legacySecretHint.value = d.legacy_secret_hint || ''
+  for (const acc of platformAccounts.value) {
+    if (webhookInputs[acc.id] === undefined) webhookInputs[acc.id] = ''
+  }
+}
+
 async function loadPlatforms() {
   loadingPlatforms.value = true
   try {
@@ -620,12 +726,34 @@ async function loadPlatforms() {
       dialog.toast(d.error || '加载卡台账户失败', 'err')
       return
     }
-    platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
-    platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : []
-    dualBind.enabled = !!d.dual_bind
-    dualBind.allowSingle = !!d.allow_single
+    applyPlatforms(d)
   } finally {
     loadingPlatforms.value = false
+  }
+}
+
+async function saveAccountWebhook(acc: PlatformAccountRow) {
+  const secret = (webhookInputs[acc.id] || '').trim()
+  if (!secret) {
+    dialog.toast('请填写该台 webhook secret', 'err')
+    return
+  }
+  savingWebhookId.value = acc.id
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms/webhook-secret', {
+      method: 'POST',
+      body: JSON.stringify({ id: acc.id, webhook_secret: secret }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    webhookInputs[acc.id] = ''
+    applyPlatforms(d)
+    dialog.toast(`已保存 ${acc.name} 的 webhook secret`, 'ok')
+  } finally {
+    savingWebhookId.value = null
   }
 }
 
@@ -642,10 +770,7 @@ async function saveDualBind() {
       await loadPlatforms()
       return
     }
-    platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : platformAccounts.value
-    platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : []
-    dualBind.enabled = !!d.dual_bind
-    dualBind.allowSingle = !!d.allow_single
+    applyPlatforms(d)
     dialog.toast(dualBind.enabled ? '已开启本站双绑发码' : '已关闭（恢复单台发码）', 'ok')
   } finally {
     savingDualBind.value = false
@@ -709,10 +834,7 @@ async function saveAccount() {
       dialog.toast(d.error || '保存失败', 'err')
       return
     }
-    platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
-    platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : []
-    dualBind.enabled = !!d.dual_bind
-    dualBind.allowSingle = !!d.allow_single
+    applyPlatforms(d)
     dlgAccount.value = false
     dialog.toast('账户已保存', 'ok')
   } finally {
@@ -750,7 +872,7 @@ async function resetCircuit(id: number) {
     dialog.toast(d.error || '复位失败', 'err')
     return
   }
-  platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
+  applyPlatforms(d)
   dialog.toast('熔断已复位', 'ok')
 }
 
@@ -765,14 +887,14 @@ async function toggleAccountStatus(acc: PlatformAccountRow) {
     dialog.toast(d.error || '操作失败', 'err')
     return
   }
-  platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
+  applyPlatforms(d)
   dialog.toast(next === 'active' ? '已启用' : '已停用', 'ok')
 }
 
 onMounted(async () => {
   await loadSettings()
   await loadNetwork()
-  await loadPlatforms()
+  await Promise.all([loadPlatforms(), loadWebhookEvents()])
 })
 </script>
 

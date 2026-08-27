@@ -288,6 +288,41 @@ func UpsertCardPlatformAccount(a CardPlatformAccount) (int64, error) {
 	return id, nil
 }
 
+// SetCardPlatformWebhookSecret 只改某一台的回调验签密钥。
+// 空串拒绝：避免「保存空值」把已配 secret 抹掉。
+func SetCardPlatformWebhookSecret(id int64, secret string) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	if id <= 0 {
+		return fmt.Errorf("invalid account id")
+	}
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return fmt.Errorf("webhook secret 必填")
+	}
+	res, err := DB.Exec(`
+		UPDATE card_platform_accounts
+		SET webhook_secret = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, secret, id)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("账户不存在")
+	}
+	var isPrimary int
+	if err := DB.QueryRow(`SELECT COALESCE(is_primary_default,0) FROM card_platform_accounts WHERE id = ?`, id).Scan(&isPrimary); err != nil {
+		return err
+	}
+	if isPrimary != 0 {
+		return syncPrimaryAccountLegacySettings(id)
+	}
+	return nil
+}
+
 // 旧模块仍从 site_settings 读取主台；管理 UI 只维护账户表，这里自动做兼容镜像，
 // 防止出现“顶部一套、下面一套”两个配置源。
 func syncPrimaryAccountLegacySettings(id int64) error {

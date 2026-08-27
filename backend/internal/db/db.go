@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -184,12 +185,14 @@ func createTables() error {
 		// 卡台 Webhook 事件（幂等入库；配合轮询双通道）
 		`CREATE TABLE IF NOT EXISTS webhook_events (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_id INTEGER NOT NULL DEFAULT 0,
 			event_type TEXT,
 			idem_key TEXT UNIQUE NOT NULL,
 			payload TEXT NOT NULL,
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_webhook_created ON webhook_events(created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_webhook_account_created ON webhook_events(account_id, created_at)`,
 
 		// 兑换时绑定的 CDK → session，供账单页「凭卡密查询」
 		`CREATE TABLE IF NOT EXISTS cdk_session_bindings (
@@ -349,6 +352,9 @@ func createTables() error {
 	if err := migrateAdminRechargeItemCredCols(); err != nil {
 		log.Printf("migrateAdminRechargeItemCredCols: %v", err)
 	}
+	if err := migrateWebhookEventAccountCol(); err != nil {
+		log.Printf("migrateWebhookEventAccountCol: %v", err)
+	}
 	if err := migrateAgentPortal(); err != nil {
 		log.Printf("migrateAgentPortal: %v", err)
 	}
@@ -372,6 +378,23 @@ func migrateCardplatformCDKStatusCol() error {
 		return err
 	}
 	_, err = DB.Exec(`ALTER TABLE cardplatform_cdk_codes ADD COLUMN status TEXT DEFAULT ''`)
+	return err
+}
+
+func migrateWebhookEventAccountCol() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('webhook_events') WHERE name='account_id'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := DB.Exec(`ALTER TABLE webhook_events ADD COLUMN account_id INTEGER NOT NULL DEFAULT 0`); err != nil {
+			return err
+		}
+	}
+	_, err := DB.Exec(`CREATE INDEX IF NOT EXISTS idx_webhook_account_created ON webhook_events(account_id, created_at)`)
 	return err
 }
 
@@ -738,31 +761,53 @@ func RandomPassword(n int) string {
 // WebhookEvent 入库行
 type WebhookEvent struct {
 	ID        int64
+	AccountID int64
 	EventType string
 	IdemKey   string
 	Payload   string
 	CreatedAt string
 }
 
-func InsertWebhookEvent(eventType, idemKey, payload string) error {
+func scopedWebhookIdemKey(accountID int64, idemKey string) string {
+	idemKey = strings.TrimSpace(idemKey)
+	if accountID <= 0 {
+		return idemKey
+	}
+	prefix := strconv.FormatInt(accountID, 10) + "|"
+	if strings.HasPrefix(idemKey, prefix) {
+		return idemKey
+	}
+	return prefix + idemKey
+}
+
+func displayWebhookIdemKey(accountID int64, idemKey string) string {
+	if accountID <= 0 {
+		return idemKey
+	}
+	return strings.TrimPrefix(idemKey, strconv.FormatInt(accountID, 10)+"|")
+}
+
+func InsertWebhookEvent(accountID int64, eventType, idemKey, payload string) error {
 	if DB == nil {
 		return fmt.Errorf("db not ready")
 	}
 	_, err := DB.Exec(
-		`INSERT INTO webhook_events (event_type, idem_key, payload) VALUES (?, ?, ?)`,
-		eventType, idemKey, payload,
+		`INSERT INTO webhook_events (account_id, event_type, idem_key, payload) VALUES (?, ?, ?, ?)`,
+		accountID, eventType, scopedWebhookIdemKey(accountID, idemKey), payload,
 	)
 	return err
 }
 
-func ListWebhookEvents(limit int) ([]WebhookEvent, error) {
+func ListWebhookEvents(accountID int64, limit int) ([]WebhookEvent, error) {
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
 	rows, err := DB.Query(`
-		SELECT id, COALESCE(event_type,''), idem_key, payload, COALESCE(created_at,'')
-		FROM webhook_events ORDER BY id DESC LIMIT ?
-	`, limit)
+		SELECT id, COALESCE(account_id,0), COALESCE(event_type,''), idem_key, payload, COALESCE(created_at,'')
+		FROM webhook_events
+		WHERE ? = 0 OR account_id = ?
+		ORDER BY id DESC LIMIT ?
+	`, accountID, accountID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -770,9 +815,10 @@ func ListWebhookEvents(limit int) ([]WebhookEvent, error) {
 	var out []WebhookEvent
 	for rows.Next() {
 		var e WebhookEvent
-		if err := rows.Scan(&e.ID, &e.EventType, &e.IdemKey, &e.Payload, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.AccountID, &e.EventType, &e.IdemKey, &e.Payload, &e.CreatedAt); err != nil {
 			return nil, err
 		}
+		e.IdemKey = displayWebhookIdemKey(e.AccountID, e.IdemKey)
 		out = append(out, e)
 	}
 	return out, rows.Err()

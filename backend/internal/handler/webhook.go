@@ -63,11 +63,17 @@ func CardPlatformWebhook(c *gin.Context) {
 			if credential.accountID > 0 {
 				matchedAccountID = credential.accountID
 			}
+			break
 		}
 	}
 	if !matched {
 		c.Status(http.StatusUnauthorized)
 		return
+	}
+	if matchedAccountID == 0 {
+		if primary, err := db.LegacyCardPlatformAccount(); err == nil {
+			matchedAccountID = primary.ID
+		}
 	}
 
 	// 尽快 200；入库 best-effort
@@ -83,7 +89,7 @@ func CardPlatformWebhook(c *gin.Context) {
 	}
 	// 幂等键
 	idem := webhookIdemKey(payload, eventType)
-	if err := db.InsertWebhookEvent(eventType, idem, string(raw)); err != nil {
+	if err := db.InsertWebhookEvent(matchedAccountID, eventType, idem, string(raw)); err != nil {
 		// 唯一冲突视为已处理（幂等）
 		if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "unique") {
 			log.Printf("webhook store: %v", err)
@@ -188,43 +194,84 @@ func jsonNumber(f float64) string {
 
 // AdminListWebhooks GET /api/v1/admin/webhooks/events
 func AdminListWebhooks(c *gin.Context) {
-	limit := 50
-	rows, err := db.ListWebhookEvents(limit)
+	limit := 100
+	accountID, _ := strconv.ParseInt(strings.TrimSpace(c.Query("account_id")), 10, 64)
+	rows, err := db.ListWebhookEvents(accountID, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
 		return
 	}
+	accounts, _ := db.ListCardPlatformAccounts()
+	names := map[int64]string{}
+	for _, a := range accounts {
+		names[a.ID] = a.Name
+	}
 	// 脱敏：不返回完整 card_number
 	out := make([]gin.H, 0, len(rows))
 	for _, r := range rows {
+		name := names[r.AccountID]
+		if name == "" && r.AccountID == 0 {
+			name = "未归属"
+		} else if name == "" {
+			name = "卡台 #" + strconv.FormatInt(r.AccountID, 10)
+		}
 		out = append(out, gin.H{
-			"id":         r.ID,
-			"event_type": r.EventType,
-			"idem_key":   r.IdemKey,
-			"created_at": r.CreatedAt,
-			"payload":    sanitizeWebhookPayload(r.Payload),
+			"id":           r.ID,
+			"account_id":   r.AccountID,
+			"account_name": name,
+			"event_type":   r.EventType,
+			"idem_key":     r.IdemKey,
+			"created_at":   r.CreatedAt,
+			"payload":      sanitizeWebhookPayload(r.Payload),
 		})
 	}
-	urlHint := ""
-	if host := c.Request.Host; host != "" {
-		scheme := "https"
-		if c.Request.TLS == nil && !strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-			// 生产经 Caddy 会带 proto
-			if p := c.GetHeader("X-Forwarded-Proto"); p != "" {
-				scheme = p
-			}
-		} else if strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
-			scheme = "https"
+	urlHint := cardPlatformWebhookURL(c)
+	accOut := make([]gin.H, 0, len(accounts))
+	anySet := false
+	for _, a := range accounts {
+		set := strings.TrimSpace(a.WebhookSecret) != ""
+		if set {
+			anySet = true
 		}
-		urlHint = scheme + "://" + host + "/api/v1/webhooks/cardplatform"
+		accOut = append(accOut, gin.H{
+			"id":                  a.ID,
+			"name":                a.Name,
+			"site_base":           a.SiteBase,
+			"status":              a.Status,
+			"is_primary_default":  a.IsPrimaryDefault,
+			"has_webhook_secret":  set,
+			"webhook_secret_hint": maskSecret(a.WebhookSecret),
+		})
 	}
-	sec, _ := db.GetSetting("webhook_secret")
+	legacy, _ := db.GetSetting("webhook_secret")
+	legacySet := strings.TrimSpace(legacy) != ""
+	if legacySet {
+		anySet = true
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"events":              out,
 		"webhook_url":         urlHint,
-		"webhook_secret_set":  strings.TrimSpace(sec) != "",
-		"webhook_secret_hint": maskSecret(sec),
+		"accounts":            accOut,
+		"any_secret_set":      anySet,
+		"legacy_secret_set":   legacySet,
+		"legacy_secret_hint":  maskSecret(legacy),
+		"webhook_secret_set":  anySet,
+		"webhook_secret_hint": maskSecret(legacy),
 	})
+}
+
+func cardPlatformWebhookURL(c *gin.Context) string {
+	host := strings.TrimSpace(c.Request.Host)
+	if host == "" {
+		return ""
+	}
+	scheme := "https"
+	if proto := strings.TrimSpace(c.GetHeader("X-Forwarded-Proto")); proto != "" {
+		scheme = proto
+	} else if c.Request.TLS == nil {
+		scheme = "http"
+	}
+	return scheme + "://" + host + "/api/v1/webhooks/cardplatform"
 }
 
 func sanitizeWebhookPayload(raw string) interface{} {
