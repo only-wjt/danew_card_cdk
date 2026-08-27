@@ -466,7 +466,7 @@ export default {
     localStockTitle: 'GPT White stock',
     localStockHint: 'Local stock, not issued by the card platform. One account per line (email or email:password). Existing rows are skipped. Agents can copy and send purchased accounts downstream.',
     localStockImportLabel: 'Import accounts',
-    localStockPlaceholder: 'user@example.com\nuser2@example.com:password',
+    localStockPlaceholder: 'email\nemail:password',
     localStockImport: 'Import',
     localStockImporting: 'Importing…',
     localStockEmpty: 'Paste accounts to import',

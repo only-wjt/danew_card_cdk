@@ -462,7 +462,7 @@ export default {
     localStockTitle: 'GPT白号库存',
     localStockHint: '本站库存，不走卡台发码。一行一个账号（邮箱，或 邮箱:密码）。已存在的跳过。代理购卡后可复制发给下级。',
     localStockImportLabel: '导入账号',
-    localStockPlaceholder: 'user@example.com\nuser2@example.com:password',
+    localStockPlaceholder: '邮箱\n邮箱:密码',
     localStockImport: '导入白号',
     localStockImporting: '导入中…',
     localStockEmpty: '请粘贴要导入的账号',
