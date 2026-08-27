@@ -9,11 +9,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/gin-gonic/gin"
 )
 
 // CardPlatformWebhook POST /api/v1/webhooks/cardplatform
@@ -26,9 +27,21 @@ func CardPlatformWebhook(c *gin.Context) {
 		c.Status(http.StatusBadRequest)
 		return
 	}
-	secret, _ := db.GetSetting("webhook_secret")
-	secret = strings.TrimSpace(secret)
-	if secret == "" {
+	accounts, _ := db.ListCardPlatformAccounts()
+	type webhookCredential struct {
+		accountID int64
+		secret    string
+	}
+	credentials := make([]webhookCredential, 0, len(accounts)+1)
+	for _, acc := range accounts {
+		if secret := strings.TrimSpace(acc.WebhookSecret); secret != "" {
+			credentials = append(credentials, webhookCredential{accountID: acc.ID, secret: secret})
+		}
+	}
+	if legacySecret, _ := db.GetSetting("webhook_secret"); strings.TrimSpace(legacySecret) != "" {
+		credentials = append(credentials, webhookCredential{secret: strings.TrimSpace(legacySecret)})
+	}
+	if len(credentials) == 0 {
 		// 未配置密钥时拒绝，避免裸奔
 		log.Printf("webhook: webhook_secret not configured")
 		c.Status(http.StatusServiceUnavailable)
@@ -39,10 +52,20 @@ func CardPlatformWebhook(c *gin.Context) {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
-	mac := hmac.New(sha256.New, []byte(secret))
-	_, _ = mac.Write(raw)
-	expect := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(strings.ToLower(expect))) != 1 {
+	var matchedAccountID int64
+	matched := false
+	for _, credential := range credentials {
+		mac := hmac.New(sha256.New, []byte(credential.secret))
+		_, _ = mac.Write(raw)
+		expect := hex.EncodeToString(mac.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(strings.ToLower(expect))) == 1 {
+			matched = true
+			if credential.accountID > 0 {
+				matchedAccountID = credential.accountID
+			}
+		}
+	}
+	if !matched {
 		c.Status(http.StatusUnauthorized)
 		return
 	}
@@ -73,17 +96,17 @@ func CardPlatformWebhook(c *gin.Context) {
 	}
 	// 本站 CDK 状态：兑换完成 → consumed（避免列表仍显示「未使用」）
 	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
-		applyCDKStatusFromWebhook(payload, eventType)
+		applyCDKStatusFromWebhook(payload, eventType, matchedAccountID)
 	}
 	// 卡健康：失败/成功终态观察（同卡多邮箱失败 → 拉黑）
 	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
-		observeFromWebhookPayload(payload)
+		observeFromWebhookPayload(payload, matchedAccountID)
 	}
 	c.Status(http.StatusOK)
 }
 
 // applyCDKStatusFromWebhook 根据卡台终态回写本站 SQLite 中的 CDK status。
-func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string) {
+func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string, accountID int64) {
 	if payload == nil {
 		return
 	}
@@ -103,6 +126,25 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string)
 	// 失败回传 unused 时，勿把已 consumed/disabled 降级回去
 	if st == "unused" || st == "reserved" {
 		if cur := db.GetCardplatformCDKStatus(cdkID); cur == "consumed" || cur == "disabled" {
+			return
+		}
+	}
+	if binding, ok := db.FindSiteBindingByRemote(accountID, strconv.FormatInt(cdkID, 10)); ok {
+		if st == "consumed" {
+			_ = db.UpdateBindingStatus(binding.ID, db.BindingStatusConsumed, "")
+			_ = db.UpdateCardplatformCDKStatusByRowID(binding.SiteCodeID, st)
+			_ = db.MarkSiteCDKFulfilled(binding.SiteCodeID, accountID, binding.Provider, !binding.IsPrimary, "webhook")
+		}
+		return
+	}
+	if code, ok := db.LookupCardplatformCDKCode(cdkID, strAny(payload["code_prefix"])); ok {
+		if owner, err := db.CardPlatformAccountForLegacyCode(code); err == nil &&
+			accountID > 0 && owner.ID != accountID {
+			return
+		}
+	} else {
+		legacy, _ := db.LegacyCardPlatformAccount()
+		if accountID > 0 && legacy.ID != accountID {
 			return
 		}
 	}
@@ -178,10 +220,10 @@ func AdminListWebhooks(c *gin.Context) {
 	}
 	sec, _ := db.GetSetting("webhook_secret")
 	c.JSON(http.StatusOK, gin.H{
-		"events":                out,
-		"webhook_url":           urlHint,
-		"webhook_secret_set":    strings.TrimSpace(sec) != "",
-		"webhook_secret_hint":   maskSecret(sec),
+		"events":              out,
+		"webhook_url":         urlHint,
+		"webhook_secret_set":  strings.TrimSpace(sec) != "",
+		"webhook_secret_hint": maskSecret(sec),
 	})
 }
 

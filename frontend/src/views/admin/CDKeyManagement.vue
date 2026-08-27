@@ -79,7 +79,12 @@
             {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${planLabel(form.plan)} · $${estimatedTotal}` }}
           </el-button>
         </div>
-        <p v-if="!configured" class="text-xs" style="color: var(--err)">请先在「卡台配置」填写 Base 与 sk_</p>
+        <p v-if="!configured" class="text-xs" style="color: var(--err)">
+          请先在
+          <router-link class="app-link" to="/ops/integration">卡台配置</router-link>
+          填写凭证{{ dualBindEnabled ? '并添加至少一个可用卡台账户' : '' }}
+        </p>
+        <p v-else-if="dualIssueHint" class="text-xs text-muted">{{ dualIssueHint }}</p>
         <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">勾选「确认承担兑换资金」后再购买。实付由本账户承担，服务费从卡台余额扣除。</p>
         <div v-if="issueError" class="alert alert-error">{{ issueError }}</div>
         <div v-if="issueOk" class="alert alert-success">{{ issueOk }}</div>
@@ -101,6 +106,34 @@
             :value="recentCodes.join('\n')"
             @focus="($event.target as HTMLTextAreaElement).select()"
           />
+          <button
+            v-if="recentCodes.some((code) => code.toUpperCase().startsWith('DN-'))"
+            type="button"
+            class="binding-fold-head"
+            @click="toggleRecentBindings"
+          >
+            <span>本次上游绑定（仅排障，不对代理展示）</span>
+            <span>{{ recentBindingsOpen ? '收起' : '展开' }}</span>
+          </button>
+          <div v-show="recentBindingsOpen" class="space-y-2">
+            <div v-if="loadingRecentBindings" class="text-xs text-muted">正在加载绑定…</div>
+            <div v-for="item in recentBindings" :key="item.code" class="binding-debug-row">
+              <div class="mono text-xs text-ink break-all">{{ item.code }}</div>
+              <div class="flex flex-wrap gap-2 mt-1">
+                <el-tag
+                  v-for="binding in item.bindings"
+                  :key="binding.id"
+                  size="small"
+                  :type="bindingStatusType(binding.status)"
+                  effect="plain"
+                >
+                  {{ accountName(binding.account_id) }} · {{ binding.remote_code_prefix || '无前缀' }} · {{ bindingStatusLabel(binding.status) }}
+                </el-tag>
+                <span v-if="!item.bindings.length" class="text-xs" style="color: var(--err)">未找到绑定</span>
+              </div>
+              <div v-if="item.error" class="text-xs mt-1" style="color: var(--err)">{{ item.error }}</div>
+            </div>
+          </div>
         </div>
       </div>
     </section>
@@ -136,6 +169,30 @@
         <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[120px]" @change="searchList">
           <el-option v-for="k in planKeys" :key="k" :label="planLabel(k)" :value="k" />
         </el-select>
+        <template v-if="listMode === 'stored'">
+          <el-select v-model="listCodeKind" clearable placeholder="种类" class="!w-[120px]" @change="searchList">
+            <el-option label="本站码" value="site" />
+            <el-option label="旧码" value="legacy" />
+            <el-option label="白号" value="local_stock" />
+          </el-select>
+          <el-select v-model="listBindingState" clearable placeholder="绑定" class="!w-[130px]" @change="searchList">
+            <el-option label="双绑完整" value="complete" />
+            <el-option label="绑定降级" value="degraded" />
+            <el-option label="无绑定" value="none" />
+          </el-select>
+          <el-select v-model="listFulfilledAccount" clearable placeholder="履约台" class="!w-[140px]" @change="searchList">
+            <el-option
+              v-for="acc in platformAccounts"
+              :key="acc.id"
+              :label="acc.name"
+              :value="String(acc.id)"
+            />
+          </el-select>
+          <el-select v-model="listFailover" clearable placeholder="Failover" class="!w-[120px]" @change="searchList">
+            <el-option label="发生过切台" value="yes" />
+            <el-option label="未切台" value="no" />
+          </el-select>
+        </template>
         <el-button type="primary" :loading="loadingList" @click="searchList">查询</el-button>
         <el-button :loading="loadingList" @click="loadList">刷新</el-button>
         <span class="flex-1"></span>
@@ -218,7 +275,9 @@
         @selection-change="onSelectionChange"
       >
         <el-table-column type="selection" width="44" :selectable="rowSelectable" reserve-selection />
-        <el-table-column prop="id" label="ID" width="72" />
+        <el-table-column label="ID" width="72">
+          <template #default="{ row }">{{ row.row_id || row.id || '—' }}</template>
+        </el-table-column>
         <el-table-column label="卡密" min-width="240">
           <template #default="{ row }">
             <button
@@ -238,12 +297,45 @@
             </button>
           </template>
         </el-table-column>
+        <el-table-column v-if="listMode === 'stored'" label="种类" width="92">
+          <template #default="{ row }">
+            <el-tag size="small" :type="codeKindType(row.code_kind)" effect="plain">
+              {{ codeKindLabel(row.code_kind) }}
+            </el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="plan" label="套餐" width="100">
           <template #default="{ row }">{{ planLabel(row.plan) }}</template>
         </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="listMode === 'stored'" label="绑定" min-width="180">
+          <template #default="{ row }">
+            <template v-if="row.code_kind === 'site'">
+              <div class="text-xs text-ink">
+                {{ row.binding_total >= 2 ? `双绑完整（当前可用 ${row.binding_usable}/${row.binding_total}）` : `绑定降级 ${row.binding_usable}/${row.binding_total}` }}
+              </div>
+              <div class="text-xs text-subtle binding-summary">{{ row.binding_summary || '—' }}</div>
+            </template>
+            <span v-else class="text-subtle">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="listMode === 'stored'" label="履约台" width="120">
+          <template #default="{ row }">
+            <span v-if="row.fulfilled_account">{{ row.fulfilled_account }}</span>
+            <span v-else-if="row.code_kind === 'legacy'" class="text-subtle">原台</span>
+            <span v-else class="text-subtle">—</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="listMode === 'stored'" label="Failover" width="105">
+          <template #default="{ row }">
+            <el-tag v-if="row.failover_used" size="small" type="warning" :title="row.failover_reason || ''">
+              已切台
+            </el-tag>
+            <span v-else class="text-subtle">否</span>
           </template>
         </el-table-column>
         <el-table-column label="服务费" width="88">
@@ -323,6 +415,9 @@ const listMode = ref<'stored' | 'upstream'>('stored')
 const selectedRows = ref<any[]>([])
 const tableRef = ref<any>(null)
 const issueOpen = ref(false)
+const recentBindingsOpen = ref(false)
+const loadingRecentBindings = ref(false)
+const recentBindings = ref<Array<{ code: string; bindings: any[]; error?: string }>>([])
 
 const plans = ref<Record<string, any>>({})
 const pricingVersion = ref<number | null>(null)
@@ -332,6 +427,8 @@ const egressIp = ref('')
 const metaError = ref('')
 const loadingMeta = ref(false)
 const configured = ref(false)
+const dualBindEnabled = ref(false)
+const activePlatformN = ref(0)
 
 const form = reactive({
   plan: 'plus',
@@ -353,6 +450,11 @@ const listError = ref('')
 const listQ = ref('')
 const listStatus = ref('')
 const listPlan = ref('')
+const listCodeKind = ref('')
+const listBindingState = ref('')
+const listFulfilledAccount = ref('')
+const listFailover = ref('')
+const platformAccounts = ref<Array<{ id: number; name: string }>>([])
 const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', 'review']
 
 // 档位清单、展示顺序、能不能卖，全部由服务端下发的 registry 决定。
@@ -395,6 +497,18 @@ const canIssue = computed(() =>
   // 不判的话按钮是亮的、点下去被后端 400 挡回来。
   planKeys.value.includes(form.plan),
 )
+
+const isCreditPlan = computed(() => String(form.plan).toLowerCase().startsWith('credit'))
+const dualIssueHint = computed(() => {
+  if (!dualBindEnabled.value) return ''
+  const n = Math.max(1, Math.min(50, form.count || 1))
+  if (isCreditPlan.value) return `credit* 仅向主台购 ${n} 张，无自动切台`
+  const unit = Number(feeOf(form.plan))
+  if (!Number.isFinite(unit)) {
+    return `将同时向各可用卡台各购 ${n} 张本站码（DN-），上游约双倍服务费`
+  }
+  return `将同时向各可用卡台各购 ${n} 张本站码（DN-），上游约 $${(unit * n * 2).toFixed(2)}`
+})
 
 // 可卖清单变了（首次加载 / 卡台改了配置）就把选中项收回到清单内。
 watch(planKeys, (keys) => {
@@ -535,10 +649,19 @@ function exportSelectedFull() {
   dialog.toast(`已导出 ${codes.length} 张`, 'ok')
 }
 
-async function fetchAllStoredCodes(): Promise<string[]> {
-  const qs = new URLSearchParams({ limit: '10000' })
+function appendStoredFilters(qs: URLSearchParams) {
   if (listPlan.value) qs.set('plan', listPlan.value)
   if (listQ.value.trim()) qs.set('q', listQ.value.trim())
+  if (listStatus.value) qs.set('status', listStatus.value)
+  if (listCodeKind.value) qs.set('code_kind', listCodeKind.value)
+  if (listBindingState.value) qs.set('binding_state', listBindingState.value)
+  if (listFulfilledAccount.value) qs.set('fulfilled_account_id', listFulfilledAccount.value)
+  if (listFailover.value) qs.set('failover', listFailover.value)
+}
+
+async function fetchAllStoredCodes(): Promise<string[]> {
+  const qs = new URLSearchParams({ limit: '10000' })
+  appendStoredFilters(qs)
   const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
   const d = await r.json().catch(() => ({}))
   if (!r.ok) throw new Error(d.error || d.msg || '拉取本站完整码失败')
@@ -572,8 +695,7 @@ async function exportAllStored() {
   try {
     // 优先走后端 txt 附件（更省内存）
     const qs = new URLSearchParams({ format: 'txt', limit: '10000' })
-    if (listPlan.value) qs.set('plan', listPlan.value)
-    if (listQ.value.trim()) qs.set('q', listQ.value.trim())
+    appendStoredFilters(qs)
     const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
     if (!r.ok) {
       const d = await r.json().catch(() => ({}))
@@ -893,6 +1015,76 @@ function statusLabel(s: string) {
   return map[st] || st
 }
 
+function codeKindLabel(kind: string) {
+  const labels: Record<string, string> = {
+    site: '本站码',
+    legacy: '旧码',
+    local_stock: '白号',
+  }
+  return labels[String(kind || 'legacy').toLowerCase()] || kind || '旧码'
+}
+
+function codeKindType(kind: string) {
+  const k = String(kind || 'legacy').toLowerCase()
+  if (k === 'site') return 'success'
+  if (k === 'local_stock') return 'warning'
+  return 'info'
+}
+
+function bindingStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    unused: '可用',
+    redeeming: '兑换中',
+    reserved: '已预留',
+    consumed: '已核销',
+    refunded: '已退款',
+    retired: '已退役',
+    disabled: '已禁用',
+    failed: '失败',
+    unknown: '待确认',
+  }
+  return labels[String(status || '').toLowerCase()] || status || '未知'
+}
+
+function bindingStatusType(status: string) {
+  const s = String(status || '').toLowerCase()
+  if (s === 'unused') return 'success'
+  if (s === 'refunded' || s === 'retired' || s === 'consumed') return 'info'
+  if (s === 'redeeming' || s === 'reserved') return 'warning'
+  return 'danger'
+}
+
+function accountName(accountId: number) {
+  return platformAccounts.value.find((a) => Number(a.id) === Number(accountId))?.name || `账户 ${accountId}`
+}
+
+async function loadRecentBindings() {
+  const codes = recentCodes.value.filter((code) => code.toUpperCase().startsWith('DN-'))
+  recentBindings.value = []
+  if (!codes.length) return
+  loadingRecentBindings.value = true
+  try {
+    recentBindings.value = await Promise.all(
+      codes.map(async (code) => {
+        const qs = new URLSearchParams({ code })
+        const r = await authFetch(`/api/v1/admin/card-platforms/bindings?${qs.toString()}`)
+        const d = await r.json().catch(() => ({}))
+        if (!r.ok) return { code, bindings: [], error: d.error || '加载绑定失败' }
+        return { code, bindings: Array.isArray(d.bindings) ? d.bindings : [] }
+      }),
+    )
+  } finally {
+    loadingRecentBindings.value = false
+  }
+}
+
+async function toggleRecentBindings() {
+  recentBindingsOpen.value = !recentBindingsOpen.value
+  if (recentBindingsOpen.value && !recentBindings.value.length) {
+    await loadRecentBindings()
+  }
+}
+
 function isFullCode(code: string) {
   const c = String(code || '').trim()
   // 完整码至少 20 字符；前缀一般 ≤14
@@ -1043,6 +1235,8 @@ function loadPersistedRecent() {
 function clearRecent() {
   recentCodes.value = []
   recentMeta.value = null
+	recentBindings.value = []
+	recentBindingsOpen.value = false
   try {
     sessionStorage.removeItem(RECENT_KEY)
   } catch {
@@ -1083,15 +1277,28 @@ async function loadMeta() {
   loadingMeta.value = true
   metaError.value = ''
   try {
-    const [pr, br, er, sr] = await Promise.all([
+    const [pr, br, er, sr, cr] = await Promise.all([
       authFetch('/api/v1/admin/cardplatform/plans'),
       authFetch('/api/v1/admin/cardplatform/balance'),
       authFetch('/api/v1/admin/network/egress'),
       authFetch('/api/v1/admin/settings'),
+      authFetch('/api/v1/admin/card-platforms'),
     ])
     if (sr.ok) {
       const s = await sr.json()
       configured.value = !!s.card_api_key_configured
+    }
+    if (cr.ok) {
+      const c = await cr.json()
+      dualBindEnabled.value = !!c.dual_bind
+      const accounts = Array.isArray(c.accounts) ? c.accounts : []
+      platformAccounts.value = accounts.map((a: any) => ({ id: Number(a.id), name: String(a.name || `账户 ${a.id}`) }))
+      activePlatformN.value = accounts.filter(
+        (a: any) => a.status === 'active' && a.circuit_state !== 'open' && a.has_credential,
+      ).length
+      if (dualBindEnabled.value) {
+        configured.value = activePlatformN.value > 0
+      }
     }
     if (er.ok) {
       const e = await er.json()
@@ -1158,17 +1365,27 @@ async function issue() {
     rememberIssued(issued, form.plan)
     recentCodes.value = codes
     persistRecent(codes, form.plan)
+    if (d.site_dual_bind) {
+      recentBindings.value = []
+      recentBindingsOpen.value = false
+    } else {
+      recentBindings.value = []
+      recentBindingsOpen.value = false
+    }
     issueOpen.value = true
     const shortOnes = codes.filter((c: string) => !isFullCode(c))
-    const storedN = Number(d.stored_count)
+    const storedN = Number(d.stored_count ?? d.stored)
     const storeFail = Number(d.store_failed) || 0
     let okMsg = shortOnes.length
       ? `成功 ${codes.length} 张，但有 ${shortOnes.length} 张长度异常，请核对`
-      : `成功 ${codes.length} 张完整码（每条约 ${codes[0]?.length || '—'} 字符）`
+      : d.site_dual_bind
+        ? `成功 ${codes.length} 张本站码 DN-（双绑已落库）`
+        : `成功 ${codes.length} 张完整码（每条约 ${codes[0]?.length || '—'} 字符）`
     if (Number.isFinite(storedN)) {
       okMsg += ` · 服务器已存 ${storedN}`
       if (storeFail > 0) okMsg += `（${storeFail} 条落库失败）`
     }
+    if (d.partial_error) okMsg += ` · 部分失败：${d.partial_error}`
     issueOk.value = okMsg
     dialog.toast(issueOk.value, shortOnes.length || storeFail ? 'warn' : 'ok')
     // 发码成功后自动尝试复制全部，减少漏拷
@@ -1199,6 +1416,10 @@ async function loadList() {
       if (listQ.value.trim()) qs.set('q', listQ.value.trim())
       if (listPlan.value) qs.set('plan', listPlan.value)
       if (listStatus.value) qs.set('status', listStatus.value)
+      if (listCodeKind.value) qs.set('code_kind', listCodeKind.value)
+      if (listBindingState.value) qs.set('binding_state', listBindingState.value)
+      if (listFulfilledAccount.value) qs.set('fulfilled_account_id', listFulfilledAccount.value)
+      if (listFailover.value) qs.set('failover', listFailover.value)
       const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {
@@ -1300,6 +1521,29 @@ onMounted(async () => {
   margin-left: auto;
   font-size: 12px;
   color: var(--ink-2);
+}
+.binding-fold-head {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 8px 0 4px;
+  border: 0;
+  border-top: 1px solid var(--brd);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+.binding-debug-row {
+  padding: 8px 10px;
+  border: 1px solid var(--brd);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.binding-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .plan-card-sm {
   display: flex;

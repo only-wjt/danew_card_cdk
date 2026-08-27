@@ -5,8 +5,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/gin-gonic/gin"
 )
 
 // defaultSkin 未配置站点时的默认皮肤，需与前端 theme.ts 的 DEFAULT_SKIN 保持一致
@@ -14,10 +14,10 @@ const defaultSkin = "danew"
 
 // 允许写入 site_settings 的公开安全键（无密钥）
 var publicSettingKeys = map[string]bool{
-	"brand_name":  true,
-	"brand_sub":   true,
-	"skin":        true,
-	"theme_mode":  true,
+	"brand_name": true,
+	"brand_sub":  true,
+	"skin":       true,
+	"theme_mode": true,
 }
 
 // 密钥类键：只接受写入，读出脱敏
@@ -82,7 +82,7 @@ type adminSettingsBody struct {
 	EpayAPIBase    *string `json:"epay_api_base"`
 	EpayPID        *string `json:"epay_pid"`
 	EpayKey        *string `json:"epay_key"`
-	EpayPayTypes   *string `json:"epay_pay_types"` // alipay,wxpay
+	EpayPayTypes   *string `json:"epay_pay_types"`  // alipay,wxpay
 	PublicBaseURL  *string `json:"public_base_url"` // 易支付 notify/return 根地址，留空=当前访问地址
 	// 代理失败换码密码（明文一次写入，存 bcrypt；空=不改）
 	AgentSwapPassword *string `json:"agent_swap_password"`
@@ -112,9 +112,14 @@ func AdminPutSettings(c *gin.Context) {
 	}
 
 	allowedSkins := map[string]bool{
-		"danew": true,
+		"danew":      true,
 		"terracotta": true, "ocean": true, "cyber": true, "forest": true, "violet": true,
 		"slate": true, "rose": true, "ember": true, "noir": true, "paper": true,
+	}
+	if accounts, _ := db.ListCardPlatformAccounts(); len(accounts) > 0 &&
+		(body.CardAPIBase != nil || body.CardAPIKey != nil || body.WebhookSecret != nil) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "卡台凭证请在「多卡台账户」中维护"})
+		return
 	}
 	if body.Skin != nil {
 		s := strings.TrimSpace(*body.Skin)
@@ -134,11 +139,8 @@ func AdminPutSettings(c *gin.Context) {
 	}
 	_ = setIf("brand_name", body.BrandName, 40)
 	_ = setIf("brand_sub", body.BrandSub, 80)
-	_ = setIf("card_api_base", body.CardAPIBase, 200)
-	_ = setIf("card_api_key", body.CardAPIKey, 200)
 	_ = setIf("telegram_token", body.TelegramToken, 200)
 	_ = setIf("telegram_chat_id", body.TelegramChatID, 64)
-	_ = setIf("webhook_secret", body.WebhookSecret, 200)
 	_ = setIf("epay_api_base", body.EpayAPIBase, 200)
 	_ = setIf("epay_pid", body.EpayPID, 64)
 	_ = setIf("epay_key", body.EpayKey, 200)

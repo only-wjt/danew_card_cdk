@@ -41,9 +41,28 @@ func saveAgentCDKPolicy(p AgentCDKPolicy) error {
 	return db.SetSetting(agentCDKPolicyKey, string(b))
 }
 
+// guardLocalStockCDK 公开兑换拦截本站库存账号（GPT白号），无论是否已分配。
+func guardLocalStockCDK(c *gin.Context, code string) bool {
+	if strings.TrimSpace(code) == "" {
+		return false
+	}
+	row, ok := db.LookupStoredCDKDetail(code)
+	if !ok || !db.IsLocalStockPlan(row.Plan) {
+		return false
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error":      "该账号为 GPT白号，不能在公开页兑换，请联系代理发放。",
+		"error_code": "CDK_LOCAL_STOCK",
+	})
+	return true
+}
+
 // guardAgentAssignedCDK 公开兑换入口拦截：已分配代理的卡密不给客户自助兑换。
 // 返回 true 表示已写响应，调用方应直接 return。
 func guardAgentAssignedCDK(c *gin.Context, code string) bool {
+	if guardLocalStockCDK(c, code) {
+		return true
+	}
 	if strings.TrimSpace(code) == "" {
 		return false
 	}

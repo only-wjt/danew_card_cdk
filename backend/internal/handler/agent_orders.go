@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/epay"
 	"github.com/gin-gonic/gin"
@@ -108,7 +107,7 @@ func AgentCreateOrder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	plan := strings.TrimSpace(req.Plan)
+	plan := db.CanonicalPlanKey(req.Plan)
 	if plan == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择套餐"})
 		return
@@ -148,13 +147,26 @@ func AgentCreateOrder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "易支付未配置，请联系站长"})
 		return
 	}
-	if cardplatform.LoadConfig().APIKey == "" {
+	if db.IsLocalStockPlan(plan) {
+		// 本站库存是有限的实物账号，付款后才发现不够只能人工退，所以下单前先挡。
+		stock, serr := db.CountUnassignedLocalStock(plan)
+		if serr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": serr.Error()})
+			return
+		}
+		if stock < count {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": fmt.Sprintf("%s库存不足，当前可售 %d 个", db.LocalStockPlanLabel(plan), stock),
+			})
+			return
+		}
+	} else if !cardIssuingReady() {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "卡台未配置，暂无法自动发码"})
 		return
 	}
 
 	catalog := resolveAgentPlanCatalog(c, agent)
-	label := plan
+	label := db.LocalStockPlanLabel(plan)
 	for _, p := range catalog {
 		if p.Key == plan {
 			label = p.Label

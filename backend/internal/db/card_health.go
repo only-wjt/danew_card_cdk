@@ -7,6 +7,7 @@ import (
 
 // CardFailEvent 一张卡在一笔订单上的失败观察。
 type CardFailEvent struct {
+	AccountID        int64  `json:"account_id"`
 	ID               int64  `json:"id"`
 	CardID           int64  `json:"card_id"`
 	CardLastFour     string `json:"card_last_four"`
@@ -22,6 +23,7 @@ type CardFailEvent struct {
 
 // CardBlockEntry 本站坏卡黑名单。
 type CardBlockEntry struct {
+	AccountID      int64  `json:"account_id"`
 	CardID         int64  `json:"card_id"`
 	CardLastFour   string `json:"card_last_four"`
 	Reason         string `json:"reason"`
@@ -37,6 +39,7 @@ type CardBlockEntry struct {
 
 // CardFailStats 某卡失败聚合。
 type CardFailStats struct {
+	AccountID      int64
 	CardID         int64
 	FailCount      int
 	DistinctEmails int
@@ -49,8 +52,8 @@ func InsertCardFailEvent(ev CardFailEvent) (inserted bool, err error) {
 	if DB == nil {
 		return false, fmt.Errorf("db not ready")
 	}
-	if ev.CardID <= 0 {
-		return false, fmt.Errorf("card_id required")
+	if ev.AccountID <= 0 || ev.CardID <= 0 {
+		return false, fmt.Errorf("account_id and card_id required")
 	}
 	ev.AccountEmailNorm = strings.ToLower(strings.TrimSpace(ev.AccountEmailNorm))
 	if ev.AccountEmailNorm == "" {
@@ -67,11 +70,11 @@ func InsertCardFailEvent(ev CardFailEvent) (inserted bool, err error) {
 	}
 
 	res, err := DB.Exec(`
-		INSERT OR IGNORE INTO card_fail_events
-			(card_id, card_last_four, order_id, cdk_code, account_email_norm, email_source,
+		INSERT OR IGNORE INTO account_card_fail_events
+			(account_id, card_id, card_last_four, order_id, cdk_code, account_email_norm, email_source,
 			 error_code, order_status, verdict, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`, ev.CardID, ev.CardLastFour, ev.OrderID, ev.CDKCode, ev.AccountEmailNorm, ev.EmailSource,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, ev.AccountID, ev.CardID, ev.CardLastFour, ev.OrderID, ev.CDKCode, ev.AccountEmailNorm, ev.EmailSource,
 		ev.ErrorCode, ev.OrderStatus, ev.Verdict)
 	if err != nil {
 		return false, err
@@ -81,24 +84,24 @@ func InsertCardFailEvent(ev CardFailEvent) (inserted bool, err error) {
 }
 
 // GetCardFailStats 统计某卡失败次数与去重邮箱数（不含 unknown 时仍计入 fail，但 distinct 可配置）。
-func GetCardFailStats(cardID int64) (*CardFailStats, error) {
+func GetCardFailStats(accountID, cardID int64) (*CardFailStats, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not ready")
 	}
-	if cardID <= 0 {
-		return nil, fmt.Errorf("card_id required")
+	if accountID <= 0 || cardID <= 0 {
+		return nil, fmt.Errorf("account_id and card_id required")
 	}
 	rows, err := DB.Query(`
-		SELECT account_email_norm FROM card_fail_events
-		WHERE card_id = ?
+		SELECT account_email_norm FROM account_card_fail_events
+		WHERE account_id = ? AND card_id = ?
 		ORDER BY id ASC
-	`, cardID)
+	`, accountID, cardID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	st := &CardFailStats{CardID: cardID}
+	st := &CardFailStats{AccountID: accountID, CardID: cardID}
 	seen := map[string]struct{}{}
 	for rows.Next() {
 		var em string
@@ -120,7 +123,7 @@ func GetCardFailStats(cardID int64) (*CardFailStats, error) {
 }
 
 // ListCardFailEvents 最近失败事件。
-func ListCardFailEvents(limit int) ([]CardFailEvent, error) {
+func ListCardFailEvents(accountID int64, limit int) ([]CardFailEvent, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not ready")
 	}
@@ -128,12 +131,13 @@ func ListCardFailEvents(limit int) ([]CardFailEvent, error) {
 		limit = 50
 	}
 	rows, err := DB.Query(`
-		SELECT id, card_id, card_last_four, order_id, cdk_code, account_email_norm, email_source,
+		SELECT id, account_id, card_id, card_last_four, order_id, cdk_code, account_email_norm, email_source,
 		       error_code, order_status, verdict, created_at
-		FROM card_fail_events
+		FROM account_card_fail_events
+		WHERE account_id = ?
 		ORDER BY id DESC
 		LIMIT ?
-	`, limit)
+	`, accountID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +145,7 @@ func ListCardFailEvents(limit int) ([]CardFailEvent, error) {
 	var out []CardFailEvent
 	for rows.Next() {
 		var e CardFailEvent
-		if err := rows.Scan(&e.ID, &e.CardID, &e.CardLastFour, &e.OrderID, &e.CDKCode, &e.AccountEmailNorm,
+		if err := rows.Scan(&e.ID, &e.AccountID, &e.CardID, &e.CardLastFour, &e.OrderID, &e.CDKCode, &e.AccountEmailNorm,
 			&e.EmailSource, &e.ErrorCode, &e.OrderStatus, &e.Verdict, &e.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -151,15 +155,15 @@ func ListCardFailEvents(limit int) ([]CardFailEvent, error) {
 }
 
 // IsCardBlocked 卡是否在本站活跃黑名单。
-func IsCardBlocked(cardID int64) (bool, error) {
-	if DB == nil || cardID <= 0 {
+func IsCardBlocked(accountID, cardID int64) (bool, error) {
+	if DB == nil || accountID <= 0 || cardID <= 0 {
 		return false, nil
 	}
 	var n int
 	err := DB.QueryRow(`
-		SELECT COUNT(1) FROM card_blocklist
-		WHERE card_id = ? AND unblocked_at IS NULL
-	`, cardID).Scan(&n)
+		SELECT COUNT(1) FROM account_card_blocklist
+		WHERE account_id = ? AND card_id = ? AND unblocked_at IS NULL
+	`, accountID, cardID).Scan(&n)
 	return n > 0, err
 }
 
@@ -168,8 +172,8 @@ func UpsertCardBlock(entry CardBlockEntry) error {
 	if DB == nil {
 		return fmt.Errorf("db not ready")
 	}
-	if entry.CardID <= 0 {
-		return fmt.Errorf("card_id required")
+	if entry.AccountID <= 0 || entry.CardID <= 0 {
+		return fmt.Errorf("account_id and card_id required")
 	}
 	entry.CardLastFour = strings.TrimSpace(entry.CardLastFour)
 	entry.Reason = strings.TrimSpace(entry.Reason)
@@ -180,54 +184,54 @@ func UpsertCardBlock(entry CardBlockEntry) error {
 	entry.FreezeError = strings.TrimSpace(entry.FreezeError)
 	entry.Notes = strings.TrimSpace(entry.Notes)
 	_, err := DB.Exec(`
-		INSERT INTO card_blocklist
-			(card_id, card_last_four, reason, distinct_emails, fail_count, freeze_status, freeze_error, blocked_at, unblocked_at, notes)
-		VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, ?)
-		ON CONFLICT(card_id) DO UPDATE SET
-			card_last_four = CASE WHEN excluded.card_last_four != '' THEN excluded.card_last_four ELSE card_blocklist.card_last_four END,
+		INSERT INTO account_card_blocklist
+			(account_id, card_id, card_last_four, reason, distinct_emails, fail_count, freeze_status, freeze_error, blocked_at, unblocked_at, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, NULL, ?)
+		ON CONFLICT(account_id, card_id) DO UPDATE SET
+			card_last_four = CASE WHEN excluded.card_last_four != '' THEN excluded.card_last_four ELSE account_card_blocklist.card_last_four END,
 			reason = excluded.reason,
 			distinct_emails = excluded.distinct_emails,
 			fail_count = excluded.fail_count,
-			freeze_status = CASE WHEN excluded.freeze_status != '' THEN excluded.freeze_status ELSE card_blocklist.freeze_status END,
+			freeze_status = CASE WHEN excluded.freeze_status != '' THEN excluded.freeze_status ELSE account_card_blocklist.freeze_status END,
 			freeze_error = excluded.freeze_error,
 			blocked_at = CURRENT_TIMESTAMP,
 			unblocked_at = NULL,
-			notes = CASE WHEN excluded.notes != '' THEN excluded.notes ELSE card_blocklist.notes END
-	`, entry.CardID, entry.CardLastFour, entry.Reason, entry.DistinctEmails, entry.FailCount,
+			notes = CASE WHEN excluded.notes != '' THEN excluded.notes ELSE account_card_blocklist.notes END
+	`, entry.AccountID, entry.CardID, entry.CardLastFour, entry.Reason, entry.DistinctEmails, entry.FailCount,
 		entry.FreezeStatus, entry.FreezeError, entry.Notes)
 	return err
 }
 
 // UpdateCardBlockFreeze 更新冻结结果。
-func UpdateCardBlockFreeze(cardID int64, status, freezeErr string) error {
-	if DB == nil || cardID <= 0 {
+func UpdateCardBlockFreeze(accountID, cardID int64, status, freezeErr string) error {
+	if DB == nil || accountID <= 0 || cardID <= 0 {
 		return fmt.Errorf("db not ready")
 	}
 	_, err := DB.Exec(`
-		UPDATE card_blocklist
+		UPDATE account_card_blocklist
 		SET freeze_status = ?, freeze_error = ?
-		WHERE card_id = ? AND unblocked_at IS NULL
-	`, strings.TrimSpace(status), strings.TrimSpace(freezeErr), cardID)
+		WHERE account_id = ? AND card_id = ? AND unblocked_at IS NULL
+	`, strings.TrimSpace(status), strings.TrimSpace(freezeErr), accountID, cardID)
 	return err
 }
 
 // UnblockCard 解除本站拉黑（不自动解冻卡台侧，由调用方决定）。
-func UnblockCard(cardID int64, notes string) error {
-	if DB == nil || cardID <= 0 {
+func UnblockCard(accountID, cardID int64, notes string) error {
+	if DB == nil || accountID <= 0 || cardID <= 0 {
 		return fmt.Errorf("invalid card")
 	}
 	notes = strings.TrimSpace(notes)
 	_, err := DB.Exec(`
-		UPDATE card_blocklist
+		UPDATE account_card_blocklist
 		SET unblocked_at = CURRENT_TIMESTAMP,
 		    notes = CASE WHEN ? != '' THEN ? ELSE notes END
-		WHERE card_id = ? AND unblocked_at IS NULL
-	`, notes, notes, cardID)
+		WHERE account_id = ? AND card_id = ? AND unblocked_at IS NULL
+	`, notes, notes, accountID, cardID)
 	return err
 }
 
 // ListCardBlocklist 活跃 + 可选历史。
-func ListCardBlocklist(includeInactive bool, limit int) ([]CardBlockEntry, error) {
+func ListCardBlocklist(accountID int64, includeInactive bool, limit int) ([]CardBlockEntry, error) {
 	if DB == nil {
 		return nil, fmt.Errorf("db not ready")
 	}
@@ -235,16 +239,17 @@ func ListCardBlocklist(includeInactive bool, limit int) ([]CardBlockEntry, error
 		limit = 50
 	}
 	q := `
-		SELECT card_id, card_last_four, reason, distinct_emails, fail_count,
+		SELECT account_id, card_id, card_last_four, reason, distinct_emails, fail_count,
 		       freeze_status, freeze_error, blocked_at,
 		       COALESCE(unblocked_at, ''), notes
-		FROM card_blocklist
+		FROM account_card_blocklist
+		WHERE account_id = ?
 	`
 	if !includeInactive {
-		q += ` WHERE unblocked_at IS NULL`
+		q += ` AND unblocked_at IS NULL`
 	}
 	q += ` ORDER BY blocked_at DESC LIMIT ?`
-	rows, err := DB.Query(q, limit)
+	rows, err := DB.Query(q, accountID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +258,7 @@ func ListCardBlocklist(includeInactive bool, limit int) ([]CardBlockEntry, error
 	for rows.Next() {
 		var e CardBlockEntry
 		var unblocked string
-		if err := rows.Scan(&e.CardID, &e.CardLastFour, &e.Reason, &e.DistinctEmails, &e.FailCount,
+		if err := rows.Scan(&e.AccountID, &e.CardID, &e.CardLastFour, &e.Reason, &e.DistinctEmails, &e.FailCount,
 			&e.FreezeStatus, &e.FreezeError, &e.BlockedAt, &unblocked, &e.Notes); err != nil {
 			return nil, err
 		}
@@ -266,10 +271,24 @@ func ListCardBlocklist(includeInactive bool, limit int) ([]CardBlockEntry, error
 
 // ListActiveBlockedCardIDs 活跃坏卡 ID 列表。
 func ListActiveBlockedCardIDs() ([]int64, error) {
+	acc, err := PrimaryCardPlatformAccount()
+	if err != nil {
+		return nil, err
+	}
+	return ListActiveBlockedCardIDsForAccount(acc.ID)
+}
+
+func ListActiveBlockedCardIDsForAccount(accountID int64) ([]int64, error) {
 	if DB == nil {
 		return nil, nil
 	}
-	rows, err := DB.Query(`SELECT card_id FROM card_blocklist WHERE unblocked_at IS NULL`)
+	if accountID <= 0 {
+		return nil, fmt.Errorf("invalid account id")
+	}
+	rows, err := DB.Query(`
+		SELECT card_id FROM account_card_blocklist
+		WHERE account_id = ? AND unblocked_at IS NULL
+	`, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -287,9 +306,9 @@ func ListActiveBlockedCardIDs() ([]int64, error) {
 
 // CardHealthPolicy 本站卡健康策略（site_settings）。
 type CardHealthPolicy struct {
-	Enabled        bool   `json:"enabled"`
-	FailThreshold  int    `json:"fail_threshold"`  // 默认 2
-	FreezeOnBlock  bool   `json:"freeze_on_block"` // 判定坏卡后调卡台冻结
+	Enabled       bool `json:"enabled"`
+	FailThreshold int  `json:"fail_threshold"`  // 默认 2
+	FreezeOnBlock bool `json:"freeze_on_block"` // 判定坏卡后调卡台冻结
 	// RequireKnownEmail：失败记录邮箱均为 unknown 时不拉黑（避免无邮箱误伤）
 	RequireKnownEmail bool `json:"require_known_email"`
 }
@@ -304,4 +323,3 @@ func DefaultCardHealthPolicy() CardHealthPolicy {
 		RequireKnownEmail: true,
 	}
 }
-

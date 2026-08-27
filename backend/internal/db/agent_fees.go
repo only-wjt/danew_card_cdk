@@ -49,8 +49,10 @@ func migrateAgentPlanFees() error {
 			WHERE COALESCE(price_cny_cents, 0) = 0 AND COALESCE(fee_usd, 0) > 0
 		`)
 	}
-	_, err = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_plan_fees_agent ON agent_plan_fees(agent_user_id)`)
-	return err
+	if _, err = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_agent_plan_fees_agent ON agent_plan_fees(agent_user_id)`); err != nil {
+		return err
+	}
+	return seedLocalStockDefaultPrices()
 }
 
 // GetAgentDefaultPlanPrices 读取全局默认套餐代理价（分）。

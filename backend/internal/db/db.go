@@ -352,6 +352,9 @@ func createTables() error {
 	if err := migrateAgentPortal(); err != nil {
 		log.Printf("migrateAgentPortal: %v", err)
 	}
+	if err := migrateSiteDualBindSchema(); err != nil {
+		return fmt.Errorf("migrate dual-bind schema: %w", err)
+	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
 	}
@@ -991,6 +994,11 @@ func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMin
 
 // SaveCardplatformCDKCodeWithStatus 同上，并写入/更新 status。
 func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan string, feeMinor int64, status string) error {
+	return SaveCardplatformCDKCodeForAccount(upstreamID, code, prefix, plan, feeMinor, status, 0)
+}
+
+// SaveCardplatformCDKCodeForAccount 由发码调用方传实际账户；accountID=0 仅用于迁移前老码回填。
+func SaveCardplatformCDKCodeForAccount(upstreamID int64, code, prefix, plan string, feeMinor int64, status string, accountID int64) error {
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
@@ -1007,16 +1015,31 @@ func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan stri
 	if status == "" {
 		status = "unused"
 	}
+	codeKind := CodeKindLegacy
+	if strings.HasPrefix(strings.ToUpper(code), "DN-") {
+		// 缓存同步进来的 DN- 码不能当 legacy 直送主台；标为 site 后会在列表显示
+		// “绑定降级”，兑换也会要求存在 binding，避免把本站码错误发给上游。
+		codeKind = CodeKindSite
+	}
+	if codeKind != CodeKindLegacy {
+		accountID = 0
+	}
 	_, err := DB.Exec(`
-		INSERT INTO cardplatform_cdk_codes (upstream_id, code, code_prefix, plan, fee_amount_minor, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO cardplatform_cdk_codes
+			(upstream_id, code, code_prefix, plan, fee_amount_minor, status, code_kind, fulfilled_account_id, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(code) DO UPDATE SET
 			upstream_id = excluded.upstream_id,
 			code_prefix = excluded.code_prefix,
 			plan = CASE WHEN excluded.plan != '' THEN excluded.plan ELSE cardplatform_cdk_codes.plan END,
 			fee_amount_minor = CASE WHEN excluded.fee_amount_minor > 0 THEN excluded.fee_amount_minor ELSE cardplatform_cdk_codes.fee_amount_minor END,
-			status = CASE WHEN excluded.status != '' THEN excluded.status ELSE cardplatform_cdk_codes.status END
-	`, upstreamID, code, prefix, plan, feeMinor, status)
+			status = CASE WHEN excluded.status != '' THEN excluded.status ELSE cardplatform_cdk_codes.status END,
+			code_kind = CASE WHEN excluded.code_kind = 'site' THEN 'site' ELSE cardplatform_cdk_codes.code_kind END,
+			fulfilled_account_id = CASE
+				WHEN cardplatform_cdk_codes.fulfilled_account_id > 0 THEN cardplatform_cdk_codes.fulfilled_account_id
+				ELSE excluded.fulfilled_account_id
+			END
+	`, upstreamID, code, prefix, plan, feeMinor, status, codeKind, accountID)
 	if err != nil {
 		return fmt.Errorf("save cardplatform cdk: %w", err)
 	}
@@ -1025,7 +1048,7 @@ func SaveCardplatformCDKCodeWithStatus(upstreamID int64, code, prefix, plan stri
 
 // UpdateCardplatformCDKStatus 按上游 id 更新本站缓存的状态（禁用/解禁后刷新列表）。
 func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
-	if DB == nil || upstreamID <= 0 {
+	if DB == nil || upstreamID == 0 {
 		return nil
 	}
 	status = strings.TrimSpace(strings.ToLower(status))
@@ -1038,7 +1061,7 @@ func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
 
 // GetCardplatformCDKStatus 读本站缓存状态；无记录返回空串。
 func GetCardplatformCDKStatus(upstreamID int64) string {
-	if DB == nil || upstreamID <= 0 {
+	if DB == nil || upstreamID == 0 {
 		return ""
 	}
 	var st string
@@ -1061,13 +1084,38 @@ func CountCardplatformCDKCodes() int {
 
 // StoredCDKCode 本站已存的完整码行。
 type StoredCDKCode struct {
-	UpstreamID     int64  `json:"id"`
-	Code           string `json:"code"`
-	CodePrefix     string `json:"code_prefix"`
-	Plan           string `json:"plan"`
-	FeeAmountMinor int64  `json:"fee_amount_minor"`
-	Status         string `json:"status"`
-	CreatedAt      string `json:"created_at"`
+	UpstreamID         int64  `json:"id"`
+	RowID              int64  `json:"row_id"`
+	Code               string `json:"code"`
+	CodePrefix         string `json:"code_prefix"`
+	Plan               string `json:"plan"`
+	FeeAmountMinor     int64  `json:"fee_amount_minor"`
+	Status             string `json:"status"`
+	CreatedAt          string `json:"created_at"`
+	CodeKind           string `json:"code_kind"`
+	IssueStatus        string `json:"issue_status"`
+	DualEligible       bool   `json:"dual_eligible"`
+	BindingTotal       int    `json:"binding_total"`
+	BindingUsable      int    `json:"binding_usable"`
+	BindingSummary     string `json:"binding_summary"`
+	FulfilledAccountID int64  `json:"fulfilled_account_id"`
+	FulfilledAccount   string `json:"fulfilled_account"`
+	FulfilledProvider  string `json:"fulfilled_provider"`
+	FailoverUsed       bool   `json:"failover_used"`
+	FailoverReason     string `json:"failover_reason"`
+}
+
+// StoredCDKListQuery 管理端本站码列表筛选。
+type StoredCDKListQuery struct {
+	Plan             string
+	Q                string
+	Status           string
+	CodeKind         string // legacy / site / local_stock
+	BindingState     string // complete / degraded / none
+	FulfilledAccount int64
+	Failover         string // yes / no
+	Page             int
+	PageSize         int
 }
 
 // ListCardplatformStoredCDKCodes 列出本站 SQLite 中的完整码（可按 plan / q / status 过滤）。
@@ -1126,42 +1174,97 @@ func ListCardplatformStoredCDKCodesFilter(plan, q, status string, limit int) ([]
 // page 从 1 起；pageSize<=0 时默认 20；单页硬顶 500（列表），导出请用更大 limit 的旧路径或 pageSize 上限 10000。
 // 返回 list + 过滤后 total。
 func ListCardplatformStoredCDKCodesPage(plan, q, status string, page, pageSize int) ([]StoredCDKCode, int, error) {
+	return ListStoredCDKsDetailed(StoredCDKListQuery{
+		Plan: plan, Q: q, Status: status, Page: page, PageSize: pageSize,
+	})
+}
+
+// ListStoredCDKsDetailed 带双绑、履约台与 failover 元数据分页列出本站码。
+func ListStoredCDKsDetailed(query StoredCDKListQuery) ([]StoredCDKCode, int, error) {
 	if DB == nil {
 		return nil, 0, fmt.Errorf("db not init")
 	}
-	if page < 1 {
-		page = 1
+	if query.Page < 1 {
+		query.Page = 1
 	}
-	if pageSize <= 0 {
-		pageSize = 20
+	if query.PageSize <= 0 {
+		query.PageSize = 20
 	}
-	if pageSize > 10000 {
-		pageSize = 10000
+	if query.PageSize > 10000 {
+		query.PageSize = 10000
 	}
-	total, err := CountCardplatformStoredCDKCodesFilter(plan, q, status)
-	if err != nil {
+	where, args := cardplatformStoredWhere(query.Plan, query.Q, query.Status)
+	kind := strings.ToLower(strings.TrimSpace(query.CodeKind))
+	if kind != "" {
+		where += ` AND COALESCE(code_kind, 'legacy') = ?`
+		args = append(args, kind)
+	}
+	switch strings.ToLower(strings.TrimSpace(query.BindingState)) {
+	case "complete":
+		where += ` AND COALESCE(code_kind,'legacy') = 'site'
+			AND (SELECT COUNT(*) FROM site_cdk_bindings b WHERE b.site_code_id = c.id) >= 2`
+	case "degraded":
+		where += ` AND COALESCE(code_kind,'legacy') = 'site'
+			AND (SELECT COUNT(*) FROM site_cdk_bindings b WHERE b.site_code_id = c.id) < 2`
+	case "none":
+		where += ` AND COALESCE(code_kind,'legacy') != 'site'`
+	}
+	if query.FulfilledAccount > 0 {
+		where += ` AND COALESCE(fulfilled_account_id,0) = ?`
+		args = append(args, query.FulfilledAccount)
+	}
+	switch strings.ToLower(strings.TrimSpace(query.Failover)) {
+	case "yes", "1", "true":
+		where += ` AND COALESCE(failover_used,0) = 1`
+	case "no", "0", "false":
+		where += ` AND COALESCE(failover_used,0) = 0`
+	}
+
+	var total int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM cardplatform_cdk_codes c`+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	where, args := cardplatformStoredWhere(plan, q, status)
-	offset := (page - 1) * pageSize
-	sql := `
-		SELECT COALESCE(upstream_id,0), code, COALESCE(code_prefix,''), COALESCE(plan,''),
-		       COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(created_at,'')
-		FROM cardplatform_cdk_codes` + where + `
+	offset := (query.Page - 1) * query.PageSize
+	sqlText := `
+		SELECT COALESCE(c.upstream_id,0), c.id, c.code, COALESCE(c.code_prefix,''), COALESCE(c.plan,''),
+		       COALESCE(c.fee_amount_minor,0), COALESCE(c.status,''), COALESCE(c.created_at,''),
+		       COALESCE(c.code_kind,'legacy'), COALESCE(c.issue_status,'active'), COALESCE(c.dual_eligible,0),
+		       (SELECT COUNT(*) FROM site_cdk_bindings b WHERE b.site_code_id = c.id),
+		       (SELECT COUNT(*) FROM site_cdk_bindings b WHERE b.site_code_id = c.id
+		          AND lower(COALESCE(b.status,'')) IN ('unused','redeeming','reserved')),
+		       COALESCE((SELECT GROUP_CONCAT(
+		          COALESCE(a.name, '账户'||b.account_id) || ':' || COALESCE(b.status,'unknown'), ' / ')
+		          FROM site_cdk_bindings b
+		          LEFT JOIN card_platform_accounts a ON a.id = b.account_id
+		          WHERE b.site_code_id = c.id ORDER BY b.is_primary DESC, b.id ASC), ''),
+		       COALESCE(c.fulfilled_account_id,0),
+		       COALESCE((SELECT name FROM card_platform_accounts a WHERE a.id = c.fulfilled_account_id),''),
+		       COALESCE(c.fulfilled_provider,''), COALESCE(c.failover_used,0), COALESCE(c.failover_reason,'')
+		FROM cardplatform_cdk_codes c` + strings.Replace(where, " WHERE ", " WHERE ", 1) + `
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ? OFFSET ?`
-	args = append(args, pageSize, offset)
-	rows, err := DB.Query(sql, args...)
+	args = append(args, query.PageSize, offset)
+	rows, err := DB.Query(sqlText, args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	out := make([]StoredCDKCode, 0, pageSize)
+	out := make([]StoredCDKCode, 0, query.PageSize)
 	for rows.Next() {
 		var it StoredCDKCode
-		if err := rows.Scan(&it.UpstreamID, &it.Code, &it.CodePrefix, &it.Plan, &it.FeeAmountMinor, &it.Status, &it.CreatedAt); err != nil {
+		var dual, failover int
+		if err := rows.Scan(
+			&it.UpstreamID, &it.RowID, &it.Code, &it.CodePrefix, &it.Plan,
+			&it.FeeAmountMinor, &it.Status, &it.CreatedAt,
+			&it.CodeKind, &it.IssueStatus, &dual,
+			&it.BindingTotal, &it.BindingUsable, &it.BindingSummary,
+			&it.FulfilledAccountID, &it.FulfilledAccount, &it.FulfilledProvider,
+			&failover, &it.FailoverReason,
+		); err != nil {
 			return nil, 0, err
 		}
+		it.DualEligible = dual != 0
+		it.FailoverUsed = failover != 0
 		it.Code = strings.TrimSpace(it.Code)
 		if it.Code == "" {
 			continue
@@ -1196,7 +1299,6 @@ func LookupCardplatformCDKCode(upstreamID int64, prefix string) (string, bool) {
 	}
 	return "", false
 }
-
 
 // ---- CDK 备注（本站）----
 
@@ -1331,8 +1433,6 @@ func MapCardplatformCDKNotes(ids []int64) map[int64]string {
 	return out
 }
 
-
-
 // ---- 代理失败换码 ----
 
 func HashCDKCode(code string) string {
@@ -1386,6 +1486,7 @@ func RecordAgentCDKExchange(oldHash string, oldID, newID int64, oldPrefix, newPr
 
 // CardSelectionRule 一条选卡规则（按 sort_order 排列优先级）。
 type CardSelectionRule struct {
+	AccountID   int64  `json:"account_id,omitempty"`
 	ID          int64  `json:"id"`
 	SortOrder   int    `json:"sort_order"`
 	PlanKey     string `json:"plan_key"`
@@ -1398,6 +1499,7 @@ type CardSelectionRule struct {
 
 // PlanStatusCache 卡台产品状态缓存条目。
 type PlanStatusCache struct {
+	AccountID          int64   `json:"account_id,omitempty"`
 	PlanKey            string  `json:"plan_key"`
 	Label              string  `json:"label"`
 	Online             bool    `json:"online"`
@@ -1533,6 +1635,7 @@ func UpsertPlanStatus(planKey, label string, online bool, feeMinor int64) error 
 
 // CardProductCache 卡台实体产品缓存条目。
 type CardProductCache struct {
+	AccountID   int64    `json:"account_id,omitempty"`
 	ProductCode string   `json:"product_code"`
 	Issuer      string   `json:"issuer"`
 	BIN         string   `json:"bin"`

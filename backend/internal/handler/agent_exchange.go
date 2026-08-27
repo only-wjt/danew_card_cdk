@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -227,11 +227,11 @@ func PublicAgentCDKExchange(c *gin.Context) {
 
 	if !orderLooksUnpaid(status, stage, finalMinor, events) {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error":         "不符合换码条件（需充值失败且未扣款）",
-			"order_status":  status,
-			"order_stage":   stage,
-			"final_amount":  finalMinor,
-			"local_status":  localStatus,
+			"error":        "不符合换码条件（需充值失败且未扣款）",
+			"order_status": status,
+			"order_stage":  stage,
+			"final_amount": finalMinor,
+			"local_status": localStatus,
 		})
 		return
 	}
@@ -276,7 +276,7 @@ func PublicAgentCDKExchange(c *gin.Context) {
 	if newPrefix == "" && len(newCode) >= 14 {
 		newPrefix = newCode[:14]
 	}
-	_ = db.SaveCardplatformCDKCode(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor)
+	_ = db.SaveCardplatformCDKCodeForAccount(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor, "unused", primaryCardAccountID())
 
 	// 禁用旧码（防再次兑换）
 	if err := cli.DisableCDK(c.Request.Context(), upstreamID); err != nil {
@@ -292,15 +292,15 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		ip)
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok": true,
-		"plan": plan,
-		"old_cdk_id": upstreamID,
+		"ok":              true,
+		"plan":            plan,
+		"old_cdk_id":      upstreamID,
 		"old_code_prefix": prefix,
-		"new_cdk_id": newIt.ID,
-		"new_code": newCode,
+		"new_cdk_id":      newIt.ID,
+		"new_code":        newCode,
 		"new_code_prefix": newPrefix,
-		"order_status": status,
-		"message": "已换发全新卡密，请妥善保存（仅显示一次）",
+		"order_status":    status,
+		"message":         "已换发全新卡密，请妥善保存（仅显示一次）",
 	})
 }
 
@@ -389,4 +389,3 @@ func anyToInt64(v any) int64 {
 		return 0
 	}
 }
-

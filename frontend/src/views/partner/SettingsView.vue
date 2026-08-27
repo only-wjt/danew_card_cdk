@@ -3,7 +3,12 @@
     <section class="card space-y-5">
       <div>
         <h3 class="section-title">Webhook 回调</h3>
-        <p class="text-sm text-muted mt-1">充值结果变更时，系统会向此 URL 发送 POST 通知。</p>
+        <p class="text-sm text-muted mt-1">
+          代客充值终态推 <code class="mono">recharge.*</code>；购卡发货推
+          <code class="mono">order.delivered</code>（带完整卡密，供二级入库），失败推
+          <code class="mono">order.fulfill_failed</code>。同一 URL，用请求头
+          <code class="mono">X-Webhook-Event</code> 分支。
+        </p>
       </div>
       <div class="form-group">
         <label>Webhook URL</label>

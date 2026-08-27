@@ -18,7 +18,7 @@
           <label>套餐</label>
           <select v-model="filters.plan" class="field-select">
             <option value="">全部套餐</option>
-            <option v-for="p in plans" :key="p.key" :value="p.key">{{ p.label || p.key }}</option>
+            <option v-for="p in plans" :key="p.key" :value="p.key">{{ planLabel(p.key) }}</option>
           </select>
         </div>
         <div class="form-group !mb-0">
@@ -49,7 +49,7 @@
     <section class="card overflow-hidden !p-0">
       <div class="table-head">
         <span>共 <b class="text-ink">{{ total }}</b> 张卡密</span>
-        <span class="text-xs text-muted">站长分配后在此查看完整卡密，无需再通过微信交接</span>
+        <span class="text-xs text-muted">站长分配或购卡入库后可复制发给下级；GPT白号不能用于本站代充</span>
       </div>
       <div class="overflow-x-auto">
         <table class="data-table">
@@ -73,7 +73,7 @@
             </tr>
             <tr v-for="row in rows" :key="row.code">
               <td class="text-muted whitespace-nowrap text-sm">{{ formatDate(row.created_at) }}</td>
-              <td><span class="pill pill-info">{{ row.plan || '—' }}</span></td>
+              <td><span class="pill pill-info">{{ planLabel(row.plan) }}</span></td>
               <td class="mono text-sm select-all">{{ row.code }}</td>
               <td><span :class="cdkStatusClass(row.status)">{{ cdkStatusLabel(row.status) }}</span></td>
               <td class="text-right whitespace-nowrap">
@@ -141,6 +141,13 @@ const unusedOnPage = computed(() =>
 
 function formatDate(v: string) {
   return formatPartnerDate(v)
+}
+
+function planLabel(key: string) {
+  const hit = plans.value.find((p) => p.key === key)
+  if (hit?.label) return hit.label
+  if (key === 'gpt_white') return 'GPT白号'
+  return key || '—'
 }
 
 function isCopyable(status: string) {

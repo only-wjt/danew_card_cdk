@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/danew/cdk-recharge-system/internal/db"
@@ -45,7 +46,7 @@ func defaultSiteRedeemPolicy() SiteRedeemPolicy {
 		AutoOpenWhenNoCard:    true,
 		MaxNewAccountsPerCard: 4,
 		MaxCardsPerTask:       3,
-		FailCooldownHours:      24,
+		FailCooldownHours:     24,
 		IssuingArea:           "United States",
 		HolderFirst:           "GPT",
 		HolderLast:            "Direct",
@@ -53,12 +54,30 @@ func defaultSiteRedeemPolicy() SiteRedeemPolicy {
 }
 
 func loadSiteRedeemPolicy() SiteRedeemPolicy {
+	return loadSiteRedeemPolicyForAccount(0)
+}
+
+func loadSiteRedeemPolicyForAccount(accountID int64) SiteRedeemPolicy {
 	p := defaultSiteRedeemPolicy()
-	raw, err := db.GetSetting(siteRedeemPolicyKey)
+	key := siteRedeemPolicyKey
+	if accountID > 0 {
+		key = fmt.Sprintf("%s_%d", siteRedeemPolicyKey, accountID)
+	}
+	raw, err := db.GetSetting(key)
+	inherited := false
+	if (err != nil || strings.TrimSpace(raw) == "") && accountID > 0 {
+		raw, err = db.GetSetting(siteRedeemPolicyKey)
+		inherited = true
+	}
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return p
 	}
 	_ = json.Unmarshal([]byte(raw), &p)
+	if inherited {
+		// 老单台指定的 product_code 不能复制给另一家卡台；账户规则才是映射源。
+		p.ProductCode = ""
+		p.Issuer = ""
+	}
 	if p.MaxNewAccountsPerCard <= 0 {
 		p.MaxNewAccountsPerCard = 4
 	}
@@ -72,6 +91,10 @@ func loadSiteRedeemPolicy() SiteRedeemPolicy {
 }
 
 func saveSiteRedeemPolicy(p SiteRedeemPolicy) error {
+	return saveSiteRedeemPolicyForAccount(0, p)
+}
+
+func saveSiteRedeemPolicyForAccount(accountID int64, p SiteRedeemPolicy) error {
 	if p.MaxNewAccountsPerCard <= 0 {
 		p.MaxNewAccountsPerCard = 4
 	}
@@ -90,7 +113,18 @@ func saveSiteRedeemPolicy(p SiteRedeemPolicy) error {
 	if err != nil {
 		return err
 	}
-	return db.SetSetting(siteRedeemPolicyKey, string(b))
+	key := siteRedeemPolicyKey
+	if accountID > 0 {
+		key = fmt.Sprintf("%s_%d", siteRedeemPolicyKey, accountID)
+	}
+	return db.SetSetting(key, string(b))
+}
+
+func resolveIssueCardPrefForAccount(accountID int64, policy SiteRedeemPolicy) (issuer, segmentType, segmentKey string) {
+	if policy.Enabled && policy.ProductCode != "" {
+		return strings.ToLower(strings.TrimSpace(policy.Issuer)), "product", strings.TrimSpace(policy.ProductCode)
+	}
+	return db.PreferredCardSelectionForAccount(accountID)
 }
 
 // resolveIssueCardPref 发码偏好：策略指定产品 > 选卡配置首条启用规则。

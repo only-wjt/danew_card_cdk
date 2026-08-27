@@ -37,6 +37,23 @@ func TestAgentCDKAssignAndRechargeGate(t *testing.T) {
 	}
 }
 
+func TestCheckAgentCDKForRechargeRejectsLocalStock(t *testing.T) {
+	openTestDB(t)
+	agent, err := CreateAgentUser("whitecdka", "AgentTestPass2026", "W", nil)
+	if err != nil {
+		t.Fatalf("agent: %v", err)
+	}
+	if _, _, err := ImportLocalStockCodes(PlanGPTWhite, []string{"w@example.com"}); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if _, err := ClaimUnassignedLocalStock(agent.ID, PlanGPTWhite, 1); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	if err := CheckAgentCDKForRecharge(agent.ID, PlanGPTWhite, "w@example.com"); err != ErrCDKLocalStock {
+		t.Fatalf("want ErrCDKLocalStock got %v", err)
+	}
+}
+
 func TestValidateAgentCDKBatchDedup(t *testing.T) {
 	openTestDB(t)
 	agent, err := CreateAgentUser("valagent", "AgentTestPass2026", "V", nil)

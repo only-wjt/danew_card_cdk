@@ -195,11 +195,16 @@ func coreSellableFallbackPlans() []pricedPlanMeta {
 	}
 }
 
+func localStockPlans() []pricedPlanMeta {
+	return []pricedPlanMeta{{Key: db.PlanGPTWhite, Label: db.PlanGPTWhiteLabel}}
+}
+
 func corePricedPlans() []pricedPlanMeta {
 	core := coreSellableFallbackPlans()
-	out := make([]pricedPlanMeta, 0, len(core)+2)
+	out := make([]pricedPlanMeta, 0, len(core)+3)
 	out = append(out, core[:3]...)
 	out = append(out, pricedPlanMeta{Key: "pro", Label: "Pro"}, pricedPlanMeta{Key: "go", Label: "Go"})
+	out = append(out, localStockPlans()...)
 	out = append(out, core[3:]...)
 	return out
 }
@@ -263,9 +268,9 @@ func resolveAgentPlanCatalog(c *gin.Context, agent *db.AgentUser) []pricedPlanMe
 	live, ok := liveSellablePlans(c)
 	var catalog []pricedPlanMeta
 	if ok {
-		catalog = mergePricedPlans(nil, live)
+		catalog = mergePricedPlans(localStockPlans(), live)
 	} else {
-		catalog = coreSellableFallbackPlans()
+		catalog = append(localStockPlans(), coreSellableFallbackPlans()...)
 	}
 	out := make([]pricedPlanMeta, 0, len(catalog))
 	for _, p := range catalog {

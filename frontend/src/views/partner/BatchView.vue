@@ -14,7 +14,7 @@
           <label>套餐</label>
           <select v-model="plan" class="field-select" @change="onPlanChange">
             <option value="" disabled>请选择套餐</option>
-            <option v-for="p in plans" :key="p.key" :value="p.key">
+            <option v-for="p in rechargePlans" :key="p.key" :value="p.key">
               {{ p.label || p.key }}
             </option>
           </select>
@@ -293,7 +293,7 @@ import { agentFetch } from '../../lib/agentApi'
 import { extractCdkSession, parseMailboxLines } from '../../lib/batch-session'
 import { formatPartnerDate, statusClass, statusLabel } from './partnerUi'
 
-interface PlanRow { key: string; label: string; fee_usd: number }
+interface PlanRow { key: string; label: string; fee_usd: number; fulfillment?: string }
 interface BatchRow {
   batch_id: string
   plan: string
@@ -322,6 +322,9 @@ const EXPORT_SCOPES = [
 ]
 
 const plans = ref<PlanRow[]>([])
+const rechargePlans = computed(() =>
+  plans.value.filter((p) => p.fulfillment !== 'local_stock' && p.key !== 'gpt_white'),
+)
 const plan = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
 const cdkText = ref('')
@@ -514,7 +517,7 @@ async function loadPlans() {
   if (!res.ok) return
   const d = await res.json()
   plans.value = d.plans || []
-  if (!plan.value && plans.value.length) plan.value = plans.value[0].key
+  if (!plan.value && rechargePlans.value.length) plan.value = rechargePlans.value[0].key
 }
 
 async function loadQuota() {

@@ -782,7 +782,7 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 			prefix = code[:14]
 		}
 		// 落本站码库，保证即使本条失败，这张码也能在 CDK 页面被找回复用
-		if err := db.SaveCardplatformCDKCode(one.ID, code, prefix, one.Plan, one.FeeAmountMinor); err != nil {
+		if err := db.SaveCardplatformCDKCodeForAccount(one.ID, code, prefix, one.Plan, one.FeeAmountMinor, "unused", primaryCardAccountID()); err != nil {
 			log.Printf("[batch-recharge] save cdk failed seq=%d: %v", job.seq, err)
 		}
 	} else {

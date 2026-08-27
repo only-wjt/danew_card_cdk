@@ -364,6 +364,18 @@ func (c *Client) EnableCDK(ctx context.Context, id int64) error {
 	return err
 }
 
+// DeleteCDK DELETE /gpt-direct/cdks/:id — 删除并退款（未使用的购买码退回服务费）。
+// 已使用 / 已预留 / 待对账的卡上游会拒绝。上游未开放该路径时返回 404/405，
+// 调用方据此降级为 DisableCDK。
+func (c *Client) DeleteCDK(ctx context.Context, id int64) error {
+	if id <= 0 {
+		return fmt.Errorf("invalid cdk id")
+	}
+	path := fmt.Sprintf("/gpt-direct/cdks/%d", id)
+	_, err := c.doOpenAPI(ctx, http.MethodDelete, path, nil, "")
+	return err
+}
+
 // BatchDisableCDKs POST /gpt-direct/cdks/batch-disable — 批量禁用。
 type BatchDisableCDKResult struct {
 	Disabled      []int64          `json:"disabled"`

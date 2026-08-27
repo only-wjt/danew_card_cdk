@@ -284,6 +284,17 @@ func setupRoutes(r *gin.Engine) {
 			admin.GET("/card-selection/site-policy", handler.AdminGetSiteRedeemPolicy)
 			admin.PUT("/card-selection/site-policy", handler.AdminPutSiteRedeemPolicy)
 
+			// 多卡台账户与本站统一发码（双绑）
+			// id 放 body 而不是路径：同级再挂 bindings / dual-bind 这类静态段时，
+			// 和 :id 混在一起会让路由变歧义。
+			admin.GET("/card-platforms", handler.AdminListCardPlatforms)
+			admin.POST("/card-platforms/upsert", handler.AdminUpsertCardPlatform)
+			admin.POST("/card-platforms/status", handler.AdminSetCardPlatformStatus)
+			admin.POST("/card-platforms/reset-circuit", handler.AdminResetCardPlatformCircuit)
+			admin.POST("/card-platforms/ping", handler.AdminPingCardPlatform)
+			admin.PUT("/card-platforms/dual-bind", handler.AdminPutDualBindConfig)
+			admin.GET("/card-platforms/bindings", handler.AdminGetSiteCDKBindings)
+
 			// 卡健康：同卡失败 × 邮箱归因 → 坏卡冻结
 			admin.GET("/card-health", handler.AdminListCardHealth)
 			admin.GET("/card-health/policy", handler.AdminGetCardHealthPolicy)
@@ -311,6 +322,9 @@ func setupRoutes(r *gin.Engine) {
 			// 套餐代理价：全局默认 + 每代理覆盖
 			admin.GET("/agent-plan-fees", handler.AdminGetAgentDefaultPlanFees)
 			admin.PUT("/agent-plan-fees", handler.AdminPutAgentDefaultPlanFees)
+
+			admin.GET("/local-stock/summary", handler.AdminGetLocalStockSummary)
+			admin.POST("/local-stock/import", handler.AdminImportLocalStock)
 
 			// 代理购卡订单
 			admin.GET("/agent-orders", handler.AdminListAgentOrders)

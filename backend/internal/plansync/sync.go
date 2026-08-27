@@ -3,7 +3,9 @@ package plansync
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
@@ -46,6 +48,22 @@ func SyncNow(ctx context.Context) (SyncResult, error) {
 	return doSync(ctx2)
 }
 
+// SyncNowForAccount 只同步指定卡台账户，A/B 的产品编码和在线状态互不覆盖。
+func SyncNowForAccount(ctx context.Context, accountID int64) (SyncResult, error) {
+	ctx2, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	accounts, err := db.ListCardPlatformAccounts()
+	if err != nil {
+		return SyncResult{}, err
+	}
+	for _, acc := range accounts {
+		if acc.ID == accountID {
+			return doSyncAccount(ctx2, acc)
+		}
+	}
+	return SyncResult{}, fmt.Errorf("card platform account %d not found", accountID)
+}
+
 func syncOnce(ctx context.Context) {
 	ctx2, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -55,6 +73,88 @@ func syncOnce(ctx context.Context) {
 		return
 	}
 	log.Printf("[plan-sync] synced %d plans, %d products", r.Plans, r.Products)
+	accounts, aerr := db.ActiveDualIssueAccounts()
+	if aerr != nil {
+		log.Printf("[plan-sync] list accounts: %v", aerr)
+		return
+	}
+	for _, acc := range accounts {
+		ar, err := doSyncAccount(ctx2, acc)
+		if err != nil {
+			log.Printf("[plan-sync] account=%d error: %v", acc.ID, err)
+			continue
+		}
+		log.Printf("[plan-sync] account=%d synced %d plans, %d products", acc.ID, ar.Plans, ar.Products)
+	}
+	probes, perr := db.CircuitProbeAccounts()
+	if perr != nil {
+		log.Printf("[plan-sync] list circuit probes: %v", perr)
+		return
+	}
+	for _, acc := range probes {
+		probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		_, err := doSyncAccount(probeCtx, acc)
+		cancel()
+		if err != nil {
+			log.Printf("[plan-sync] circuit probe account=%d failed: %v", acc.ID, err)
+		} else {
+			log.Printf("[plan-sync] circuit probe account=%d recovered", acc.ID)
+		}
+	}
+}
+
+func doSyncAccount(ctx context.Context, acc db.CardPlatformAccount) (SyncResult, error) {
+	if strings.TrimSpace(acc.CredSecret) == "" {
+		err := fmt.Errorf("card platform account %d has no API key", acc.ID)
+		_ = db.MarkCardPlatformAccountError(acc.ID, err.Error())
+		return SyncResult{}, err
+	}
+	base := strings.TrimRight(strings.TrimSpace(acc.SiteBase), "/")
+	base = strings.TrimSuffix(base, "/openapi/v1")
+	base = strings.TrimSuffix(base, "/openapi")
+	cli := cardplatform.New(cardplatform.Config{SiteBase: base, APIKey: strings.TrimSpace(acc.CredSecret)})
+	var res SyncResult
+	plans, err := cli.GetPlans(ctx)
+	if err != nil {
+		_ = db.MarkCardPlatformAccountError(acc.ID, err.Error())
+		return res, err
+	}
+	// /plans 成功已足以证明卡台恢复；/products 失败只影响产品缓存，不应让熔断永久打开。
+	_ = db.MarkCardPlatformAccountOK(acc.ID)
+	for _, p := range plans.SellablePlans() {
+		if err := db.UpsertPlanStatusForAccount(acc.ID, p.Key, p.Label, true, p.ServiceFeeUsdMinor); err != nil {
+			log.Printf("[plan-sync] account=%d upsert plan %s: %v", acc.ID, p.Key, err)
+		} else {
+			res.Plans++
+		}
+	}
+	products, err := cli.GetProducts(ctx)
+	if err != nil {
+		log.Printf("[plan-sync] account=%d GetProducts: %v", acc.ID, err)
+		return res, nil
+	}
+	present := make(map[string]bool, len(products))
+	for _, p := range products {
+		if strings.TrimSpace(p.ProductCode) == "" {
+			continue
+		}
+		present[p.ProductCode] = true
+		cp := db.CardProductCache{
+			AccountID: acc.ID, ProductCode: p.ProductCode, Issuer: p.Issuer, BIN: p.BIN,
+			Network: p.Network, IssuingArea: p.IssuingArea, Scene: p.Scene,
+			CardGroup: p.CardGroup, Description: p.Description, BinHeads: p.BinHeads,
+			Enabled: true, SuspendedAt: p.SuspendedAt,
+		}
+		if err := db.UpsertCardProductForAccount(acc.ID, cp); err != nil {
+			log.Printf("[plan-sync] account=%d upsert product %s: %v", acc.ID, p.ProductCode, err)
+		} else {
+			res.Products++
+		}
+	}
+	if _, err := db.MarkCardProductsOfflineExceptForAccount(acc.ID, present); err != nil {
+		log.Printf("[plan-sync] account=%d mark offline: %v", acc.ID, err)
+	}
+	return res, nil
 }
 
 func doSync(ctx context.Context) (SyncResult, error) {

@@ -2,6 +2,26 @@ package db
 
 import "testing"
 
+func TestMigrateKeepsGPTWhiteDefaultWithoutWipingOthers(t *testing.T) {
+	openTestDB(t)
+	if err := SetAgentDefaultPlanPrices(AgentPlanPriceMap{"plus": 6800, "pro_5x": 5000}); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	if err := seedLocalStockDefaultPrices(); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := GetAgentDefaultPlanPrices()
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got["plus"] != 6800 || got["pro_5x"] != 5000 {
+		t.Fatalf("other prices wiped: %#v", got)
+	}
+	if got[PlanGPTWhite] != PlanGPTWhiteDefaultCents {
+		t.Fatalf("gpt_white missing: %#v", got)
+	}
+}
+
 func TestEffectiveAgentPlanPriceFallback(t *testing.T) {
 	defaults := AgentPlanPriceMap{"plus": 1500, "pro_5x": 5000}
 	overrides := AgentPlanPriceMap{"plus": 2250}

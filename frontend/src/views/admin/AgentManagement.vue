@@ -29,6 +29,79 @@
 
     <div class="card space-y-4">
       <div>
+        <h2 class="text-lg font-semibold text-ink">易支付 · 代理购卡</h2>
+        <p class="text-sm text-muted mt-1">
+          与卡网同一商户即可；本站订单号以 <code class="mono">AG</code> 开头，与卡网订单区分。
+          异步通知：<code class="mono">{{ epayNotifyUrl }}</code>
+          · 支付跳转：<code class="mono">{{ epayReturnUrl }}</code>
+        </p>
+      </div>
+      <div class="form-grid form-grid-2 max-w-4xl">
+        <div class="form-group">
+          <label>站点对外地址</label>
+          <input
+            v-model="epayForm.public_base_url"
+            class="input"
+            placeholder="留空则使用当前访问地址（IP/域名+端口）"
+          />
+          <p class="text-xs text-subtle mt-1">
+            易支付 notify / return 使用该根地址。留空时默认
+            <code class="mono">{{ publicBaseDefault }}</code>。
+            若 Cloudflare 拦截回调，可填直连 IP 或灰云子域（如 <code class="mono">https://pay.example.com</code>）。
+          </p>
+        </div>
+        <div class="form-group">
+          <label>易支付网关地址</label>
+          <input v-model="epayForm.epay_api_base" class="input" placeholder="https://api.payqixiang.cn" />
+          <p class="text-xs text-subtle mt-1">
+            七相聚合填 <code class="mono">https://api.payqixiang.cn</code>（不要带 submit.php）。下单走文档推荐的
+            <code class="mono">mapi.php</code> 统一下单。
+          </p>
+        </div>
+        <div class="form-group">
+          <label>商户 PID</label>
+          <input v-model="epayForm.epay_pid" class="input mono" />
+        </div>
+        <div class="form-group">
+          <label>商户密钥 Key</label>
+          <input
+            v-model="epaySecrets.epay_key"
+            class="input mono"
+            type="password"
+            :placeholder="epayKeyHint"
+            autocomplete="off"
+          />
+        </div>
+      </div>
+      <div>
+        <div class="text-sm font-medium text-ink mb-2">已开通支付方式</div>
+        <div class="check-list pay-type-list">
+          <label class="check-tile" :class="{ 'is-checked': epayPayTypes.includes('alipay') }">
+            <input type="checkbox" value="alipay" v-model="epayPayTypes" />
+            <span class="font-medium text-ink">支付宝</span>
+          </label>
+          <label class="check-tile" :class="{ 'is-checked': epayPayTypes.includes('wxpay') }">
+            <input type="checkbox" value="wxpay" v-model="epayPayTypes" />
+            <span class="font-medium text-ink">微信</span>
+          </label>
+        </div>
+        <p class="text-xs text-subtle mt-2">代理购卡页只展示已勾选的通道；未开通微信时可只保留支付宝。</p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="btn-primary" :disabled="savingEpay" @click="saveEpay">
+          {{ savingEpay ? '保存中…' : '保存易支付配置' }}
+        </button>
+        <button class="btn-secondary" :disabled="testingEpay" @click="testEpay">
+          {{ testingEpay ? '测试中…' : '测试签名/下单' }}
+        </button>
+      </div>
+      <p class="text-xs text-subtle">
+        测试会向七相发起 0.01 元 mapi 下单；若报「签名校验失败」，请到七相商户后台复制 PID 与 Key 重新粘贴保存。
+      </p>
+    </div>
+
+    <div class="card space-y-4">
+      <div>
         <h2 class="text-lg font-semibold text-ink">{{ t('adminAgents.globalFeesTitle') }}</h2>
         <p class="text-xs text-muted mt-1">{{ t('adminAgents.globalFeesHint') }}</p>
       </div>
@@ -57,6 +130,33 @@
       <div class="flex justify-end">
         <button class="btn-primary" :disabled="globalFeesSaving" @click="submitGlobalFees">
           {{ globalFeesSaving ? t('adminAgents.savingFees') : t('adminAgents.saveFees') }}
+        </button>
+      </div>
+    </div>
+
+    <div class="card space-y-4">
+      <div>
+        <h2 class="text-lg font-semibold text-ink">{{ t('adminAgents.localStockTitle') }}</h2>
+        <p class="text-xs text-muted mt-1">{{ t('adminAgents.localStockHint') }}</p>
+      </div>
+      <div class="flex flex-wrap gap-2 text-sm">
+        <span class="pill">{{ t('adminAgents.localStockTotal', { n: localStock.total }) }}</span>
+        <span class="pill pill-good">{{ t('adminAgents.localStockUnassigned', { n: localStock.unassigned }) }}</span>
+        <span class="pill pill-info">{{ t('adminAgents.localStockAssigned', { n: localStock.assigned }) }}</span>
+      </div>
+      <div class="form-group !mb-0">
+        <label>{{ t('adminAgents.localStockImportLabel') }}</label>
+        <textarea
+          v-model="localStockText"
+          class="input mono text-sm"
+          rows="8"
+          :placeholder="t('adminAgents.localStockPlaceholder')"
+        />
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <p v-if="localStockResult" class="text-xs text-muted">{{ localStockResult }}</p>
+        <button class="btn-primary" :disabled="localStockImporting" @click="importLocalStock">
+          {{ localStockImporting ? t('adminAgents.localStockImporting') : t('adminAgents.localStockImport') }}
         </button>
       </div>
     </div>
@@ -138,10 +238,10 @@
         </div>
         <div>
           <div class="text-sm font-medium text-ink mb-1">允许套餐</div>
-          <p class="text-xs text-muted mb-3">不勾选表示跟随卡台全部可售档位。</p>
-          <div v-if="!planOptions.length" class="text-xs text-muted">卡台档位未加载，可先保存账号稍后在「套餐」里配置。</div>
+          <p class="text-xs text-muted mb-3">不勾选表示跟随卡台全部可售档位。GPT白号始终可购。</p>
+          <div v-if="!allowedPlanOptions.length" class="text-xs text-muted">卡台档位未加载，可先保存账号稍后在「套餐」里配置。</div>
           <div v-else class="check-list">
-            <label v-for="p in planOptions" :key="p.key" class="check-tile" :class="{ 'is-checked': createForm.allowedPlans.includes(p.key) }">
+            <label v-for="p in allowedPlanOptions" :key="p.key" class="check-tile" :class="{ 'is-checked': createForm.allowedPlans.includes(p.key) }">
               <input type="checkbox" :value="p.key" v-model="createForm.allowedPlans" />
               <span class="flex-1">
                 <span class="font-medium text-ink">{{ p.label }}</span>
@@ -159,10 +259,10 @@
 
     <!-- 配置套餐 -->
     <Modal :open="plansOpen" :title="`配置套餐 · ${editingAgent?.username || ''}`" wide @close="plansOpen = false">
-      <p class="text-sm text-muted mb-4">不勾选任何项 = 允许卡台当前全部可售档位。</p>
-      <div v-if="!planOptions.length" class="alert alert-error">无法加载卡台档位，请先在「卡台配置」填写 API Key。</div>
+      <p class="text-sm text-muted mb-4">不勾选任何项 = 允许卡台当前全部可售档位。GPT白号始终可购。</p>
+      <div v-if="!allowedPlanOptions.length" class="alert alert-error">无法加载档位清单。</div>
       <div v-else class="check-list">
-        <label v-for="p in planOptions" :key="p.key" class="check-tile" :class="{ 'is-checked': plansForm.allowedPlans.includes(p.key) }">
+        <label v-for="p in allowedPlanOptions" :key="p.key" class="check-tile" :class="{ 'is-checked': plansForm.allowedPlans.includes(p.key) }">
           <input type="checkbox" :value="p.key" v-model="plansForm.allowedPlans" />
           <span class="flex-1">
             <span class="font-medium text-ink">{{ p.label }}</span>
@@ -401,6 +501,7 @@ const CORE_PRICE_PLANS: PlanOption[] = [
   { key: 'pro_20x', label: 'Pro 20x', service_fee_usd: null },
   { key: 'pro', label: 'Pro', service_fee_usd: null },
   { key: 'go', label: 'Go', service_fee_usd: null },
+  { key: 'gpt_white', label: 'GPT白号', service_fee_usd: null },
   { key: 'credit250', label: 'Codex 点数 250', service_fee_usd: null },
   { key: 'credit500', label: 'Codex 点数 500', service_fee_usd: null },
   { key: 'credit1000', label: 'Codex 点数 1000', service_fee_usd: null },
@@ -453,6 +554,29 @@ const recordsFilters = reactive({ email: '', cdk: '', status: '' })
 
 const policy = reactive({ block_public_redeem: true })
 
+const epayForm = reactive({ epay_api_base: '', epay_pid: '', public_base_url: '' })
+const epaySecrets = reactive({ epay_key: '' })
+const epayPayTypes = ref<Array<'alipay' | 'wxpay'>>(['alipay'])
+const epayHints = reactive<Record<string, any>>({})
+const savingEpay = ref(false)
+const testingEpay = ref(false)
+
+const publicBaseDefault = computed(() =>
+  typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8080',
+)
+const epayPublicBase = computed(() => {
+  const effective = String(epayHints.public_base_url_effective || '').trim().replace(/\/+$/, '')
+  if (effective) return effective
+  return publicBaseDefault.value
+})
+const epayNotifyUrl = computed(() => `${epayPublicBase.value}/api/v1/webhooks/epay`)
+const epayReturnUrl = computed(
+  () => `${epayPublicBase.value}/partner/orders?paid=1&order_no=…`,
+)
+const epayKeyHint = computed(() =>
+  epayHints.epay_key_configured ? `已配置 ${epayHints.epay_key_hint || ''}`.trim() : '粘贴商户密钥',
+)
+
 const globalFeeForm = reactive<Record<string, string>>({})
 const globalFeesSaving = ref(false)
 const agentFeesOpen = ref(false)
@@ -460,6 +584,23 @@ const agentFeesSaving = ref(false)
 const agentFeeForm = reactive<Record<string, string>>({})
 const priceCatalog = ref<PriceCatalogRow[]>([])
 const catalogFromLive = ref(false)
+const localStock = reactive({ total: 0, unassigned: 0, assigned: 0 })
+const localStockText = ref('')
+const localStockImporting = ref(false)
+const localStockResult = ref('')
+
+const allowedPlanOptions = computed(() => {
+  const seen = new Set<string>()
+  const rows: PlanOption[] = []
+  const push = (p: PlanOption) => {
+    if (!p.key || seen.has(p.key)) return
+    seen.add(p.key)
+    rows.push(p)
+  }
+  for (const p of CORE_PRICE_PLANS) push(p)
+  for (const p of planOptions.value) push(p)
+  return rows
+})
 
 const feePlanRows = computed(() => {
   const seen = new Set<string>()
@@ -922,6 +1063,68 @@ async function submitAgentFees() {
   }
 }
 
+async function loadEpaySettings() {
+  try {
+    const r = await authFetch('/api/v1/admin/settings')
+    if (!r.ok) return
+    const d = await r.json()
+    epayForm.epay_api_base = d.epay_api_base || ''
+    epayForm.epay_pid = d.epay_pid || ''
+    epayForm.public_base_url = d.public_base_url || ''
+    const types = String(d.epay_pay_types || 'alipay')
+      .split(',')
+      .map((v: string) => v.trim().toLowerCase())
+      .filter((v: string) => v === 'alipay' || v === 'wxpay')
+    epayPayTypes.value = (types.length ? types : ['alipay']) as Array<'alipay' | 'wxpay'>
+    Object.assign(epayHints, d)
+  } catch {
+    /* 读不到就保持空表单 */
+  }
+}
+
+async function testEpay() {
+  testingEpay.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/epay/test', { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok || !d.ok) {
+      dialog.toast(d.error || '易支付测试失败', 'err')
+      return
+    }
+    dialog.toast(d.message || '易支付配置正确', 'ok')
+  } finally {
+    testingEpay.value = false
+  }
+}
+
+async function saveEpay() {
+  if (!epayPayTypes.value.length) {
+    dialog.toast('请至少勾选一种支付方式', 'warn')
+    return
+  }
+  savingEpay.value = true
+  try {
+    const body: Record<string, string> = {
+      epay_api_base: epayForm.epay_api_base.trim(),
+      epay_pid: epayForm.epay_pid.trim(),
+      epay_pay_types: epayPayTypes.value.join(','),
+      public_base_url: epayForm.public_base_url.trim(),
+    }
+    if (epaySecrets.epay_key.trim()) body.epay_key = epaySecrets.epay_key.trim()
+    const r = await authFetch('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    Object.assign(epayHints, d)
+    epaySecrets.epay_key = ''
+    dialog.toast('易支付配置已保存', 'ok')
+  } finally {
+    savingEpay.value = false
+  }
+}
+
 async function loadPolicy() {
   try {
     const res = await authFetch('/api/v1/admin/agent-policy')
@@ -996,9 +1199,59 @@ async function copyPassword() {
   }
 }
 
+async function loadLocalStock() {
+  try {
+    const res = await authFetch('/api/v1/admin/local-stock/summary')
+    if (!res.ok) return
+    const d = await res.json()
+    const row = (d.list || []).find((x: any) => x.key === 'gpt_white') || (d.list || [])[0]
+    if (row) {
+      localStock.total = row.total || 0
+      localStock.unassigned = row.unassigned || 0
+      localStock.assigned = row.assigned || 0
+    }
+  } catch {
+    /* keep zeros */
+  }
+}
+
+async function importLocalStock() {
+  const text = localStockText.value
+  if (!text.trim()) {
+    dialog.toast(t('adminAgents.localStockEmpty'), 'warn')
+    return
+  }
+  localStockImporting.value = true
+  try {
+    const res = await authFetch('/api/v1/admin/local-stock/import', {
+      method: 'POST',
+      body: JSON.stringify({ plan: 'gpt_white', text }),
+    })
+    const d = await res.json()
+    if (!res.ok) {
+      dialog.toast(d.error || t('adminAgents.localStockFail'), 'err')
+      return
+    }
+    localStockText.value = ''
+    const skipped = Array.isArray(d.skipped) ? d.skipped.length : 0
+    localStockResult.value = t('adminAgents.localStockResult', { n: d.imported || 0, s: skipped })
+    dialog.toast(localStockResult.value, 'ok')
+    const row = (d.summary || []).find((x: any) => x.key === 'gpt_white')
+    if (row) {
+      localStock.total = row.total || 0
+      localStock.unassigned = row.unassigned || 0
+      localStock.assigned = row.assigned || 0
+    } else {
+      await loadLocalStock()
+    }
+  } finally {
+    localStockImporting.value = false
+  }
+}
+
 onMounted(async () => {
   ensureFeeFields(globalFeeForm)
-  await Promise.all([load(), loadPlans(), loadPolicy()])
+  await Promise.all([load(), loadPlans(), loadPolicy(), loadEpaySettings(), loadLocalStock()])
   await loadDefaultFees()
 })
 </script>
@@ -1008,6 +1261,10 @@ onMounted(async () => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 10px;
+}
+.pay-type-list {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  max-width: 320px;
 }
 .fee-grid {
   display: grid;

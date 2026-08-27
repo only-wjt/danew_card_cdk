@@ -1,5 +1,31 @@
 <template>
   <div class="space-y-4">
+    <div class="card">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 class="text-xl font-bold text-ink">当前卡台</h2>
+          <p class="text-sm text-muted mt-1">
+            产品、在线状态和选卡优先级按卡台账户独立保存；A 的产品码不会套到 B。
+          </p>
+        </div>
+        <el-radio-group v-model="selectedAccountID" @change="switchAccount">
+          <el-radio-button
+            v-for="acc in platformAccounts"
+            :key="acc.id"
+            :value="acc.id"
+          >
+            {{ acc.name }}{{ acc.is_primary_default ? ' · 主' : ' · 备' }}{{ acc.status !== 'active' ? ' · 已停用' : '' }}
+          </el-radio-button>
+        </el-radio-group>
+      </div>
+      <el-alert
+        v-if="!platformAccounts.length"
+        class="mt-3"
+        type="warning"
+        :closable="false"
+        title="尚未配置卡台账户，请先到「卡台接入」添加主台和备台。"
+      />
+    </div>
 
     <!-- 产品在线状态 -->
     <div class="card">
@@ -7,13 +33,13 @@
         <div>
           <h2 class="text-xl font-bold text-ink">产品在线状态</h2>
           <p class="text-sm text-muted mt-1">
-            与卡台「可开卡产品」对齐 · 每 3 分钟同步 · 在线
+            {{ selectedAccountName }}「可开卡产品」· 每 3 分钟同步 · 在线
             <strong>{{ onlineCount }}</strong> / 共 {{ products.length }}
             <span v-if="lastSync" class="ml-2 text-subtle">上次：{{ lastSync }}</span>
             <span v-if="nextSync && nextSync !== '—'" class="ml-1 text-subtle">· {{ nextSync }}后</span>
           </p>
           <p class="text-xs text-subtle mt-1">
-            说明：此处是<strong>开卡产品</strong>（渠道/BIN），不是 CDK 套餐（Plus/Pro）。卡台下架的卡段会显示已下线；CDK 能否购买看套餐是否开启。
+            说明：此处只显示当前卡台的<strong>开卡产品</strong>（渠道/BIN）。切换 A/B 后列表和规则都会随之切换。
           </p>
         </div>
         <div class="flex gap-2 items-center">
@@ -51,7 +77,7 @@
     <div class="card">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
-          <h2 class="text-xl font-bold text-ink">自动选卡优先级</h2>
+          <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 自动选卡优先级</h2>
           <p class="text-sm text-muted mt-1">
             顺序越靠前优先级越高；已下线或禁用的自动跳过
             <el-tag type="warning" size="small" effect="plain" class="ml-2">仅美卡参与自动选卡</el-tag>
@@ -123,7 +149,7 @@
     <div class="card">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
-          <h2 class="text-xl font-bold text-ink">本站可控策略</h2>
+          <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 本站可控策略</h2>
           <p class="text-sm text-muted mt-1">
             不依赖 ACC 换卡策略：启用后发码写入选卡偏好，兑换向卡台声明
             <code class="mono text-xs">no_auto_card_switch</code>（失败不自动换卡，由本站/卡台容量策略控卡）
@@ -164,8 +190,12 @@
           <el-input v-model="policy.holder_last" placeholder="Direct" />
         </div>
         <div class="sm:col-span-2">
-          <div class="text-xs text-muted mb-1">指定产品码（留空=用下方选卡优先级第一条）</div>
-          <el-input v-model="policy.product_code" placeholder="留空自动最低成本/优先级产品" clearable />
+          <div class="text-xs text-muted mb-1">当前卡台发码产品</div>
+          <el-input
+            :model-value="activeAccountPreference"
+            readonly
+            placeholder="使用上方选卡优先级第一条"
+          />
         </div>
       </div>
 
@@ -182,7 +212,7 @@
       </div>
       <p class="text-xs text-subtle mt-3">
         说明：一卡几付的硬上限由<strong>卡台账户容量</strong>执行；本站负责「用哪张产品偏好」与「是否允许卡台自动换卡」。
-        保存选卡优先级后，新发码会写入 preferred；已发出的旧码仍按发码时偏好（失效则回落卡台默认）。
+        保存当前卡台的选卡优先级后，双发会分别把 A、B 各自第一条启用产品写入对应上游码；已发出的码不追溯修改。
       </p>
     </div>
 
@@ -190,7 +220,7 @@
     <div class="card">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
-          <h2 class="text-xl font-bold text-ink">卡健康（失败归因）</h2>
+          <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 卡健康（失败归因）</h2>
           <p class="text-sm text-muted mt-1">
             本站观察充值失败：同一张卡失败达到阈值后——
             <strong>不同邮箱</strong>判为卡问题（拉黑并冻结，下次自动选卡跳过）；
@@ -337,6 +367,13 @@ interface RuleRow {
   enabled: boolean
 }
 
+interface PlatformAccount {
+  id: number
+  name: string
+  is_primary_default: boolean
+  status: string
+}
+
 let _idSeq = 0
 const rules = ref<RuleRow[]>([])
 const products = ref<CardProduct[]>([])
@@ -346,7 +383,48 @@ const saving = ref(false)
 const syncing = ref(false)
 const showAddDialog = ref(false)
 const showOffline = ref(false)
+const platformAccounts = ref<PlatformAccount[]>([])
+const selectedAccountID = ref<number>(0)
 let pollTimer: ReturnType<typeof setInterval> | null = null
+
+const selectedAccountName = computed(
+  () => platformAccounts.value.find((a) => a.id === selectedAccountID.value)?.name || '未选择卡台',
+)
+const activeAccountPreference = computed(() => {
+  const first = rules.value.find((r) => r.enabled && r.plan_key.trim())
+  return first ? `${first.channel || '默认渠道'} / ${first.plan_key}` : ''
+})
+
+function accountQuery() {
+  const qs = new URLSearchParams()
+  if (selectedAccountID.value > 0) qs.set('account_id', String(selectedAccountID.value))
+  return qs.toString()
+}
+
+async function loadAccounts() {
+  const r = await authFetch('/api/v1/admin/card-platforms')
+  if (!r.ok) return
+  const d = await r.json().catch(() => ({}))
+  platformAccounts.value = (Array.isArray(d.accounts) ? d.accounts : [])
+    .map((a: any) => ({
+      id: Number(a.id),
+      name: String(a.name || `账户 ${a.id}`),
+      is_primary_default: !!a.is_primary_default,
+      status: String(a.status || ''),
+    }))
+  if (!platformAccounts.value.some((a) => a.id === selectedAccountID.value)) {
+    selectedAccountID.value =
+      platformAccounts.value.find((a) => a.is_primary_default)?.id || platformAccounts.value[0]?.id || 0
+  }
+}
+
+async function switchAccount() {
+  rules.value = []
+  products.value = []
+  blocklist.value = []
+  failEvents.value = []
+  await Promise.all([loadRules(), loadPlanStatus(), loadPolicy(), loadHealth()])
+}
 
 // 本站兑换策略（此前漏定义导致整页白屏）
 const policy = reactive({
@@ -454,7 +532,8 @@ function addProductToRules(p: CardProduct) {
 }
 
 async function loadRules() {
-  const r = await authFetch('/api/v1/admin/card-selection/rules')
+  if (!selectedAccountID.value) return
+  const r = await authFetch(`/api/v1/admin/card-selection/rules?${accountQuery()}`)
   if (!r.ok) return
   const d = await r.json().catch(() => ({}))
   lastSync.value = d.last_sync || ''
@@ -467,7 +546,8 @@ async function loadRules() {
 }
 
 async function loadPlanStatus() {
-  const r = await authFetch('/api/v1/admin/card-selection/plan-status')
+  if (!selectedAccountID.value) return
+  const r = await authFetch(`/api/v1/admin/card-selection/plan-status?${accountQuery()}`)
   if (!r.ok) return
   const d = await r.json().catch(() => ({}))
   products.value = d.products || []
@@ -476,9 +556,13 @@ async function loadPlanStatus() {
 }
 
 async function doSync() {
+  if (!selectedAccountID.value) {
+    dialog.toast('请先选择卡台账户', 'warn')
+    return
+  }
   syncing.value = true
   try {
-    const r = await authFetch('/api/v1/admin/card-selection/sync', { method: 'POST' })
+    const r = await authFetch(`/api/v1/admin/card-selection/sync?${accountQuery()}`, { method: 'POST' })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) { dialog.toast(d.error || '同步失败', 'err'); return }
     products.value = d.products || []
@@ -491,6 +575,10 @@ async function doSync() {
 }
 
 async function saveRules() {
+  if (!selectedAccountID.value) {
+    dialog.toast('请先选择卡台账户', 'warn')
+    return
+  }
   saving.value = true
   try {
     const payload = rules.value.map((r, i) => ({
@@ -504,7 +592,7 @@ async function saveRules() {
     }))
     const r = await authFetch('/api/v1/admin/card-selection/rules', {
       method: 'PUT',
-      body: JSON.stringify({ rules: payload }),
+      body: JSON.stringify({ account_id: selectedAccountID.value, rules: payload }),
     })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) { dialog.toast(d.error || '保存失败', 'err'); return }
@@ -533,8 +621,9 @@ function removeRule(idx: number) {
 
 
 async function loadPolicy() {
+  if (!selectedAccountID.value) return
   try {
-    const r = await authFetch('/api/v1/admin/card-selection/site-policy')
+    const r = await authFetch(`/api/v1/admin/card-selection/site-policy?${accountQuery()}`)
     if (!r.ok) return
     const d = await r.json().catch(() => ({}))
     const p = d.policy || {}
@@ -560,11 +649,15 @@ async function loadPolicy() {
 }
 
 async function savePolicy() {
+  if (!selectedAccountID.value) {
+    dialog.toast('请先选择卡台账户', 'warn')
+    return
+  }
   policySaving.value = true
   try {
-    const r = await authFetch('/api/v1/admin/card-selection/site-policy', {
+    const r = await authFetch(`/api/v1/admin/card-selection/site-policy?${accountQuery()}`, {
       method: 'PUT',
-      body: JSON.stringify({ ...policy }),
+      body: JSON.stringify({ ...policy, product_code: '', issuer: '' }),
     })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
@@ -607,9 +700,10 @@ function verdictLabel(v: string) {
 }
 
 async function loadHealth() {
+  if (!selectedAccountID.value) return
   healthLoading.value = true
   try {
-    const r = await authFetch('/api/v1/admin/card-health')
+    const r = await authFetch(`/api/v1/admin/card-health?${accountQuery()}`)
     if (!r.ok) return
     const d = await r.json().catch(() => ({}))
     const p = d.policy || {}
@@ -627,9 +721,13 @@ async function loadHealth() {
 }
 
 async function saveHealthPolicy() {
+  if (!selectedAccountID.value) {
+    dialog.toast('请先选择卡台账户', 'warn')
+    return
+  }
   healthSaving.value = true
   try {
-    const r = await authFetch('/api/v1/admin/card-health/policy', {
+    const r = await authFetch(`/api/v1/admin/card-health/policy?${accountQuery()}`, {
       method: 'PUT',
       body: JSON.stringify({ ...healthPolicy }),
     })
@@ -648,7 +746,7 @@ async function saveHealthPolicy() {
 async function unblockCard(cardId: number) {
   const r = await authFetch('/api/v1/admin/card-health/unblock', {
     method: 'POST',
-    body: JSON.stringify({ card_id: cardId, unfreeze: true }),
+    body: JSON.stringify({ account_id: selectedAccountID.value, card_id: cardId, unfreeze: true }),
   })
   const d = await r.json().catch(() => ({}))
   if (!r.ok) {
@@ -660,6 +758,7 @@ async function unblockCard(cardId: number) {
 }
 
 onMounted(async () => {
+  await loadAccounts()
   await Promise.all([loadRules(), loadPlanStatus(), loadPolicy(), loadHealth()])
   pollTimer = setInterval(loadPlanStatus, 3 * 60 * 1000)
 })

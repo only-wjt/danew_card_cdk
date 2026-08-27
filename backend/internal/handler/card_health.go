@@ -9,19 +9,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/gin-gonic/gin"
 )
 
 const cardHealthPolicyKey = "card_health_policy"
 
 // CardFailVerdict 失败归因结论。
 const (
-	verdictNeedMore      = "need_more"       // 未达失败次数
-	verdictEmailSuspect  = "email_suspect"   // 同邮箱反复失败 → 更像号/邮箱问题
-	verdictCardSuspect   = "card_suspect"    // 多邮箱失败 → 更像卡问题
-	verdictUnknownEmails = "unknown_emails"  // 缺邮箱，暂不判卡
+	verdictNeedMore       = "need_more"      // 未达失败次数
+	verdictEmailSuspect   = "email_suspect"  // 同邮箱反复失败 → 更像号/邮箱问题
+	verdictCardSuspect    = "card_suspect"   // 多邮箱失败 → 更像卡问题
+	verdictUnknownEmails  = "unknown_emails" // 缺邮箱，暂不判卡
 	verdictAlreadyBlocked = "already_blocked"
 )
 
@@ -54,8 +53,19 @@ func EvaluateCardFailVerdict(failCount, distinctEmails int, threshold int, requi
 }
 
 func loadCardHealthPolicy() db.CardHealthPolicy {
+	return loadCardHealthPolicyForAccount(0)
+}
+
+func loadCardHealthPolicyForAccount(accountID int64) db.CardHealthPolicy {
 	p := db.DefaultCardHealthPolicy()
-	raw, err := db.GetSetting(cardHealthPolicyKey)
+	key := cardHealthPolicyKey
+	if accountID > 0 {
+		key = cardHealthPolicyKey + "_" + strconv.FormatInt(accountID, 10)
+	}
+	raw, err := db.GetSetting(key)
+	if (err != nil || strings.TrimSpace(raw) == "") && accountID > 0 {
+		raw, err = db.GetSetting(cardHealthPolicyKey)
+	}
 	if err != nil || strings.TrimSpace(raw) == "" {
 		return p
 	}
@@ -67,6 +77,10 @@ func loadCardHealthPolicy() db.CardHealthPolicy {
 }
 
 func saveCardHealthPolicy(p db.CardHealthPolicy) error {
+	return saveCardHealthPolicyForAccount(0, p)
+}
+
+func saveCardHealthPolicyForAccount(accountID int64, p db.CardHealthPolicy) error {
 	if p.FailThreshold < 1 {
 		p.FailThreshold = 2
 	}
@@ -74,7 +88,11 @@ func saveCardHealthPolicy(p db.CardHealthPolicy) error {
 	if err != nil {
 		return err
 	}
-	return db.SetSetting(cardHealthPolicyKey, string(b))
+	key := cardHealthPolicyKey
+	if accountID > 0 {
+		key = cardHealthPolicyKey + "_" + strconv.FormatInt(accountID, 10)
+	}
+	return db.SetSetting(key, string(b))
 }
 
 // normalizeAccountEmail 规范化邮箱（小写 trim）；空则 unknown。
@@ -90,14 +108,21 @@ func normalizeAccountEmail(email string) string {
 // 可从 webhook / result 轮询 / 管理端手动触发。
 func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *CardHealthObserveResult {
 	res := &CardHealthObserveResult{}
-	policy := loadCardHealthPolicy()
+	if in.CardID <= 0 {
+		res.Verdict = "no_card"
+		return res
+	}
+	if in.AccountID <= 0 {
+		in.AccountID = db.CardPlatformAccountIDForCode(in.CDKCode)
+	}
+	policy := loadCardHealthPolicyForAccount(in.AccountID)
 	res.PolicyEnabled = policy.Enabled
 	if !policy.Enabled {
 		res.Verdict = "disabled"
 		return res
 	}
-	if in.CardID <= 0 {
-		res.Verdict = "no_card"
+	if in.AccountID <= 0 {
+		res.Verdict = "no_platform_account"
 		return res
 	}
 
@@ -127,6 +152,7 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 	}
 
 	ev := db.CardFailEvent{
+		AccountID:        in.AccountID,
 		CardID:           in.CardID,
 		CardLastFour:     strings.TrimSpace(in.CardLastFour),
 		OrderID:          in.OrderID,
@@ -147,7 +173,7 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 	}
 	res.EventInserted = inserted
 
-	stats, err := db.GetCardFailStats(in.CardID)
+	stats, err := db.GetCardFailStats(in.AccountID, in.CardID)
 	if err != nil {
 		res.Verdict = "error"
 		res.Error = err.Error()
@@ -156,7 +182,7 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 	res.FailCount = stats.FailCount
 	res.DistinctEmails = stats.DistinctEmails
 
-	if blocked, _ := db.IsCardBlocked(in.CardID); blocked {
+	if blocked, _ := db.IsCardBlocked(in.AccountID, in.CardID); blocked {
 		res.Verdict = verdictAlreadyBlocked
 		res.Blocked = true
 		return res
@@ -167,8 +193,10 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 
 	// 回写本条 verdict（best-effort；同单已存在时可能写不到）
 	if inserted {
-		_, _ = db.DB.Exec(`UPDATE card_fail_events SET verdict = ? WHERE order_id = ? AND card_id = ?`,
-			verdict, in.OrderID, in.CardID)
+		_, _ = db.DB.Exec(`
+			UPDATE account_card_fail_events SET verdict = ?
+			WHERE account_id = ? AND order_id = ? AND card_id = ?
+		`, verdict, in.AccountID, in.OrderID, in.CardID)
 	}
 
 	if verdict != verdictCardSuspect {
@@ -177,6 +205,7 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 
 	// 拉黑
 	entry := db.CardBlockEntry{
+		AccountID:      in.AccountID,
 		CardID:         in.CardID,
 		CardLastFour:   in.CardLastFour,
 		Reason:         "multi_email_fail",
@@ -204,6 +233,7 @@ func ObserveCardOrderOutcome(ctx context.Context, in CardOrderObservation) *Card
 
 // CardOrderObservation 一笔订单观察输入。
 type CardOrderObservation struct {
+	AccountID    int64
 	CardID       int64
 	CardLastFour string
 	OrderID      int64
@@ -246,7 +276,7 @@ func resolveEmailForOrder(cdkCode, fallback string) (email, source string) {
 }
 
 // observeFromWebhookPayload 从卡台 webhook 解析并观察。
-func observeFromWebhookPayload(payload map[string]interface{}) {
+func observeFromWebhookPayload(payload map[string]interface{}, accountID int64) {
 	if payload == nil {
 		return
 	}
@@ -297,6 +327,7 @@ func observeFromWebhookPayload(payload map[string]interface{}) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		res := ObserveCardOrderOutcome(ctx, CardOrderObservation{
+			AccountID:    accountID,
 			CardID:       cardID,
 			CardLastFour: last4,
 			OrderID:      orderID,
@@ -335,37 +366,40 @@ func observeFromPublicResult(ctx context.Context, payload map[string]any, cdkCod
 	cardID := anyToInt64(order["card_id"])
 	last4 := strAny(order["card_last_four"])
 	emailRaw := strAny(order["account_email"])
+	accountID := db.CardPlatformAccountIDForCode(cdkCode)
 
 	// 公开 result 常不带 card_id：用 OpenAPI 补全
 	if cardID == 0 && orderID > 0 {
-		cli := cardplatform.NewFromSettings()
-		if raw, err := cli.GetCDKOrder(ctx, strconv.FormatInt(orderID, 10)); err == nil {
-			if m := extractOrderMap(raw); m != nil {
-				if cardID == 0 {
-					cardID = anyToInt64(m["card_id"])
-				}
-				if last4 == "" {
-					last4 = strAny(m["card_last_four"])
-				}
-				if emailRaw == "" {
-					emailRaw = strAny(m["account_email"])
-				}
-				if status == "" {
-					status = strings.ToLower(strAny(m["status"]))
-				}
-			}
-			// detail envelope: {order:{...}}
-			var wrap map[string]any
-			if json.Unmarshal(raw, &wrap) == nil {
-				if om, ok := wrap["order"].(map[string]any); ok {
+		cli, _ := cardClientForAccount(accountID)
+		if cli != nil {
+			if raw, err := cli.GetCDKOrder(ctx, strconv.FormatInt(orderID, 10)); err == nil {
+				if m := extractOrderMap(raw); m != nil {
 					if cardID == 0 {
-						cardID = anyToInt64(om["card_id"])
+						cardID = anyToInt64(m["card_id"])
 					}
 					if last4 == "" {
-						last4 = strAny(om["card_last_four"])
+						last4 = strAny(m["card_last_four"])
 					}
 					if emailRaw == "" {
-						emailRaw = strAny(om["account_email"])
+						emailRaw = strAny(m["account_email"])
+					}
+					if status == "" {
+						status = strings.ToLower(strAny(m["status"]))
+					}
+				}
+				// detail envelope: {order:{...}}
+				var wrap map[string]any
+				if json.Unmarshal(raw, &wrap) == nil {
+					if om, ok := wrap["order"].(map[string]any); ok {
+						if cardID == 0 {
+							cardID = anyToInt64(om["card_id"])
+						}
+						if last4 == "" {
+							last4 = strAny(om["card_last_four"])
+						}
+						if emailRaw == "" {
+							emailRaw = strAny(om["account_email"])
+						}
 					}
 				}
 			}
@@ -376,6 +410,7 @@ func observeFromPublicResult(ctx context.Context, payload map[string]any, cdkCod
 	}
 	email, src := resolveEmailForOrder(cdkCode, emailRaw)
 	_ = ObserveCardOrderOutcome(ctx, CardOrderObservation{
+		AccountID:    accountID,
 		CardID:       cardID,
 		CardLastFour: last4,
 		OrderID:      orderID,
@@ -391,7 +426,13 @@ func observeFromPublicResult(ctx context.Context, payload map[string]any, cdkCod
 
 // AdminGetCardHealthPolicy GET /api/v1/admin/card-health/policy
 func AdminGetCardHealthPolicy(c *gin.Context) {
-	p := loadCardHealthPolicy()
+	accountID, _ := strconv.ParseInt(c.Query("account_id"), 10, 64)
+	if accountID <= 0 {
+		if acc, err := db.PrimaryCardPlatformAccount(); err == nil {
+			accountID = acc.ID
+		}
+	}
+	p := loadCardHealthPolicyForAccount(accountID)
 	c.JSON(http.StatusOK, gin.H{
 		"policy": p,
 		"note":   "同卡失败达到阈值后：多邮箱→判卡问题并冻结；单邮箱→判邮箱/号问题不冻卡",
@@ -400,6 +441,11 @@ func AdminGetCardHealthPolicy(c *gin.Context) {
 
 // AdminPutCardHealthPolicy PUT /api/v1/admin/card-health/policy
 func AdminPutCardHealthPolicy(c *gin.Context) {
+	accountID, _ := strconv.ParseInt(c.Query("account_id"), 10, 64)
+	if _, err := db.GetCardPlatformAccount(accountID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择有效的卡台账户"})
+		return
+	}
 	var p db.CardHealthPolicy
 	if err := c.ShouldBindJSON(&p); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
@@ -408,7 +454,7 @@ func AdminPutCardHealthPolicy(c *gin.Context) {
 	if p.FailThreshold < 1 {
 		p.FailThreshold = 2
 	}
-	if err := saveCardHealthPolicy(p); err != nil {
+	if err := saveCardHealthPolicyForAccount(accountID, p); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -418,13 +464,19 @@ func AdminPutCardHealthPolicy(c *gin.Context) {
 
 // AdminListCardHealth GET /api/v1/admin/card-health
 func AdminListCardHealth(c *gin.Context) {
+	accountID, _ := strconv.ParseInt(c.Query("account_id"), 10, 64)
+	if accountID <= 0 {
+		if acc, err := db.PrimaryCardPlatformAccount(); err == nil {
+			accountID = acc.ID
+		}
+	}
 	include := c.Query("all") == "1" || c.Query("include_inactive") == "1"
-	blocks, err := db.ListCardBlocklist(include, 100)
+	blocks, err := db.ListCardBlocklist(accountID, include, 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	events, err := db.ListCardFailEvents(80)
+	events, err := db.ListCardFailEvents(accountID, 80)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -437,24 +489,30 @@ func AdminListCardHealth(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"policy":    loadCardHealthPolicy(),
-		"blocklist": blocks,
-		"events":    events,
+		"policy":     loadCardHealthPolicyForAccount(accountID),
+		"blocklist":  blocks,
+		"events":     events,
+		"account_id": accountID,
 	})
 }
 
 // AdminUnblockCard POST /api/v1/admin/card-health/unblock
 func AdminUnblockCard(c *gin.Context) {
 	var body struct {
-		CardID      int64  `json:"card_id"`
-		Unfreeze    bool   `json:"unfreeze"`
-		Notes       string `json:"notes"`
+		AccountID int64  `json:"account_id"`
+		CardID    int64  `json:"card_id"`
+		Unfreeze  bool   `json:"unfreeze"`
+		Notes     string `json:"notes"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.CardID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "card_id required"})
 		return
 	}
-	if err := db.UnblockCard(body.CardID, body.Notes); err != nil {
+	if _, err := db.GetCardPlatformAccount(body.AccountID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择有效的卡台账户"})
+		return
+	}
+	if err := db.UnblockCard(body.AccountID, body.CardID, body.Notes); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -469,19 +527,24 @@ func AdminUnblockCard(c *gin.Context) {
 // 手动对一笔订单做健康观察（补漏）。
 func AdminReobserveCardOrder(c *gin.Context) {
 	var body struct {
-		OrderID int64 `json:"order_id"`
+		AccountID int64 `json:"account_id"`
+		OrderID   int64 `json:"order_id"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.OrderID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "order_id required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "account_id and order_id required"})
 		return
 	}
-	cli := cardplatform.NewFromSettings()
+	cli, err := cardClientForAccount(body.AccountID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	raw, err := cli.GetCDKOrder(c.Request.Context(), strconv.FormatInt(body.OrderID, 10))
 	if err != nil {
 		writeCardErr(c, err)
 		return
 	}
-	obs := CardOrderObservation{OrderID: body.OrderID}
+	obs := CardOrderObservation{AccountID: body.AccountID, OrderID: body.OrderID}
 	if m := extractOrderMap(raw); m != nil {
 		obs.CardID = anyToInt64(m["card_id"])
 		obs.CardLastFour = strAny(m["card_last_four"])
@@ -492,6 +555,8 @@ func AdminReobserveCardOrder(c *gin.Context) {
 		prefix := strAny(m["code_prefix"])
 		if code, ok := db.LookupCardplatformCDKCode(cdkID, prefix); ok {
 			obs.CDKCode = code
+		} else if binding, ok := db.FindSiteBindingByRemote(body.AccountID, strconv.FormatInt(cdkID, 10)); ok {
+			obs.CDKCode = binding.SiteCode
 		}
 	}
 	var wrap map[string]any

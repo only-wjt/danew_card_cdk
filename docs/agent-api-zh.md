@@ -18,10 +18,11 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 充值是异步的。`POST /agent/recharge` 与 `POST /agent/batch-recharge` 都只做「受理」，
 立即返回 `202` 和 `request_id`，实际开通结果通过以下两种方式获取：
 
-1. **Webhook（推荐）**：在门户「设置」页配置回调地址并生成签名密钥，
-   每条明细落终态时会推送事件，无需轮询。详见 `#/components/schemas/WebhookEvent`。
-2. **轮询**：调用 `GET /agent/recharge/{request_id}` 或 `GET /agent/batch-recharge/{batch_id}`。
-   建议间隔不低于 5 秒。
+1. **Webhook（推荐）**：在门户「设置」页配置回调地址并生成签名密钥。
+   代客充值推 `recharge.*` / `batch.completed`；购卡发货推 `order.delivered`，
+   发货失败推 `order.fulfill_failed`。详见 `#/components/schemas/WebhookEvent`。
+2. **轮询**：充值查 `GET /agent/recharge/{request_id}` 或批次接口，间隔不低于 5 秒。
+   购卡入库可拉 `GET /agent/orders?status=delivered`（建议 30–60 秒），按 `order_no` 幂等写入自己的库存。
 
 ## 幂等
 批量接口支持 `Idempotency-Key` 请求头，24 小时内相同 key 直接返回首次创建的批次，
@@ -31,8 +32,19 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 但这只兜误双击，不能替代 `Idempotency-Key`。
 
 ## 卡密（拿货模式）
-代理充值**必须**提交站长线下分配的卡密 `cdk_code`。服务端不会代代理自动发码扣费。
+代理充值**须**提交站长线下分配的卡密 `cdk_code`。充值链路不会代代理自动发码扣费。
 站长在管理后台「CDK 卡密」页发码/入库后，到「代理管理 → 发卡密」划给对应代理。
+
+## 在线购卡（易支付）
+代理还可在门户「购卡下单」用易支付购买 CDK，支付成功后**自动发码并入库**到「我的卡密」，
+无需站长手工分配。对应 API 为 `POST /agent/orders`（见下方「购卡订单」）。
+须先在管理后台配置易支付；卡台套餐还须配置卡台 API Key。
+`GET /agent/plans` 的 `price_yuan` 为该代理人民币售价。本站库存档位 `gpt_white`（GPT白号）
+不走卡台发码：`purchase.ready` 只需易支付就绪，`fulfillment=local_stock`。
+Plus 等卡台档位仍看 `purchase.card_platform_ready`，未配置卡台时下单会失败。
+二级系统请用 `order.delivered` 回调入库，并用 `GET /agent/orders?status=delivered` 做兜底；
+不要把 `recharge.completed` 当成进货成功。GPT白号买完后从 `GET /agent/cdks` 复制发给下级，不能用于代充。
+
 门户「设置」可查看 `unused_cdk_count`（名下仍可用卡密数量）。
 完整卡密列表见 `GET /agent/cdks`（代理门户「我的卡密」页）。
 
@@ -81,6 +93,8 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 | `CDK_IN_FLIGHT` | 409 | 卡密正在其他任务中使用 | 等待完成 |
 | `BATCH_TOO_LARGE` | 400 | 超出 `max_batch_items` | 拆成多批 |
 | `PLAN_NOT_AVAILABLE` | 400 | 套餐不在可售范围或白名单内 | 先查 `/agent/plans` |
+| `SESSION_REQUIRED` | 400 | 缺少 session / token_input | 粘贴完整 Session JSON |
+| `SESSION_INVALID` | 400 | session 无效或已过期 | 重新从 chatgpt.com/api/auth/session 获取 |
 | `AGENT_INACTIVE` | 403 | 账号被停用 | 联系管理员 |
 | `BATCH_NOT_FOUND` | 404 | 批次不存在或不属于本账号 | 检查 batch_id |
 | `DELIVERY_NOT_FOUND` | 404 | 投递记录不存在或当前状态不可重投 | — |
@@ -102,6 +116,10 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 | `GET` | `/agent/batch-recharge/{batch_id}` | 批次详情 |
 | `GET` | `/agent/batch-recharge/{batch_id}/export` | 导出批次对账表 |
 | `GET` | `/agent/cdks` | 我的卡密库存 |
+| `GET` | `/agent/orders` | 我的购卡订单列表 |
+| `POST` | `/agent/orders` | 创建购卡订单并获取支付链接 |
+| `GET` | `/agent/orders/{order_no}` | 查询单条购卡订单 |
+| `POST` | `/agent/orders/{order_no}/repay` | 继续支付待支付订单 |
 | `GET` | `/agent/plans` | 查询可售套餐 |
 | `POST` | `/agent/recharge` | 单条充值 |
 | `GET` | `/agent/recharge/{request_id}` | 查询单条充值状态 |
@@ -260,9 +278,15 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 
 ---
 
-### `GET /agent/plans` 查询可售套餐
+### `GET /agent/orders` 我的购卡订单列表
 
-返回「卡台在售 ∩ 该代理白名单」的套餐列表。下单前应先取此列表，不要硬编码套餐 key。
+**参数**
+
+| 名称 | 位置 | 必填 | 类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| `page` | query | 否 | integer |  |
+| `page_size` | query | 否 | integer |  |
+| `status` | query | 否 | string (枚举) |  |
 
 **响应**
 
@@ -270,7 +294,88 @@ API Key 在代理门户「API 密钥」页自助创建，**仅在创建时展示
 | --- | --- |
 | `200` | OK |
 | `401` | API Key 缺失、无效或已吊销 |
-| `502` | 卡台档位暂不可用 |
+
+---
+
+### `POST /agent/orders` 创建购卡订单并获取支付链接
+
+创建待支付订单，返回易支付跳转 URL（`pay_url`）。支付成功后本站自动发码入库，
+并向已配置的回调地址推送 `order.delivered`（带 `issued_codes`）。
+订单号前缀 `AG`，待支付有效期 30 分钟。二级也可用本列表接口按 `status=delivered` 拉单兜底。
+
+**请求体**
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `count` | integer | 是 |  |
+| `pay_type` | string (枚举) | 否 | 须在站点已开通的 pay_types 内 |
+| `plan` | string | 是 |  |
+
+**响应**
+
+| 状态码 | 说明 |
+| --- | --- |
+| `200` | 已创建，跳转 pay_url 完成支付 |
+| `400` | 请求参数有误 |
+| `401` | API Key 缺失、无效或已吊销 |
+| `403` | 账号被停用 |
+
+---
+
+### `GET /agent/orders/{order_no}` 查询单条购卡订单
+
+**参数**
+
+| 名称 | 位置 | 必填 | 类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| `order_no` | path | 是 | string |  |
+
+**响应**
+
+| 状态码 | 说明 |
+| --- | --- |
+| `200` | OK |
+| `401` | API Key 缺失、无效或已吊销 |
+| `404` | 资源不存在 |
+
+---
+
+### `POST /agent/orders/{order_no}/repay` 继续支付待支付订单
+
+复用原订单号重新生成 pay_url，不会创建新订单。订单已过期返回 400。
+
+**参数**
+
+| 名称 | 位置 | 必填 | 类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| `order_no` | path | 是 | string |  |
+
+**响应**
+
+| 状态码 | 说明 |
+| --- | --- |
+| `200` | OK |
+| `400` | 请求参数有误 |
+| `401` | API Key 缺失、无效或已吊销 |
+| `404` | 资源不存在 |
+
+---
+
+### `GET /agent/plans` 查询可售套餐
+
+返回「卡台在售 ∩ 该代理白名单」的套餐列表，并始终并入本站库存档位 `gpt_white`（GPT白号，默认 ¥3.00）。
+卡台不可用时回落 plus / pro_5x / pro_20x 等常用档位 + 白号。
+`price_cny_cents` / `price_yuan` 为该代理的有效售价（单代理覆盖 → 全局默认 → 0，单位人民币）。
+`fulfillment` 为 `local_stock` 或 `card_platform`。`purchase.ready` 表示易支付已配置（白号可下单）；
+`purchase.card_platform_ready` 表示卡台已配置（Plus 等仍须此项才能发码）。
+下单前应先取此列表，不要硬编码套餐 key。
+
+**响应**
+
+| 状态码 | 说明 |
+| --- | --- |
+| `200` | OK |
+| `401` | API Key 缺失、无效或已吊销 |
 
 ---
 
@@ -386,32 +491,17 @@ session 只以哈希形式存储与比对，服务端不留明文，也不会回
 
 ### `POST /agent/session/check` 校验 ChatGPT Session
 
-提交充值前校验客户 session 是否可用。服务端会解析 accessToken（过期则用 sessionToken 刷新），向 ChatGPT 拉取订阅摘要。**不落库、不回显明文 session**，也不拉账单发票。
+提交前校验客户 session 是否可用：解析 accessToken（过期则用 sessionToken 刷新），
+向 ChatGPT 拉取订阅摘要。不落库、不回显明文 session，不拉账单发票。
+
+建议在 `POST /agent/recharge` 之前调用，提前过滤失效凭证。
 
 **请求体**
 
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `session` | string | 与 `token_input` 二选一 | `chatgpt.com/api/auth/session` 完整 JSON（推荐） |
-| `token_input` | string | 与 `session` 二选一 | 完整 JSON 或裸 accessToken |
-
-**成功响应示例**
-
-```json
-{
-  "ok": true,
-  "email": "a@b.com",
-  "summary": {
-    "email": "a@b.com",
-    "plan_type": "plus",
-    "has_active_subscription": true,
-    "expires_at": "...",
-    "account_id": "..."
-  }
-}
-```
-
-**失败时** `ok=false`，`error_code` 为 `SESSION_REQUIRED` / `SESSION_INVALID` / `INVALID_REQUEST`。
+| `session` | string | 否 | chatgpt.com/api/auth/session 返回的完整 JSON（推荐） |
+| `token_input` | string | 否 | 与 session 二选一；可为完整 JSON 或裸 accessToken |
 
 **响应**
 
@@ -515,13 +605,38 @@ def verify(raw_body: bytes, timestamp: str, signature: str, secret: str) -> bool
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `created_at` | string | 否 |  |
-| `data` | object | 否 | `recharge.*` 事件为单条明细（字段同 RechargeRecord 的子集）； `batch.completed` 事件为批次汇总（字段同 BatchSummary 的子集）。 |
+| `data` | object | 否 | `recharge.*` 为代客充值明细（不是进货）。 `batch.completed` 为代客批量充值汇总。 `order.delivered` 为购卡到货：含 `order_no` / `plan` / `count` / `issued_codes`，按 `order_no` 入库。 `order.fulfill_failed` 为已付款但发货失败，默认告警；`issued_codes` 可能有未齐的码。 |
 | `event_id` | string | 否 |  |
 | `event_type` | string (枚举) | 否 |  |
 
 ---
 
 ## 数据结构
+
+### AgentOrder
+
+代理在线购卡订单（易支付）
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `count` | integer | 否 |  |
+| `created_at` | string | 否 |  |
+| `delivered_at` | string | 否 |  |
+| `expires_at` | string | 否 |  |
+| `fail_reason` | string | 否 |  |
+| `issued_codes` | string[] | 否 | 已发完整卡密（敏感，请妥善保管） |
+| `issued_count` | integer | 否 |  |
+| `order_no` | string | 否 |  |
+| `paid_at` | string | 否 |  |
+| `pay_type` | string (枚举) | 否 |  |
+| `plan` | string | 否 |  |
+| `plan_label` | string | 否 |  |
+| `status` | string (枚举) | 否 |  |
+| `total_amount_cents` | integer | 否 |  |
+| `total_amount_yuan` | string | 否 |  |
+| `unit_price_cents` | integer | 否 |  |
+| `unit_price_yuan` | string | 否 |  |
+| `updated_at` | string | 否 |  |
 
 ### BatchSummary
 

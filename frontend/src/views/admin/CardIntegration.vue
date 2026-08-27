@@ -18,54 +18,26 @@
       </div>
     </div>
 
-    <!-- 配置 -->
+    <!-- 兼容工具：卡台凭证只在下方账户维护 -->
     <div class="card space-y-4">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 class="text-xl font-bold text-ink">卡台接入</h2>
-          <p class="text-sm text-muted mt-1">Base 用站点根；Open API / CDK 路径自动拼接</p>
+          <h2 class="text-xl font-bold text-ink">代理换码与主台检测</h2>
+          <p class="text-sm text-muted mt-1">卡台 Base、Key 和优先级统一在下方「多卡台账户」维护，避免两套配置冲突。</p>
         </div>
         <div class="flex gap-2">
-          <el-tag v-if="hints.card_api_key_configured" type="success" effect="plain">Key 已存</el-tag>
-          <el-tag v-else type="info" effect="plain">Key 未配置</el-tag>
+          <el-tag v-if="hints.card_api_key_configured" type="success" effect="plain">主台兼容配置已同步</el-tag>
+          <el-tag v-else type="info" effect="plain">尚未配置主台</el-tag>
         </div>
       </div>
 
-      <div class="flex flex-wrap gap-2">
-        <el-button round :type="presetActive === 'prod' ? 'primary' : 'default'" @click="applyPreset('prod')">
-          生产 · spacexcard.com
-        </el-button>
-        <el-button round :type="presetActive === 'sandbox' ? 'primary' : 'default'" @click="applyPreset('sandbox')">
-          沙盒 · sandbox
-        </el-button>
-      </div>
-
-      <div class="path-chips">
-        <div class="path-chip">
-          <span class="k">Open API</span>
-          <code class="v">{{ resolvedOpenapi }}</code>
-        </div>
-        <div class="path-chip">
-          <span class="k">公开 CDK</span>
-          <code class="v">{{ resolvedCdk }}</code>
-        </div>
-      </div>
+      <el-alert
+        type="info"
+        :closable="false"
+        title="下方标记为“主台”的账户会自动镜像给旧模块；不要再维护第二份 Base/Key。"
+      />
 
       <el-form label-position="top" class="max-w-xl" @submit.prevent>
-        <el-form-item label="卡台 Base URL">
-          <el-input v-model="form.card_api_base" clearable size="large" @blur="normalizeBase" />
-        </el-form-item>
-        <el-form-item label="Open API Key (sk_…)">
-          <el-input
-            v-model="secrets.card_api_key"
-            type="password"
-            show-password
-            clearable
-            size="large"
-            :placeholder="keyHint"
-            autocomplete="off"
-          />
-        </el-form-item>
         <el-form-item label="代理换码密码">
           <el-input
             v-model="secrets.agent_swap_password"
@@ -93,7 +65,7 @@
           </p>
         </el-form-item>
         <div class="flex flex-wrap gap-2">
-          <el-button type="primary" size="large" :loading="saving" @click="save">保存</el-button>
+          <el-button type="primary" size="large" :loading="saving" @click="save">保存换码配置</el-button>
           <el-button type="success" size="large" plain :loading="busy" @click="runAllChecks">
             一键检测
           </el-button>
@@ -104,58 +76,113 @@
       </el-form>
     </div>
 
-    <!-- 易支付（代理购卡） -->
+    <!-- 多卡台 · 本站统一发码（DN- 双绑） -->
     <div class="card space-y-4">
-      <div>
-        <h2 class="text-xl font-bold text-ink">易支付 · 代理购卡</h2>
-        <p class="text-sm text-muted mt-1">
-          与卡网同一商户即可；本站订单号以 <code class="mono">AG</code> 开头，与卡网订单区分。
-          异步通知：<code class="mono">{{ epayNotifyUrl }}</code>
-          · 支付跳转：<code class="mono">{{ epayReturnUrl }}</code>
-        </p>
-      </div>
-      <el-form label-position="top" class="max-w-xl" @submit.prevent>
-        <el-form-item label="站点对外地址">
-          <el-input
-            v-model="epayForm.public_base_url"
-            placeholder="留空则使用当前访问地址（IP/域名+端口）"
-            size="large"
-            clearable
-          />
-          <p class="text-xs text-subtle mt-1">
-            易支付 notify / return 使用该根地址。留空时默认 <code class="mono">{{ publicBaseDefault }}</code>。
-            若 Cloudflare 拦截回调，可填直连 IP 或灰云子域（如 <code class="mono">https://pay.example.com</code>）。
+      <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 class="text-xl font-bold text-ink">多卡台账户</h2>
+          <p class="text-sm text-muted mt-1">
+            开启后新发码为 <code class="mono">DN-</code> 本站码，生成时向各台各买一张；兑换时 A 不可达自动切 B。老码不受影响。
           </p>
-        </el-form-item>
-        <el-form-item label="易支付网关地址">
-          <el-input v-model="epayForm.epay_api_base" placeholder="https://api.payqixiang.cn" size="large" clearable />
-          <p class="text-xs text-subtle mt-1">七相聚合填 <code class="mono">https://api.payqixiang.cn</code>（不要带 submit.php）。下单走文档推荐的 <code class="mono">mapi.php</code> 统一下单。</p>
-        </el-form-item>
-        <el-form-item label="商户 PID">
-          <el-input v-model="epayForm.epay_pid" class="mono" size="large" clearable />
-        </el-form-item>
-        <el-form-item label="商户密钥 Key">
-          <el-input
-            v-model="epaySecrets.epay_key"
-            type="password"
-            show-password
-            size="large"
-            :placeholder="epayKeyHint"
-            autocomplete="off"
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <el-switch
+            v-model="dualBind.enabled"
+            active-text="本站双绑发码"
+            :loading="savingDualBind"
+            @change="saveDualBind"
           />
-        </el-form-item>
-        <el-form-item label="已开通支付方式">
-          <el-checkbox-group v-model="epayPayTypes">
-            <el-checkbox label="alipay">支付宝</el-checkbox>
-            <el-checkbox label="wxpay">微信</el-checkbox>
-          </el-checkbox-group>
-          <p class="text-xs text-subtle mt-1">代理购卡页只展示已勾选的通道；未开通微信时可只保留支付宝。</p>
-        </el-form-item>
-        <el-button type="primary" size="large" :loading="savingEpay" @click="saveEpay">保存易支付配置</el-button>
-        <el-button size="large" :loading="testingEpay" @click="testEpay">测试签名/下单</el-button>
-        <p class="text-xs text-subtle mt-1">测试会向七相发起 0.01 元 mapi 下单；若报「签名校验失败」，请到七相商户后台复制 PID 与 Key 重新粘贴保存。</p>
-      </el-form>
+          <el-tag v-if="dualBind.enabled" type="success" effect="plain">已开启</el-tag>
+          <el-tag v-else type="info" effect="plain">关（仍走上方单台）</el-tag>
+        </div>
+      </div>
+
+      <el-alert
+        v-if="platformUnusable.length"
+        type="warning"
+        :closable="false"
+        show-icon
+        :title="'部分账户不可用：' + platformUnusable.join('；')"
+      />
+
+      <div class="flex flex-wrap items-center gap-4 text-sm">
+        <el-checkbox
+          v-model="dualBind.allowSingle"
+          :disabled="!dualBind.enabled"
+          @change="saveDualBind"
+        >
+          允许单台降级出货（缺 B 仍出货，默认关）
+        </el-checkbox>
+        <span class="text-muted">活跃账户 {{ activePlatformCount }} / {{ platformAccounts.length }}</span>
+      </div>
+
+      <el-empty v-if="!platformAccounts.length && !loadingPlatforms" description="尚未添加卡台账户">
+        <el-button type="primary" @click="openAccountForm()">添加第一台</el-button>
+      </el-empty>
+
+      <div v-else class="space-y-3">
+        <div
+          v-for="acc in platformAccounts"
+          :key="acc.id"
+          class="platform-card"
+          :class="{ 'platform-card--open': acc.circuit_state === 'open' }"
+        >
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="font-semibold text-ink">{{ acc.name }}</span>
+                <el-tag size="small" :type="acc.is_primary_default ? 'warning' : 'info'" effect="plain">
+                  {{ acc.is_primary_default ? '主台' : '备台' }} · P{{ acc.priority }}
+                </el-tag>
+                <el-tag size="small" :type="acc.status === 'active' ? 'success' : 'info'" effect="plain">
+                  {{ acc.status === 'active' ? '启用' : '停用' }}
+                </el-tag>
+                <el-tag v-if="acc.circuit_state === 'open'" size="small" type="danger" effect="plain">熔断</el-tag>
+              </div>
+              <div class="text-xs text-muted mt-1 mono">{{ acc.site_base }}</div>
+              <div class="text-xs text-subtle mt-1">
+                协议 {{ protocolLabel(acc.protocol) }}
+                · Key {{ acc.has_credential ? '已存' : '未配' }}
+                <span v-if="accPing[acc.id]?.spendable_usd"> · 余额 ${{ accPing[acc.id].spendable_usd }}</span>
+              </div>
+              <div v-if="acc.last_error" class="text-xs mt-1" style="color: var(--err)">
+                最近错误：{{ acc.last_error }}
+              </div>
+            </div>
+            <div class="flex flex-wrap gap-1">
+              <el-button size="small" :loading="accPingLoading === acc.id" @click="pingAccount(acc.id)">测连通</el-button>
+              <el-button size="small" @click="openAccountForm(acc)">编辑</el-button>
+              <el-button
+                v-if="acc.circuit_state === 'open'"
+                size="small"
+                type="warning"
+                @click="resetCircuit(acc.id)"
+              >
+                复位熔断
+              </el-button>
+              <el-button
+                size="small"
+                :type="acc.status === 'active' ? 'danger' : 'success'"
+                plain
+                @click="toggleAccountStatus(acc)"
+              >
+                {{ acc.status === 'active' ? '停用' : '启用' }}
+              </el-button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap gap-2">
+        <el-button type="primary" plain @click="openAccountForm()">添加账户</el-button>
+        <el-button :loading="loadingPlatforms" @click="loadPlatforms">刷新</el-button>
+      </div>
     </div>
+
+    <p class="text-sm text-muted">
+      代理购卡的易支付配置已移至
+      <router-link class="app-link" to="/ops/agents">代理管理</router-link>。
+    </p>
 
     <!-- 状态摘要卡片（精简，详情进弹窗） -->
     <div class="grid gap-3 sm:grid-cols-3">
@@ -255,6 +282,65 @@
         <el-button type="primary" :loading="loadingPlans" @click="loadPlans">刷新价格</el-button>
       </template>
     </el-dialog>
+
+    <!-- 卡台账户编辑 -->
+    <el-dialog
+      v-model="dlgAccount"
+      :title="accountForm.id ? '编辑卡台账户' : '添加卡台账户'"
+      width="520px"
+      align-center
+      destroy-on-close
+    >
+      <el-form label-position="top" class="space-y-1">
+        <el-form-item label="显示名称">
+          <el-input v-model="accountForm.name" placeholder="主台 A / 备台 B" />
+        </el-form-item>
+        <el-form-item label="协议">
+          <el-select v-model="accountForm.protocol" class="w-full">
+            <el-option label="SpaceX 旧 OpenAPI（/openapi/v1 + sk_）" value="spacexcard-legacy" />
+            <el-option label="Avanfinity（暂用旧 OpenAPI 兼容）" value="avanfinity-2026-08" />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="卡台 Base URL">
+          <el-input v-model="accountForm.site_base" placeholder="https://www.avanfinity.com" @blur="normalizeAccountBase" />
+        </el-form-item>
+        <el-form-item label="Open API Key (sk_…)">
+          <el-input
+            v-model="accountForm.cred_secret"
+            type="password"
+            show-password
+            :placeholder="accountForm.id ? '留空不修改' : '必填'"
+            autocomplete="off"
+          />
+        </el-form-item>
+        <el-form-item label="Webhook Secret">
+          <el-input
+            v-model="accountForm.webhook_secret"
+            type="password"
+            show-password
+            :placeholder="accountForm.id ? '留空不修改' : '按卡台开发者页填写'"
+            autocomplete="off"
+          />
+          <div class="text-xs text-subtle mt-1">A/B 卡台分别验签，用于各自订单状态与卡健康归因。</div>
+        </el-form-item>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <el-form-item label="优先级（越小越优先）">
+            <el-input-number v-model="accountForm.priority" :min="1" :max="999" class="!w-full" />
+          </el-form-item>
+          <el-form-item label="状态">
+            <el-select v-model="accountForm.status" class="w-full">
+              <el-option label="启用" value="active" />
+              <el-option label="停用" value="disabled" />
+            </el-select>
+          </el-form-item>
+        </div>
+        <el-checkbox v-model="accountForm.is_primary_default">设为主台（老码默认走这台）</el-checkbox>
+      </el-form>
+      <template #footer>
+        <el-button @click="dlgAccount = false">取消</el-button>
+        <el-button type="primary" :loading="savingAccount" @click="saveAccount">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -269,12 +355,7 @@ const PRESETS: Record<string, string> = {
 }
 
 const form = reactive({ card_api_base: PRESETS.prod })
-const secrets = reactive({ card_api_key: '', agent_swap_password: '' })
-const epayForm = reactive({ epay_api_base: '', epay_pid: '', public_base_url: '' })
-const epaySecrets = reactive({ epay_key: '' })
-const epayPayTypes = ref<Array<'alipay' | 'wxpay'>>(['alipay'])
-const savingEpay = ref(false)
-const testingEpay = ref(false)
+const secrets = reactive({ agent_swap_password: '' })
 const hints = reactive<Record<string, any>>({})
 const saving = ref(false)
 const busy = ref(false)
@@ -294,10 +375,46 @@ const plansVersion = ref<number | null>(null)
 const dlgStatus = ref(false)
 const dlgBal = ref(false)
 const dlgPlans = ref(false)
+const dlgAccount = ref(false)
 
-const keyHint = computed(() =>
-  hints.card_api_key_configured ? `已配置 ${hints.card_api_key_hint || ''}`.trim() : '粘贴 sk_…',
+interface PlatformAccountRow {
+  id: number
+  name: string
+  protocol: string
+  site_base: string
+  status: string
+  priority: number
+  is_primary_default: boolean
+  has_credential: boolean
+  circuit_state: string
+  circuit_fail_count: number
+  last_error?: string
+}
+
+const platformAccounts = ref<PlatformAccountRow[]>([])
+const platformUnusable = ref<string[]>([])
+const loadingPlatforms = ref(false)
+const savingDualBind = ref(false)
+const savingAccount = ref(false)
+const accPingLoading = ref<number | null>(null)
+const accPing = ref<Record<number, { spendable_usd?: string; message?: string }>>({})
+const dualBind = reactive({ enabled: false, allowSingle: false })
+const accountForm = reactive({
+  id: 0,
+  name: '',
+  protocol: 'spacexcard-legacy',
+  site_base: '',
+  cred_secret: '',
+  webhook_secret: '',
+  status: 'active',
+  priority: 10,
+  is_primary_default: false,
+})
+
+const activePlatformCount = computed(
+  () => platformAccounts.value.filter((a) => a.status === 'active' && a.circuit_state !== 'open').length,
 )
+
 const swapPwHint = computed(() =>
   hints.agent_swap_password_configured ? '已设置（留空保存不修改）' : '设置代理换码密码（至少 6 位）',
 )
@@ -305,22 +422,6 @@ const agentSwapUrl = computed(() => {
   if (typeof window === 'undefined') return '/partner/swap'
   return `${window.location.origin}/partner/swap`
 })
-const publicBaseDefault = computed(() =>
-  typeof window !== 'undefined' ? window.location.origin : 'http://127.0.0.1:8080',
-)
-const epayPublicBase = computed(() => {
-  const effective = String(hints.public_base_url_effective || '').trim().replace(/\/+$/, '')
-  if (effective) return effective
-  return publicBaseDefault.value
-})
-const epayNotifyUrl = computed(() => `${epayPublicBase.value}/api/v1/webhooks/epay`)
-const epayReturnUrl = computed(
-  () => `${epayPublicBase.value}/partner/orders?paid=1&order_no=…`,
-)
-const epayKeyHint = computed(() =>
-  hints.epay_key_configured ? `已配置 ${hints.epay_key_hint || ''}`.trim() : '粘贴商户密钥',
-)
-
 const siteRoot = computed(() => {
   let b = (form.card_api_base || '').trim().replace(/\/+$/, '')
   b = b.replace(/\/openapi\/v1$/i, '').replace(/\/openapi$/i, '')
@@ -328,12 +429,6 @@ const siteRoot = computed(() => {
 })
 const resolvedOpenapi = computed(() => siteRoot.value + '/openapi/v1')
 const resolvedCdk = computed(() => siteRoot.value + '/api/v1/cdk')
-const presetActive = computed(() => {
-  const b = siteRoot.value.toLowerCase()
-  if (b === PRESETS.prod) return 'prod'
-  if (b === PRESETS.sandbox) return 'sandbox'
-  return ''
-})
 
 // 档位清单来自服务端下发的 registry（已按「卡台注册表 ∩ ACC 定价开关」过滤）。
 // 这里原来写死 go/plus/pro_5x/pro_20x，两头都不对：卡台新开的点数档看不到，
@@ -361,9 +456,6 @@ const feeSummary = computed(() =>
 const feeAllZero = computed(() => planCards.value.every((p) => Number(p.fee) === 0))
 const spendableDisplay = computed(() => bal.spendable ?? '—')
 
-function applyPreset(id: string) {
-  form.card_api_base = PRESETS[id] || PRESETS.prod
-}
 function normalizeBase() {
   form.card_api_base = siteRoot.value
 }
@@ -396,67 +488,14 @@ async function loadSettings() {
   if (!r.ok) return
   const d = await r.json()
   form.card_api_base = d.card_api_base || PRESETS.prod
-  epayForm.epay_api_base = d.epay_api_base || ''
-  epayForm.epay_pid = d.epay_pid || ''
-  epayForm.public_base_url = d.public_base_url || ''
-  const types = String(d.epay_pay_types || 'alipay')
-    .split(',')
-    .map((v: string) => v.trim().toLowerCase())
-    .filter((v: string) => v === 'alipay' || v === 'wxpay')
-  epayPayTypes.value = (types.length ? types : ['alipay']) as Array<'alipay' | 'wxpay'>
   Object.assign(hints, d)
   normalizeBase()
-}
-
-async function testEpay() {
-  testingEpay.value = true
-  try {
-    const r = await authFetch('/api/v1/admin/epay/test', { method: 'POST' })
-    const d = await r.json().catch(() => ({}))
-    if (!r.ok || !d.ok) {
-      dialog.toast(d.error || '易支付测试失败', 'err')
-      return
-    }
-    dialog.toast(d.message || '易支付配置正确', 'ok')
-  } finally {
-    testingEpay.value = false
-  }
-}
-
-async function saveEpay() {
-  if (!epayPayTypes.value.length) {
-    dialog.toast('请至少勾选一种支付方式', 'warn')
-    return
-  }
-  savingEpay.value = true
-  try {
-    const body: Record<string, string> = {
-      epay_api_base: epayForm.epay_api_base.trim(),
-      epay_pid: epayForm.epay_pid.trim(),
-      epay_pay_types: epayPayTypes.value.join(','),
-      public_base_url: epayForm.public_base_url.trim(),
-    }
-    if (epaySecrets.epay_key.trim()) body.epay_key = epaySecrets.epay_key.trim()
-    const r = await authFetch('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
-    const d = await r.json().catch(() => ({}))
-    if (!r.ok) {
-      dialog.toast(d.error || '保存失败', 'err')
-      return
-    }
-    Object.assign(hints, d)
-    epaySecrets.epay_key = ''
-    dialog.toast('易支付配置已保存', 'ok')
-  } finally {
-    savingEpay.value = false
-  }
 }
 
 async function save() {
   saving.value = true
   try {
-    normalizeBase()
-    const body: Record<string, string> = { card_api_base: form.card_api_base.trim() }
-    if (secrets.card_api_key.trim()) body.card_api_key = secrets.card_api_key.trim()
+    const body: Record<string, string> = {}
     if (secrets.agent_swap_password.trim()) body.agent_swap_password = secrets.agent_swap_password.trim()
     const r = await authFetch('/api/v1/admin/settings', { method: 'PUT', body: JSON.stringify(body) })
     const d = await r.json().catch(() => ({}))
@@ -465,7 +504,6 @@ async function save() {
       return false
     }
     Object.assign(hints, d)
-    secrets.card_api_key = ''
     secrets.agent_swap_password = ''
     dialog.toast('已保存', 'ok')
     return true
@@ -562,9 +600,179 @@ function openPlansDialog() {
   if (!Object.keys(plansRaw.value).length) loadPlans()
 }
 
+function protocolLabel(p: string) {
+  if (p === 'avanfinity-2026-08') return 'Avanfinity'
+  return 'SpaceX Legacy'
+}
+
+function normalizeAccountBase() {
+  let b = (accountForm.site_base || '').trim().replace(/\/+$/, '')
+  b = b.replace(/\/openapi\/v1$/i, '').replace(/\/openapi$/i, '')
+  accountForm.site_base = b
+}
+
+async function loadPlatforms() {
+  loadingPlatforms.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms')
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '加载卡台账户失败', 'err')
+      return
+    }
+    platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
+    platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : []
+    dualBind.enabled = !!d.dual_bind
+    dualBind.allowSingle = !!d.allow_single
+  } finally {
+    loadingPlatforms.value = false
+  }
+}
+
+async function saveDualBind() {
+  savingDualBind.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms/dual-bind', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: dualBind.enabled, allow_single: dualBind.allowSingle }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      await loadPlatforms()
+      return
+    }
+    platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : platformAccounts.value
+    platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : []
+    dualBind.enabled = !!d.dual_bind
+    dualBind.allowSingle = !!d.allow_single
+    dialog.toast(dualBind.enabled ? '已开启本站双绑发码' : '已关闭（恢复单台发码）', 'ok')
+  } finally {
+    savingDualBind.value = false
+  }
+}
+
+function openAccountForm(acc?: PlatformAccountRow) {
+  if (acc) {
+    accountForm.id = acc.id
+    accountForm.name = acc.name
+    accountForm.protocol = acc.protocol || 'spacexcard-legacy'
+    accountForm.site_base = acc.site_base
+    accountForm.cred_secret = ''
+    accountForm.webhook_secret = ''
+    accountForm.status = acc.status || 'active'
+    accountForm.priority = acc.priority || 10
+    accountForm.is_primary_default = !!acc.is_primary_default
+  } else {
+    accountForm.id = 0
+    accountForm.name = platformAccounts.value.length ? `备台 ${platformAccounts.value.length + 1}` : '主台 A'
+    accountForm.protocol = 'spacexcard-legacy'
+    accountForm.site_base = siteRoot.value
+    accountForm.cred_secret = ''
+    accountForm.webhook_secret = ''
+    accountForm.status = 'active'
+    accountForm.priority = platformAccounts.value.length ? (platformAccounts.value.length + 1) * 10 : 10
+    accountForm.is_primary_default = platformAccounts.value.length === 0
+  }
+  dlgAccount.value = true
+}
+
+async function saveAccount() {
+  normalizeAccountBase()
+  if (!accountForm.name.trim() || !accountForm.site_base.trim()) {
+    dialog.toast('请填写名称和 Base URL', 'warn')
+    return
+  }
+  if (!accountForm.id && !accountForm.cred_secret.trim()) {
+    dialog.toast('新账户请填写 API Key', 'warn')
+    return
+  }
+  savingAccount.value = true
+  try {
+    const body: Record<string, unknown> = {
+      id: accountForm.id || undefined,
+      name: accountForm.name.trim(),
+      protocol: accountForm.protocol,
+      site_base: accountForm.site_base.trim(),
+      status: accountForm.status,
+      priority: accountForm.priority,
+      is_primary_default: accountForm.is_primary_default,
+    }
+    if (accountForm.cred_secret.trim()) body.cred_secret = accountForm.cred_secret.trim()
+    if (accountForm.webhook_secret.trim()) body.webhook_secret = accountForm.webhook_secret.trim()
+    const r = await authFetch('/api/v1/admin/card-platforms/upsert', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
+    platformUnusable.value = Array.isArray(d.unusable) ? d.unusable : []
+    dualBind.enabled = !!d.dual_bind
+    dualBind.allowSingle = !!d.allow_single
+    dlgAccount.value = false
+    dialog.toast('账户已保存', 'ok')
+  } finally {
+    savingAccount.value = false
+  }
+}
+
+async function pingAccount(id: number) {
+  accPingLoading.value = id
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms/ping', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok || !d.ok) {
+      dialog.toast(d.error || d.detail || d.message || '探测失败', 'err')
+      return
+    }
+    accPing.value = { ...accPing.value, [id]: { spendable_usd: d.spendable_usd, message: d.message } }
+    dialog.toast(d.message || '连通正常', d.status === 403 ? 'warn' : 'ok')
+    await loadPlatforms()
+  } finally {
+    accPingLoading.value = null
+  }
+}
+
+async function resetCircuit(id: number) {
+  const r = await authFetch('/api/v1/admin/card-platforms/reset-circuit', {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    dialog.toast(d.error || '复位失败', 'err')
+    return
+  }
+  platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
+  dialog.toast('熔断已复位', 'ok')
+}
+
+async function toggleAccountStatus(acc: PlatformAccountRow) {
+  const next = acc.status === 'active' ? 'disabled' : 'active'
+  const r = await authFetch('/api/v1/admin/card-platforms/status', {
+    method: 'POST',
+    body: JSON.stringify({ id: acc.id, status: next }),
+  })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    dialog.toast(d.error || '操作失败', 'err')
+    return
+  }
+  platformAccounts.value = Array.isArray(d.accounts) ? d.accounts : []
+  dialog.toast(next === 'active' ? '已启用' : '已停用', 'ok')
+}
+
 onMounted(async () => {
   await loadSettings()
   await loadNetwork()
+  await loadPlatforms()
 })
 </script>
 
@@ -605,4 +813,15 @@ onMounted(async () => {
 .sc-value.bad { color: var(--err); }
 .sc-hint { margin-top: 6px; font-size: 11px; color: var(--ink-3); }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+
+.platform-card {
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--brd);
+  background: var(--surface-2);
+}
+.platform-card--open {
+  border-color: color-mix(in srgb, var(--err) 45%, var(--brd));
+  background: color-mix(in srgb, var(--err) 6%, var(--surface-2));
+}
 </style>

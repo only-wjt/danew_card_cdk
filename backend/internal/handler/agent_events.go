@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/danew/cdk-recharge-system/internal/db"
@@ -10,10 +11,12 @@ import (
 
 // 代理回调事件类型
 const (
-	agentEventRechargeCompleted = "recharge.completed"
-	agentEventRechargeFailed    = "recharge.failed"
-	agentEventRechargeUnknown   = "recharge.unknown"
-	agentEventBatchCompleted    = "batch.completed"
+	agentEventRechargeCompleted  = "recharge.completed"
+	agentEventRechargeFailed     = "recharge.failed"
+	agentEventRechargeUnknown    = "recharge.unknown"
+	agentEventBatchCompleted     = "batch.completed"
+	agentEventOrderDelivered     = "order.delivered"
+	agentEventOrderFulfillFailed = "order.fulfill_failed"
 )
 
 // agentEventTypeForItemStatus 明细终态 → 事件类型。非终态返回空串，不产生事件。
@@ -95,6 +98,58 @@ func enqueueAgentBatchEvent(batchID string) {
 		"unknown":  batch.Unknown,
 	})
 	if err := db.EnqueueAgentWebhook(agentID, eventID, agentEventBatchCompleted, batchID, "", payload, target); err != nil {
+		log.Printf("[agent-webhook] enqueue %s failed: %v", eventID, err)
+	}
+}
+
+// enqueueAgentOrderDelivered 购卡发齐后通知二级入库。event_id 稳定，重复发货不会再推。
+func enqueueAgentOrderDelivered(order db.AgentOrder) {
+	if strings.TrimSpace(order.OrderNo) == "" || order.AgentUserID <= 0 {
+		return
+	}
+	target, _, err := db.GetAgentWebhookTarget(order.AgentUserID)
+	if err != nil || target == "" {
+		return
+	}
+	eventID := "evt_" + order.OrderNo + "_delivered"
+	payload := agentEventPayload(eventID, agentEventOrderDelivered, map[string]any{
+		"order_no":     order.OrderNo,
+		"plan":         order.Plan,
+		"plan_label":   order.PlanLabel,
+		"count":        order.Count,
+		"issued_count": order.IssuedCount,
+		"issued_codes": order.IssuedCodes,
+		"delivered_at": order.DeliveredAt,
+	})
+	if err := db.EnqueueAgentWebhook(order.AgentUserID, eventID, agentEventOrderDelivered, order.OrderNo, "", payload, target); err != nil {
+		log.Printf("[agent-webhook] enqueue %s failed: %v", eventID, err)
+	}
+}
+
+// enqueueAgentOrderFulfillFailed 已付款但发货失败。同一单多次失败只入队一次。
+func enqueueAgentOrderFulfillFailed(order db.AgentOrder) {
+	if strings.TrimSpace(order.OrderNo) == "" || order.AgentUserID <= 0 {
+		return
+	}
+	target, _, err := db.GetAgentWebhookTarget(order.AgentUserID)
+	if err != nil || target == "" {
+		return
+	}
+	eventID := "evt_" + order.OrderNo + "_fulfill_failed"
+	codes := order.IssuedCodes
+	if codes == nil {
+		codes = []string{}
+	}
+	payload := agentEventPayload(eventID, agentEventOrderFulfillFailed, map[string]any{
+		"order_no":     order.OrderNo,
+		"plan":         order.Plan,
+		"plan_label":   order.PlanLabel,
+		"count":        order.Count,
+		"issued_count": order.IssuedCount,
+		"issued_codes": codes,
+		"fail_reason":  order.FailReason,
+	})
+	if err := db.EnqueueAgentWebhook(order.AgentUserID, eventID, agentEventOrderFulfillFailed, order.OrderNo, "", payload, target); err != nil {
 		log.Printf("[agent-webhook] enqueue %s failed: %v", eventID, err)
 	}
 }

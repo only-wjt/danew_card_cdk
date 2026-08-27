@@ -12,9 +12,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/provider"
+	"github.com/gin-gonic/gin"
 )
 
 func writeCardErr(c *gin.Context, err error) {
@@ -155,6 +156,34 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		_, _ = rand.Read(b)
 		idem = "cdk-issue-" + hex.EncodeToString(b)
 	}
+	// 本站统一发码：生成 DN- 码并在各卡台各买一张，兑换时才决定打哪台。
+	if siteDualBindEnabled() {
+		codes, derr := provider.DualIssueBatch(c.Request.Context(), plan, req.Count, allowDegradedSingleBind())
+		u, _ := c.Get("username")
+		username, _ := u.(string)
+		db.WriteAudit(username, "cardplatform_issue_cdk",
+			"site_dual_bind plan="+plan+" count="+strconv.Itoa(len(codes))+"/"+strconv.Itoa(req.Count), c.ClientIP())
+		if derr != nil && len(codes) == 0 {
+			c.JSON(http.StatusBadGateway, gin.H{"error": derr.Error()})
+			return
+		}
+		issued := make([]gin.H, 0, len(codes))
+		for _, code := range codes {
+			row, _ := db.GetSiteCDKByCode(code)
+			issued = append(issued, gin.H{
+				"id": row.ID, "code": code, "plan": plan,
+				"code_prefix": provider.SiteCodePrefixOf(code),
+				"code_length": len(code), "full_code": code,
+				"stored": true, "has_full_code": true, "site_code": true,
+			})
+		}
+		out := gin.H{"requested": req.Count, "issued": issued, "stored": len(codes), "site_dual_bind": true}
+		if derr != nil {
+			out["partial_error"] = derr.Error()
+		}
+		c.JSON(http.StatusOK, out)
+		return
+	}
 	// 本站策略 / 选卡配置 → 发码偏好（让选卡配置真正生效）
 	var issuePrefs []cardplatform.IssueCardPref
 	policy := loadSiteRedeemPolicy()
@@ -218,7 +247,7 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		}
 		// 本站 SQLite 持久化完整码（卡台列表只回 prefix）
 		storedOK := false
-		if err := db.SaveCardplatformCDKCode(it.ID, code, prefix, it.Plan, it.FeeAmountMinor); err != nil {
+		if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, "unused", primaryCardAccountID()); err != nil {
 			storeFailed++
 			log.Printf("[cdk-issue] save full code failed id=%d prefix=%s: %v", it.ID, prefix, err)
 		} else {
@@ -249,7 +278,8 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 // body: { items: [{ id, code, code_prefix?, plan?, fee_amount_minor? }] }
 func CardPlatformStoreCDKCodes(c *gin.Context) {
 	var req struct {
-		Items []struct {
+		AccountID int64 `json:"account_id"`
+		Items     []struct {
 			ID             int64  `json:"id"`
 			Code           string `json:"code"`
 			CodePrefix     string `json:"code_prefix"`
@@ -260,6 +290,12 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil || len(req.Items) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "items required"})
 		return
+	}
+	if req.AccountID > 0 {
+		if _, err := db.GetCardPlatformAccount(req.AccountID); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account_id"})
+			return
+		}
 	}
 	if len(req.Items) > 500 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "items max 500"})
@@ -276,7 +312,7 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 		if prefix == "" && len(code) >= 14 {
 			prefix = code[:14]
 		}
-		if err := db.SaveCardplatformCDKCode(it.ID, code, prefix, it.Plan, it.FeeAmountMinor); err != nil {
+		if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, "unused", req.AccountID); err != nil {
 			failed++
 			log.Printf("[cdk-store] save failed id=%d: %v", it.ID, err)
 			continue
@@ -302,6 +338,10 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	plan := strings.TrimSpace(c.Query("plan"))
 	q := strings.TrimSpace(c.Query("q"))
 	status := strings.TrimSpace(strings.ToLower(c.Query("status")))
+	codeKind := strings.TrimSpace(strings.ToLower(c.Query("code_kind")))
+	bindingState := strings.TrimSpace(strings.ToLower(c.Query("binding_state")))
+	failover := strings.TrimSpace(strings.ToLower(c.Query("failover")))
+	fulfilledAccount, _ := strconv.ParseInt(c.Query("fulfilled_account_id"), 10, 64)
 	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "0"))
@@ -313,7 +353,11 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		if limit <= 0 {
 			limit = 10000
 		}
-		list, _, err := db.ListCardplatformStoredCDKCodesPage(plan, q, status, 1, limit)
+		list, _, err := db.ListStoredCDKsDetailed(db.StoredCDKListQuery{
+			Plan: plan, Q: q, Status: status, CodeKind: codeKind,
+			BindingState: bindingState, FulfilledAccount: fulfilledAccount,
+			Failover: failover, Page: 1, PageSize: limit,
+		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -353,7 +397,11 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		page = 1
 	}
 
-	list, total, err := db.ListCardplatformStoredCDKCodesPage(plan, q, status, page, pageSize)
+	list, total, err := db.ListStoredCDKsDetailed(db.StoredCDKListQuery{
+		Plan: plan, Q: q, Status: status, CodeKind: codeKind,
+		BindingState: bindingState, FulfilledAccount: fulfilledAccount,
+		Failover: failover, Page: page, PageSize: pageSize,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -373,7 +421,9 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 
 	noteIDs := make([]int64, 0, len(list))
 	for _, it := range list {
-		noteIDs = append(noteIDs, it.UpstreamID)
+		if it.UpstreamID > 0 {
+			noteIDs = append(noteIDs, it.UpstreamID)
+		}
 	}
 	notes := db.MapCardplatformCDKNotes(noteIDs)
 	out := make([]gin.H, 0, len(list))
@@ -387,10 +437,24 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		}
 		out = append(out, gin.H{
 			"id": it.UpstreamID, "code": it.Code, "full_code": it.Code,
+			"row_id":      it.RowID,
 			"code_prefix": it.CodePrefix, "plan": it.Plan, "status": st,
 			"fee_amount_minor": it.FeeAmountMinor, "created_at": it.CreatedAt,
+			"code_kind": it.CodeKind, "issue_status": it.IssueStatus,
+			"dual_eligible": it.DualEligible,
+			"binding_total": it.BindingTotal, "binding_usable": it.BindingUsable,
+			"binding_summary":      it.BindingSummary,
+			"fulfilled_account_id": it.FulfilledAccountID,
+			"fulfilled_account":    it.FulfilledAccount,
+			"fulfilled_provider":   it.FulfilledProvider,
+			"failover_used":        it.FailoverUsed, "failover_reason": it.FailoverReason,
 			"has_full_code": true, "stored": true,
-			"note": notes[it.UpstreamID],
+			"note": func() string {
+				if it.UpstreamID <= 0 {
+					return ""
+				}
+				return notes[it.UpstreamID]
+			}(),
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -888,7 +952,11 @@ func PublicCDKPreview(c *gin.Context) {
 	if guardAgentAssignedCDK(c, code) {
 		return
 	}
-	cli := cardplatform.NewFromSettings()
+	if provider.IsSiteCode(code) {
+		sitePreview(c, code)
+		return
+	}
+	cli := legacyCardClientForCode(code)
 	st, raw, err := cli.Preview(c.Request.Context(), code, deviceFrom(c))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -917,7 +985,19 @@ func PublicCDKPreflight(c *gin.Context) {
 	if guardAgentAssignedCDK(c, str(body["code"])) {
 		return
 	}
-	cli := cardplatform.NewFromSettings()
+	if route, siteCode, isSite, rerr := siteRedeemRoute(body); isSite {
+		if rerr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": rerr.Error()})
+			return
+		}
+		sitePreflight(c, route, siteCode, body)
+		return
+	}
+	legacyCode := str(body["code"])
+	if legacyCode == "" {
+		legacyCode, _ = db.FindCodeByRedemptionToken(str(body["redemption_token"]))
+	}
+	cli := legacyCardClientForCode(legacyCode)
 	st, raw, err := cli.Preflight(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -963,8 +1043,21 @@ func PublicCDKRedeem(c *gin.Context) {
 	if guardAgentAssignedCDK(c, redeemCode) {
 		return
 	}
+	isSiteRedeem := provider.IsSiteCode(redeemCode)
+	var siteRoute *provider.Route
+	if isSiteRedeem {
+		r, rerr := provider.ResolveSticky(redeemCode)
+		if rerr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": rerr.Error()})
+			return
+		}
+		siteRoute = r
+	}
 	// 本站策略：启用时默认向卡台声明 no_auto_card_switch（不依赖 ACC 换卡策略）
 	policy := loadSiteRedeemPolicy()
+	if siteRoute != nil {
+		policy = loadSiteRedeemPolicyForAccount(siteRoute.Account.ID)
+	}
 	if policy.Enabled {
 		if _, exists := body["no_auto_card_switch"]; !exists {
 			body["no_auto_card_switch"] = policy.NoAutoCardSwitch
@@ -977,11 +1070,19 @@ func PublicCDKRedeem(c *gin.Context) {
 	// 本站坏卡黑名单 → 本单排除这些卡：CDK 走 CDK 自己的选卡规则。实时读黑名单、纯选卡维度
 	// 排除,卡台不冻结这些卡(卡台直充用户依旧可用)。拉黑即时生效,无需固化/对账。
 	if _, exists := body["exclude_card_ids"]; !exists {
-		if ids, err := db.ListActiveBlockedCardIDs(); err == nil && len(ids) > 0 {
+		accountID := db.CardPlatformAccountIDForCode(redeemCode)
+		if siteRoute != nil {
+			accountID = siteRoute.Account.ID
+		}
+		if ids, err := db.ListActiveBlockedCardIDsForAccount(accountID); err == nil && len(ids) > 0 {
 			body["exclude_card_ids"] = ids
 		}
 	}
-	cli := cardplatform.NewFromSettings()
+	if isSiteRedeem {
+		siteRedeem(c, siteRoute, redeemCode, body)
+		return
+	}
+	cli := legacyCardClientForCode(redeemCode)
 	st, raw, err := cli.Redeem(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -997,7 +1098,34 @@ func PublicCDKResult(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "token required"})
 		return
 	}
-	cli := cardplatform.NewFromSettings()
+	// token 是 preview 时选定那台发的，必须回同一台查，否则查无此单。
+	boundCode, _ := db.FindCodeByRedemptionToken(token)
+	if provider.IsSiteCode(boundCode) {
+		route, rerr := provider.ResolveSticky(boundCode)
+		if rerr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": rerr.Error()})
+			return
+		}
+		st, raw, err := route.Provider.Result(c.Request.Context(), token, deviceFrom(c))
+		if err != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			return
+		}
+		raw = maskUpstreamCode(raw, route.RemoteCode, boundCode)
+		if st >= 200 && st < 300 {
+			var payload map[string]any
+			if json.Unmarshal(raw, &payload) == nil {
+				// 异步兑换可能到 result 才终态成功，这里也要退役兄弟码。
+				if isTerminalRedeemSuccess(payload) {
+					go provider.MarkConsumed(context.Background(), route)
+				}
+				go observeFromPublicResult(context.Background(), payload, boundCode)
+			}
+		}
+		proxyPublicJSON(c, st, raw)
+		return
+	}
+	cli := legacyCardClientForCode(boundCode)
 	st, raw, err := cli.Result(c.Request.Context(), token, deviceFrom(c))
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
@@ -1039,8 +1167,19 @@ func PublicCDKResultByCode(c *gin.Context) {
 		})
 		return
 	}
-	cli := cardplatform.NewFromSettings()
-	st, raw, err := cli.Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
+	var st int
+	var raw []byte
+	if provider.IsSiteCode(code) {
+		route, rerr := provider.ResolveSticky(code)
+		if rerr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": rerr.Error()})
+			return
+		}
+		st, raw, err = route.Provider.Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
+		raw = maskUpstreamCode(raw, route.RemoteCode, code)
+	} else {
+		st, raw, err = legacyCardClientForCode(code).Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return

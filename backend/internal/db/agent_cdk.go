@@ -15,6 +15,7 @@ var (
 	ErrCDKPlanMismatch  = errors.New("卡密套餐与所选套餐不一致")
 	ErrCDKInFlight      = errors.New("卡密正在其他充值任务中使用")
 	ErrCDKDuplicate     = errors.New("本批卡密重复")
+	ErrCDKLocalStock    = errors.New("GPT白号不能用于代充，请复制发给下级")
 )
 
 // StoredCDK 本站缓存的卡密详情。
@@ -41,6 +42,7 @@ func migrateAgentCDKInventory() error {
 		}
 	}
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_cp_cdk_assigned_agent ON cardplatform_cdk_codes(assigned_agent_user_id)`)
+	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_cp_cdk_plan_agent_status ON cardplatform_cdk_codes(plan, assigned_agent_user_id, status)`)
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_ari_cdk_code ON admin_recharge_items(cdk_code)`)
 	return nil
 }
@@ -279,6 +281,9 @@ func CheckAgentCDKForRecharge(agentUserID int64, plan, code string) error {
 	if !ok {
 		return ErrCDKNotFound
 	}
+	if IsLocalStockPlan(row.Plan) {
+		return ErrCDKLocalStock
+	}
 	if row.AssignedAgentUserID == 0 {
 		return ErrCDKNotAssigned
 	}
@@ -339,6 +344,8 @@ func AgentCDKErrorCode(err error) string {
 		return "CDK_UNAVAILABLE"
 	case errors.Is(err, ErrCDKDuplicate):
 		return "CDK_DUPLICATE"
+	case errors.Is(err, ErrCDKLocalStock):
+		return "CDK_LOCAL_STOCK"
 	default:
 		return "CDK_INVALID"
 	}
@@ -364,6 +371,8 @@ func AgentCDKErrorMessage(err error) string {
 		return "卡密不可用（已使用或已禁用）"
 	case errors.Is(err, ErrCDKDuplicate):
 		return "卡密重复"
+	case errors.Is(err, ErrCDKLocalStock):
+		return "GPT白号不能用于代充，请复制发给下级"
 	default:
 		return err.Error()
 	}

@@ -17,7 +17,7 @@
               <select v-model="buy.plan" class="field-select">
                 <option value="" disabled>请选择</option>
                 <option v-for="p in pricedPlans" :key="p.key" :value="p.key">
-                  {{ p.label || p.key }} · ¥{{ p.price_yuan }}
+                  {{ p.label || p.key }} · ¥{{ p.price_yuan }}{{ planStockText(p) }}
                 </option>
               </select>
             </div>
@@ -179,6 +179,8 @@ interface PlanRow {
   label?: string
   price_cny_cents: number
   price_yuan: string
+  fulfillment?: string
+  stock?: number
 }
 
 interface OrderRow {
@@ -207,7 +209,9 @@ const plans = ref<PlanRow[]>([])
 const orders = ref<OrderRow[]>([])
 const loading = ref(false)
 const buying = ref(false)
-const purchaseHint = ref('')
+const purchaseReady = ref(true)
+const purchaseReason = ref('')
+const cardPlatformReady = ref(true)
 const payTypes = ref<Array<'alipay' | 'wxpay'>>(['alipay'])
 const page = ref(1)
 const pageSize = 20
@@ -230,7 +234,42 @@ const totalYuan = computed(() => {
   return (cents / 100).toFixed(2)
 })
 
-const canBuy = computed(() => !!buy.plan && buy.count >= 1 && buy.count <= maxCount && (selectedPlan.value?.price_cny_cents || 0) > 0)
+function planFulfillment(p?: PlanRow) {
+  if (!p) return 'card_platform'
+  if (p.fulfillment) return p.fulfillment
+  return p.key === 'gpt_white' ? 'local_stock' : 'card_platform'
+}
+
+function planStockText(p: PlanRow) {
+  if (planFulfillment(p) !== 'local_stock' || typeof p.stock !== 'number') return ''
+  return p.stock > 0 ? ` · 剩 ${p.stock}` : ' · 缺货'
+}
+
+/** 本站库存档位的可售数量；卡台档位返回 null（不限）。 */
+const selectedStock = computed(() => {
+  const p = selectedPlan.value
+  if (!p || planFulfillment(p) !== 'local_stock') return null
+  return typeof p.stock === 'number' ? p.stock : null
+})
+
+const purchaseHint = computed(() => {
+  if (!purchaseReady.value) return purchaseReason.value || '暂无法下单'
+  if (planFulfillment(selectedPlan.value) !== 'local_stock' && !cardPlatformReady.value) {
+    return '卡台未配置，暂无法自动发码'
+  }
+  const stock = selectedStock.value
+  if (stock != null && stock <= 0) return '该档位暂时缺货，请联系站长补货'
+  if (stock != null && buy.count > stock) return `库存仅剩 ${stock} 个，请减少数量`
+  return ''
+})
+
+const canBuy = computed(() => {
+  if (!buy.plan || buy.count < 1 || buy.count > maxCount) return false
+  if ((selectedPlan.value?.price_cny_cents || 0) <= 0) return false
+  const stock = selectedStock.value
+  if (stock != null && buy.count > stock) return false
+  return true
+})
 
 const statusOptions = [
   { value: 'pending_pay', label: '待支付' },
@@ -298,8 +337,12 @@ async function loadPlans() {
       label: p.label,
       price_cny_cents: p.price_cny_cents || 0,
       price_yuan: p.price_yuan || (p.price_cny_cents != null ? (p.price_cny_cents / 100).toFixed(2) : '0.00'),
+      fulfillment: p.fulfillment || (p.key === 'gpt_white' ? 'local_stock' : 'card_platform'),
+      stock: typeof p.stock === 'number' ? p.stock : undefined,
     }))
-    purchaseHint.value = d.purchase?.ready === false ? String(d.purchase.reason || '暂无法下单') : ''
+    purchaseReady.value = d.purchase?.ready !== false
+    purchaseReason.value = String(d.purchase?.reason || '')
+    cardPlatformReady.value = d.purchase?.card_platform_ready !== false
     applyPayTypes(d.purchase?.pay_types)
     if (!buy.plan && pricedPlans.value.length) {
       buy.plan = pricedPlans.value[0].key
@@ -326,6 +369,8 @@ async function loadOrders() {
 
 function reloadOrders() {
   page.value = 1
+  // 顺手刷套餐：本站库存会被别的代理买走，缺货要及时反映到下单区。
+  void loadPlans()
   loadOrders()
 }
 

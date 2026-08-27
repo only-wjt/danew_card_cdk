@@ -34,3 +34,18 @@ func TestAgentPlanAllowedEmptyWhitelist(t *testing.T) {
 		t.Fatal("pro_20x not sellable")
 	}
 }
+
+func TestAgentPlanAllowedLocalStockAlways(t *testing.T) {
+	restricted := &db.AgentUser{AllowedPlans: []string{"plus"}}
+	sellable := map[string]bool{"plus": true}
+	if !agentPlanAllowed(restricted, "gpt_white", sellable) {
+		t.Fatal("gpt_white must be allowed even when whitelist set")
+	}
+	if !agentPlanAllowed(restricted, "gpt_white", nil) {
+		t.Fatal("gpt_white must skip card-platform sellable check")
+	}
+	open := &db.AgentUser{AllowedPlans: nil}
+	if !agentPlanAllowed(open, "gpt_white", sellable) {
+		t.Fatal("gpt_white must be allowed for all agents")
+	}
+}

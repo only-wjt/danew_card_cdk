@@ -45,10 +45,13 @@ func agentPlanAllowed(agent *db.AgentUser, plan string, sellable map[string]bool
 	if plan == "" {
 		return false
 	}
+	if db.IsLocalStockPlan(plan) {
+		return true
+	}
 	if len(sellable) > 0 && !sellable[plan] {
 		return false
 	}
-	if len(agent.AllowedPlans) == 0 {
+	if agent == nil || len(agent.AllowedPlans) == 0 {
 		return true
 	}
 	for _, p := range agent.AllowedPlans {
@@ -550,28 +553,32 @@ func AgentListPlans(c *gin.Context) {
 	out := make([]gin.H, 0, len(catalog))
 	for _, p := range catalog {
 		cents := effective[p.Key]
-		out = append(out, gin.H{
+		row := gin.H{
 			"key":             p.Key,
 			"label":           p.Label,
 			"price_cny_cents": cents,
 			"price_yuan":      fmt.Sprintf("%.2f", float64(cents)/100),
 			"is_credit":       p.IsCredit,
-		})
+			"fulfillment":     db.PlanFulfillment(p.Key),
+		}
+		// 本站库存有限，先把可售数量给代理看，别让他下了单才知道不够。
+		if db.IsLocalStockPlan(p.Key) {
+			if stock, serr := db.CountUnassignedLocalStock(p.Key); serr == nil {
+				row["stock"] = stock
+			}
+		}
+		out = append(out, row)
 	}
 	payTypes := epay.ParsePayTypes(settingOr("epay_pay_types", "alipay"))
-	purchase := gin.H{"ready": true, "pay_types": payTypes}
-	if cardplatform.LoadConfig().APIKey == "" {
-		purchase = gin.H{
-			"ready":     false,
-			"reason":    "卡台未配置，暂无法自动发码",
-			"pay_types": payTypes,
-		}
-	} else if epayCfg := loadEpayConfig(); !epayCfg.Ready() {
-		purchase = gin.H{
-			"ready":     false,
-			"reason":    "易支付未配置，请联系站长",
-			"pay_types": payTypes,
-		}
+	cardReady := cardplatform.LoadConfig().APIKey != ""
+	epayReady := loadEpayConfig().Ready()
+	purchase := gin.H{
+		"ready":               epayReady,
+		"card_platform_ready": cardReady,
+		"pay_types":           payTypes,
+	}
+	if !epayReady {
+		purchase["reason"] = "易支付未配置，请联系站长"
 	}
 	c.JSON(http.StatusOK, gin.H{"plans": out, "purchase": purchase})
 }
