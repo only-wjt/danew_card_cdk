@@ -155,21 +155,37 @@ func ReplaceAgentPlanPriceOverrides(agentID int64, prices AgentPlanPriceMap) err
 	return tx.Commit()
 }
 
+func planPriceLookup(m AgentPlanPriceMap, plan string) (int64, bool) {
+	if m == nil {
+		return 0, false
+	}
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return 0, false
+	}
+	if cents, ok := m[plan]; ok {
+		return cents, true
+	}
+	// 历史库可能仍存 pro，统一查 pro_20x 时回落。
+	if plan == "pro_20x" {
+		if cents, ok := m["pro"]; ok {
+			return cents, true
+		}
+	}
+	return 0, false
+}
+
 // EffectiveAgentPlanPrice 套餐代理价（分）：覆盖 → 全局默认 → 0。
 func EffectiveAgentPlanPrice(plan string, overrides, defaults AgentPlanPriceMap) int64 {
-	plan = strings.TrimSpace(plan)
+	plan = CanonicalPlanKey(plan)
 	if plan == "" {
 		return 0
 	}
-	if overrides != nil {
-		if cents, ok := overrides[plan]; ok {
-			return cents
-		}
+	if cents, ok := planPriceLookup(overrides, plan); ok {
+		return cents
 	}
-	if defaults != nil {
-		if cents, ok := defaults[plan]; ok {
-			return cents
-		}
+	if cents, ok := planPriceLookup(defaults, plan); ok {
+		return cents
 	}
 	return 0
 }
@@ -234,15 +250,25 @@ func normalizePlanPriceMap(in AgentPlanPriceMap) (AgentPlanPriceMap, error) {
 		return out, nil
 	}
 	for rawKey, cents := range in {
-		key := strings.TrimSpace(rawKey)
-		if key == "" {
+		raw := strings.TrimSpace(rawKey)
+		if raw == "" {
 			return nil, fmt.Errorf("plan key required")
 		}
-		if len(key) > 64 || !isSafePlanKey(key) {
-			return nil, fmt.Errorf("invalid plan key: %s", key)
+		if len(raw) > 64 || !isSafePlanKey(raw) {
+			return nil, fmt.Errorf("invalid plan key: %s", raw)
 		}
 		if cents < 0 || cents > agentPlanPriceMaxCents {
-			return nil, fmt.Errorf("price for %s must be between 0 and %d cents", key, agentPlanPriceMaxCents)
+			return nil, fmt.Errorf("price for %s must be between 0 and %d cents", raw, agentPlanPriceMaxCents)
+		}
+		key := CanonicalPlanKey(raw)
+		if prev, ok := out[key]; ok {
+			// 显式 pro_20x 覆盖别名 pro；两边都是别名时保留先写入的。
+			if strings.EqualFold(raw, key) {
+				out[key] = cents
+			} else {
+				_ = prev
+			}
+			continue
 		}
 		out[key] = cents
 	}

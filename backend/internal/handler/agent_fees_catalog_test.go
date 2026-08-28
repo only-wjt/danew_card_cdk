@@ -8,7 +8,7 @@ import (
 
 func TestMergePricedPlansKeepsCoreWithoutLive(t *testing.T) {
 	got := mergePricedPlans(corePricedPlans(), nil)
-	want := []string{"plus", "pro_5x", "pro_20x", "pro", "go", "gpt_white"}
+	want := []string{"plus", "pro_5x", "pro_20x", "go", "gpt_white"}
 	seen := map[string]string{}
 	order := make([]string, 0, len(got))
 	for _, p := range got {
@@ -19,6 +19,9 @@ func TestMergePricedPlansKeepsCoreWithoutLive(t *testing.T) {
 		if _, ok := seen[key]; !ok {
 			t.Fatalf("missing core plan %s in %#v", key, seen)
 		}
+	}
+	if _, ok := seen["pro"]; ok {
+		t.Fatalf("standalone pro should fold into pro_20x, got %#v", seen)
 	}
 	if seen["pro_20x"] != "Pro 20x" {
 		t.Fatalf("pro_20x label = %q, want Pro 20x", seen["pro_20x"])
@@ -37,6 +40,31 @@ func TestMergePricedPlansKeepsCoreWithoutLive(t *testing.T) {
 	}
 	if goIdx < 0 || whiteIdx < 0 || whiteIdx <= goIdx {
 		t.Fatalf("gpt_white should follow go: %v", order)
+	}
+}
+
+func TestMergePricedPlansFoldsProIntoPro20x(t *testing.T) {
+	live := []cardplatform.SellablePlan{
+		{Key: "pro", Label: "Pro"},
+		{Key: "pro_20x", Label: "Pro 20x"},
+	}
+	got := mergePricedPlans(nil, live)
+	var n int
+	var label string
+	for _, p := range got {
+		if p.Key == "pro_20x" {
+			n++
+			label = p.Label
+		}
+		if p.Key == "pro" {
+			t.Fatalf("live pro must fold into pro_20x: %#v", got)
+		}
+	}
+	if n != 1 {
+		t.Fatalf("expected one pro_20x, got %#v", got)
+	}
+	if label != "Pro 20x" {
+		t.Fatalf("label = %q", label)
 	}
 }
 

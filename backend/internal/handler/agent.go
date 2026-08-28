@@ -41,25 +41,49 @@ func agentSellableKeys(ctx context.Context) map[string]bool {
 // 代理白名单为空表示「跟卡台走」，不在代理侧另维护一份档位清单
 // （与 internal/cardplatform/sellable.go 的判据保持一致）。
 func agentPlanAllowed(agent *db.AgentUser, plan string, sellable map[string]bool) bool {
-	plan = strings.TrimSpace(plan)
+	plan = db.CanonicalPlanKey(plan)
 	if plan == "" {
 		return false
 	}
 	if db.IsLocalStockPlan(plan) {
 		return true
 	}
-	if len(sellable) > 0 && !sellable[plan] {
+	if len(sellable) > 0 && !planSellable(plan, sellable) {
 		return false
 	}
 	if agent == nil || len(agent.AllowedPlans) == 0 {
 		return true
 	}
 	for _, p := range agent.AllowedPlans {
-		if p == plan {
+		if db.CanonicalPlanKey(p) == plan {
 			return true
 		}
 	}
 	return false
+}
+
+// planSellable 卡台可售判定；pro 与 pro_20x 互通。
+func planSellable(plan string, sellable map[string]bool) bool {
+	if len(sellable) == 0 {
+		return true
+	}
+	plan = db.CanonicalPlanKey(plan)
+	if sellable[plan] {
+		return true
+	}
+	if plan == "pro_20x" && sellable["pro"] {
+		return true
+	}
+	return false
+}
+
+// resolveCardIssuePlan 发码时把统一后的 pro_20x 映射回卡台实际键（若上游只开了 pro）。
+func resolveCardIssuePlan(plan string, sellable map[string]bool) string {
+	plan = db.CanonicalPlanKey(plan)
+	if plan == "pro_20x" && len(sellable) > 0 && !sellable["pro_20x"] && sellable["pro"] {
+		return "pro"
+	}
+	return plan
 }
 
 // ---- 代理 API 限流 ----

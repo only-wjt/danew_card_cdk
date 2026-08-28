@@ -41,6 +41,32 @@ func TestEffectiveAgentPlanPriceFallback(t *testing.T) {
 	if got := EffectiveAgentPlanPrice("plus", AgentPlanPriceMap{}, nil); got != 0 {
 		t.Fatalf("empty maps = %v, want 0", got)
 	}
+	if got := EffectiveAgentPlanPrice("pro_20x", nil, AgentPlanPriceMap{"pro": 8800}); got != 8800 {
+		t.Fatalf("pro alias default = %v, want 8800", got)
+	}
+	if got := EffectiveAgentPlanPrice("pro", AgentPlanPriceMap{"pro_20x": 9900}, nil); got != 9900 {
+		t.Fatalf("canonical pro lookup = %v, want 9900", got)
+	}
+}
+
+func TestNormalizePlanPriceMapFoldsPro(t *testing.T) {
+	got, err := normalizePlanPriceMap(AgentPlanPriceMap{"pro": 1000, "plus": 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := got["pro"]; ok {
+		t.Fatalf("pro should fold away: %#v", got)
+	}
+	if got["pro_20x"] != 1000 || got["plus"] != 2000 {
+		t.Fatalf("got %#v", got)
+	}
+	got, err = normalizePlanPriceMap(AgentPlanPriceMap{"pro": 1000, "pro_20x": 3000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["pro_20x"] != 3000 {
+		t.Fatalf("explicit pro_20x should win: %#v", got)
+	}
 }
 
 func TestAgentPlanPricePersistence(t *testing.T) {

@@ -67,10 +67,11 @@ func issueCDKsForAgentOrder(ctx context.Context, plan string, count int, idem st
 
 	var res *cardplatform.IssueCDKResult
 	var err error
+	issuePlan := resolveCardIssuePlan(plan, agentSellableKeys(ctx))
 	if len(issuePrefs) > 0 {
-		res, err = cli.IssueCDKs(ctx, plan, count, idem, issuePrefs[0])
+		res, err = cli.IssueCDKs(ctx, issuePlan, count, idem, issuePrefs[0])
 	} else {
-		res, err = cli.IssueCDKs(ctx, plan, count, idem)
+		res, err = cli.IssueCDKs(ctx, issuePlan, count, idem)
 	}
 	if err != nil {
 		return nil, err

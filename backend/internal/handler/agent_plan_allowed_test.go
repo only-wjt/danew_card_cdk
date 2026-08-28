@@ -49,3 +49,20 @@ func TestAgentPlanAllowedLocalStockAlways(t *testing.T) {
 		t.Fatal("gpt_white must be allowed for all agents")
 	}
 }
+
+func TestAgentPlanAllowedProAlias(t *testing.T) {
+	agent := &db.AgentUser{AllowedPlans: []string{"pro"}}
+	sellable := map[string]bool{"pro": true}
+	if !agentPlanAllowed(agent, "pro_20x", sellable) {
+		t.Fatal("whitelist pro should allow buying pro_20x")
+	}
+	if !agentPlanAllowed(agent, "pro", sellable) {
+		t.Fatal("ordering as pro should canonicalize and pass")
+	}
+	if resolveCardIssuePlan("pro_20x", sellable) != "pro" {
+		t.Fatal("issue plan should map back to upstream pro when only pro is sellable")
+	}
+	if resolveCardIssuePlan("pro_20x", map[string]bool{"pro_20x": true}) != "pro_20x" {
+		t.Fatal("issue plan should stay pro_20x when upstream has it")
+	}
+}

@@ -140,6 +140,21 @@ func TestLocalStockPlanKeyIsCaseInsensitive(t *testing.T) {
 	}
 }
 
+func TestCanonicalPlanKeyFoldsPro(t *testing.T) {
+	if CanonicalPlanKey("pro") != "pro_20x" {
+		t.Fatal(CanonicalPlanKey("pro"))
+	}
+	if CanonicalPlanKey("GPTPRO") != "pro_20x" {
+		t.Fatal(CanonicalPlanKey("GPTPRO"))
+	}
+	if CanonicalPlanKey("pro_20x") != "pro_20x" {
+		t.Fatal(CanonicalPlanKey("pro_20x"))
+	}
+	if CanonicalPlanKey("plus") != "plus" {
+		t.Fatal(CanonicalPlanKey("plus"))
+	}
+}
+
 func TestCheckAgentCDKForRechargeBlocksGPTWhite(t *testing.T) {
 	openTestDB(t)
 	agent, err := CreateAgentUser("rechargeblock", "AgentTestPass2026", "R", nil)

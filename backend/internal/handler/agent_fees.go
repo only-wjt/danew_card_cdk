@@ -19,7 +19,7 @@ func planPriceSources(plans []pricedPlanMeta, overrides, defaults db.AgentPlanPr
 	out := make([]gin.H, 0, len(plans)+len(overrides)+len(defaults))
 	seen := map[string]bool{}
 	appendPlan := func(key, label string, isCredit bool) {
-		key = strings.TrimSpace(key)
+		key = db.CanonicalPlanKey(key)
 		if key == "" || seen[key] {
 			return
 		}
@@ -27,10 +27,17 @@ func planPriceSources(plans []pricedPlanMeta, overrides, defaults db.AgentPlanPr
 		if strings.TrimSpace(label) == "" {
 			label = key
 		}
+		if key == "pro_20x" && (strings.EqualFold(label, "Pro") || strings.EqualFold(label, "pro")) {
+			label = "Pro 20x"
+		}
 		source := "fallback"
 		if _, ok := overrides[key]; ok {
 			source = "override"
+		} else if _, ok := overrides["pro"]; ok && key == "pro_20x" {
+			source = "override"
 		} else if _, ok := defaults[key]; ok {
+			source = "default"
+		} else if _, ok := defaults["pro"]; ok && key == "pro_20x" {
 			source = "default"
 		}
 		cents := db.EffectiveAgentPlanPrice(key, overrides, defaults)
@@ -47,10 +54,10 @@ func planPriceSources(plans []pricedPlanMeta, overrides, defaults db.AgentPlanPr
 		appendPlan(p.Key, p.Label, p.IsCredit)
 	}
 	for k := range overrides {
-		appendPlan(k, "", strings.HasPrefix(k, "credit"))
+		appendPlan(k, "", strings.HasPrefix(strings.ToLower(k), "credit"))
 	}
 	for k := range defaults {
-		appendPlan(k, "", strings.HasPrefix(k, "credit"))
+		appendPlan(k, "", strings.HasPrefix(strings.ToLower(k), "credit"))
 	}
 	return out
 }
@@ -201,9 +208,10 @@ func localStockPlans() []pricedPlanMeta {
 
 func corePricedPlans() []pricedPlanMeta {
 	core := coreSellableFallbackPlans()
-	out := make([]pricedPlanMeta, 0, len(core)+3)
+	out := make([]pricedPlanMeta, 0, len(core)+2)
 	out = append(out, core[:3]...)
-	out = append(out, pricedPlanMeta{Key: "pro", Label: "Pro"}, pricedPlanMeta{Key: "go", Label: "Go"})
+	// pro 与 pro_20x 同一档，不再单独挂 Pro；Go 仍单独保留。
+	out = append(out, pricedPlanMeta{Key: "go", Label: "Go"})
 	out = append(out, localStockPlans()...)
 	out = append(out, core[3:]...)
 	return out
@@ -226,7 +234,7 @@ func mergePricedPlans(core []pricedPlanMeta, live []cardplatform.SellablePlan) [
 	seen := map[string]int{}
 	out := make([]pricedPlanMeta, 0, len(core)+len(live))
 	for _, p := range core {
-		key := strings.TrimSpace(p.Key)
+		key := db.CanonicalPlanKey(p.Key)
 		if key == "" {
 			continue
 		}
@@ -234,15 +242,28 @@ func mergePricedPlans(core []pricedPlanMeta, live []cardplatform.SellablePlan) [
 		if strings.TrimSpace(p.Label) == "" {
 			p.Label = key
 		}
+		if key == "pro_20x" && strings.EqualFold(strings.TrimSpace(p.Label), "Pro") {
+			p.Label = "Pro 20x"
+		}
+		if i, ok := seen[key]; ok {
+			if strings.TrimSpace(p.Label) != "" {
+				out[i].Label = p.Label
+			}
+			out[i].IsCredit = p.IsCredit
+			continue
+		}
 		seen[key] = len(out)
 		out = append(out, p)
 	}
 	for _, p := range live {
-		key := strings.TrimSpace(p.Key)
+		key := db.CanonicalPlanKey(p.Key)
 		if key == "" {
 			continue
 		}
 		label := strings.TrimSpace(p.Label)
+		if key == "pro_20x" && (label == "" || strings.EqualFold(label, "Pro") || strings.EqualFold(label, "pro")) {
+			label = "Pro 20x"
+		}
 		if i, ok := seen[key]; ok {
 			if label != "" {
 				out[i].Label = label

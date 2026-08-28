@@ -499,7 +499,6 @@ const CORE_PRICE_PLANS: PlanOption[] = [
   { key: 'plus', label: 'Plus', service_fee_usd: null },
   { key: 'pro_5x', label: 'Pro 5x', service_fee_usd: null },
   { key: 'pro_20x', label: 'Pro 20x', service_fee_usd: null },
-  { key: 'pro', label: 'Pro', service_fee_usd: null },
   { key: 'go', label: 'Go', service_fee_usd: null },
   { key: 'gpt_white', label: 'GPT白号', service_fee_usd: null },
   { key: 'credit250', label: 'Codex 点数 250', service_fee_usd: null },

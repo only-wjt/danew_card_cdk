@@ -22,12 +22,20 @@ func IsLocalStockPlan(plan string) bool {
 	return strings.EqualFold(strings.TrimSpace(plan), PlanGPTWhite)
 }
 
-// CanonicalPlanKey 归一化档位 key。本站库存档位大小写不敏感，落库与查询都用小写，
-// 否则「按 GPT_WHITE 下单、按 gpt_white 入库」会在代理付款之后才查不到库存。
+// CanonicalPlanKey 归一化档位 key。
+// - 本站库存档位大小写不敏感，落库与查询都用小写
+// - pro / gptpro 与 pro_20x 是同一档，对外统一为 pro_20x
 func CanonicalPlanKey(plan string) string {
 	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		return ""
+	}
 	if IsLocalStockPlan(plan) {
 		return PlanGPTWhite
+	}
+	switch strings.ToLower(plan) {
+	case "pro", "gptpro", "chatgptpro":
+		return "pro_20x"
 	}
 	return plan
 }
