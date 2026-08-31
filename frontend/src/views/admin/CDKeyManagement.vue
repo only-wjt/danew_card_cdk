@@ -67,12 +67,14 @@
         <div class="flex flex-wrap items-center gap-3">
           <span class="text-sm text-muted">数量</span>
           <el-button size="small" :disabled="form.count <= 1" @click="form.count = Math.max(1, form.count - 1)">−</el-button>
-          <input v-model.number="form.count" type="number" min="1" max="50" class="input !w-16 text-center mono" />
-          <el-button size="small" :disabled="form.count >= 50" @click="form.count = Math.min(50, form.count + 1)">+</el-button>
+          <input v-model.number="form.count" type="number" min="1" :max="ISSUE_MAX" class="input !w-16 text-center mono" />
+          <el-button size="small" :disabled="form.count >= ISSUE_MAX" @click="form.count = Math.min(ISSUE_MAX, form.count + 1)">+</el-button>
           <el-button-group>
             <el-button size="small" @click="form.count = 1">1</el-button>
-            <el-button size="small" @click="form.count = 5">5</el-button>
             <el-button size="small" @click="form.count = 10">10</el-button>
+            <el-button size="small" @click="form.count = 50">50</el-button>
+            <el-button size="small" @click="form.count = 100">100</el-button>
+            <el-button size="small" @click="form.count = ISSUE_MAX">200</el-button>
           </el-button-group>
           <el-checkbox v-model="form.funding_confirmed">确认承担兑换资金</el-checkbox>
           <el-button type="primary" :loading="issuing" :disabled="!canIssue" @click="issue">
@@ -195,6 +197,7 @@
         </template>
         <el-button type="primary" :loading="loadingList" @click="searchList">查询</el-button>
         <el-button :loading="loadingList" @click="loadList">刷新</el-button>
+        <el-button :loading="syncingUpstream" @click="syncFromCardplatform">从卡台同步完整码</el-button>
         <span class="flex-1"></span>
         <el-dropdown trigger="click" @command="onCopyCommand">
           <el-button size="small">
@@ -398,6 +401,7 @@ const RECENT_KEY = 'cdk_recent_issued_v1'
 const CODE_CACHE_KEY = 'cdk_full_code_cache_v1'
 /** 卡台完整码形如 GPTD-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxx（约 43 字符） */
 const FULL_CODE_MIN_LEN = 20
+const ISSUE_MAX = 200
 /** 代理换码隐藏页（完整 URL，便于复制发给代理） */
 const agentSwapUrl =
   typeof window !== 'undefined' ? `${window.location.origin}/partner/swap` : '/partner/swap'
@@ -407,6 +411,7 @@ type CodeCacheEntry = { code: string; plan?: string; prefix?: string; at?: numbe
 const codeCache = ref<Record<string, CodeCacheEntry>>({})
 const storeStats = reactive({ fullOnPage: null as number | null, fullInStore: null as number | null })
 const syncingCache = ref(false)
+const syncingUpstream = ref(false)
 const exportingAll = ref(false)
 const disabling = ref(false)
 const noting = ref(false)
@@ -492,7 +497,7 @@ const planCards = computed(() =>
 )
 
 const canIssue = computed(() =>
-  configured.value && form.funding_confirmed && form.count >= 1 && form.count <= 50 && !issuing.value &&
+  configured.value && form.funding_confirmed && form.count >= 1 && form.count <= ISSUE_MAX && !issuing.value &&
   // 选中的档位必须在可卖清单里：默认值 plus 也可能被卡台/ACC 关掉，
   // 不判的话按钮是亮的、点下去被后端 400 挡回来。
   planKeys.value.includes(form.plan),
@@ -501,13 +506,14 @@ const canIssue = computed(() =>
 const isCreditPlan = computed(() => String(form.plan).toLowerCase().startsWith('credit'))
 const dualIssueHint = computed(() => {
   if (!dualBindEnabled.value) return ''
-  const n = Math.max(1, Math.min(50, form.count || 1))
+  const n = Math.max(1, Math.min(ISSUE_MAX, form.count || 1))
   if (isCreditPlan.value) return `credit* 仅向主台购 ${n} 张，无自动切台`
+  const slow = n >= 20 ? '。数量较大时整批可能超过 3 分钟，超时请用「从卡台同步完整码」，不要重复购买' : ''
   const unit = Number(feeOf(form.plan))
   if (!Number.isFinite(unit)) {
-    return `将同时向各可用卡台各购 ${n} 张本站码（DN-），上游约双倍服务费`
+    return `将同时向各可用卡台各购 ${n} 张本站码（DN-），上游约双倍服务费${slow}`
   }
-  return `将同时向各可用卡台各购 ${n} 张本站码（DN-），上游约 $${(unit * n * 2).toFixed(2)}`
+  return `将同时向各可用卡台各购 ${n} 张本站码（DN-），上游约 $${(unit * n * 2).toFixed(2)}${slow}`
 })
 
 // 可卖清单变了（首次加载 / 卡台改了配置）就把选中项收回到清单内。
@@ -985,7 +991,7 @@ const estimatedTotal = computed(() => {
   // 按钮上会显示「购买 3 张 · $NaN」。宁可显示「—」也不要给代理看一个假数字。
   const unit = Number(feeOf(form.plan))
   if (!Number.isFinite(unit)) return '—'
-  const c = Math.max(1, Math.min(50, form.count || 1))
+  const c = Math.max(1, Math.min(ISSUE_MAX, form.count || 1))
   return (unit * c).toFixed(2)
 })
 
@@ -1352,12 +1358,16 @@ async function issue() {
       if (String(msg).includes('403') || d.code === 403) {
         issueError.value += ' — 可能是 IP 未进白名单，请复制上方出口 IP 到卡台'
       }
+      const low = String(msg).toLowerCase()
+      if (low.includes('timeout') || msg.includes('超时') || low.includes('deadline')) {
+        issueError.value += '。不要重复购买，请点「从卡台同步完整码」找回。'
+      }
       return
     }
     const issued = Array.isArray(d.issued) ? d.issued : (Array.isArray(d.data?.issued) ? d.data.issued : [])
     const codes = issued.map(extractFullCode).filter(Boolean)
     if (!codes.length) {
-      issueError.value = '卡台返回成功但未包含完整码字段 code。原始响应请查网络面板。'
+      issueError.value = '卡台未返回完整码。请点「从卡台同步完整码」找回，不要重复购买。'
       recentCodes.value = []
       return
     }
@@ -1376,11 +1386,13 @@ async function issue() {
     const shortOnes = codes.filter((c: string) => !isFullCode(c))
     const storedN = Number(d.stored_count ?? d.stored)
     const storeFail = Number(d.store_failed) || 0
-    let okMsg = shortOnes.length
-      ? `成功 ${codes.length} 张，但有 ${shortOnes.length} 张长度异常，请核对`
-      : d.site_dual_bind
-        ? `成功 ${codes.length} 张本站码 DN-（双绑已落库）`
-        : `成功 ${codes.length} 张完整码（每条约 ${codes[0]?.length || '—'} 字符）`
+    let okMsg = d.recovered
+      ? (d.msg || `发码请求未完成，已从卡台找回 ${codes.length} 张完整码（请勿再买一次）`)
+      : shortOnes.length
+        ? `成功 ${codes.length} 张，但有 ${shortOnes.length} 张长度异常，请核对`
+        : d.site_dual_bind
+          ? `成功 ${codes.length} 张本站码 DN-（双绑已落库）`
+          : `成功 ${codes.length} 张完整码（每条约 ${codes[0]?.length || '—'} 字符）`
     if (Number.isFinite(storedN)) {
       okMsg += ` · 服务器已存 ${storedN}`
       if (storeFail > 0) okMsg += `（${storeFail} 条落库失败）`
@@ -1395,6 +1407,33 @@ async function issue() {
     await loadMeta()
   } finally {
     issuing.value = false
+  }
+}
+
+async function syncFromCardplatform() {
+  syncingUpstream.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/cardplatform/cdks/sync', {
+      method: 'POST',
+      body: JSON.stringify({
+        status: listStatus.value || 'unused',
+        plan: listPlan.value || form.plan || '',
+      }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || d.msg || '从卡台同步失败', 'err')
+      return
+    }
+    if (d.need_cardplatform_upgrade) {
+      dialog.toast(d.msg || '卡台列表仍只回前缀，没有完整码可同步。不要重复购买。', 'warn')
+    } else {
+      dialog.toast(d.msg || `已同步 ${d.imported || 0} 张完整码`, (d.imported || 0) > 0 ? 'ok' : 'info')
+    }
+    if (d.full_code_in_store != null) storeStats.fullInStore = Number(d.full_code_in_store)
+    await loadList()
+  } finally {
+    syncingUpstream.value = false
   }
 }
 

@@ -77,10 +77,16 @@ func cardClientForAccount(accountID int64) (*cardplatform.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	base := strings.TrimRight(strings.TrimSpace(acc.SiteBase), "/")
-	base = strings.TrimSuffix(base, "/openapi/v1")
-	base = strings.TrimSuffix(base, "/openapi")
-	return cardplatform.New(cardplatform.Config{SiteBase: base, APIKey: strings.TrimSpace(acc.CredSecret)}), nil
+	return cardplatform.NewFromAccount(acc), nil
+}
+
+func cardClientOrSettings(accountID int64) *cardplatform.Client {
+	if accountID > 0 {
+		if cli, err := cardClientForAccount(accountID); err == nil && cli != nil {
+			return cli
+		}
+	}
+	return cardplatform.NewFromSettings()
 }
 
 func primaryCardAccountID() int64 {

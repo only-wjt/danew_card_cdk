@@ -358,14 +358,35 @@ func MarkCardProductsOfflineExceptForAccount(accountID int64, present map[string
 	return n, nil
 }
 
-// PreferredCardSelectionForAccount 双发时使用该卡台自己的首条启用规则。
+func cardProductUsableForPref(code string, products []CardProductCache) bool {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return false
+	}
+	if len(products) == 0 {
+		return true
+	}
+	for _, p := range products {
+		if !strings.EqualFold(p.ProductCode, code) {
+			continue
+		}
+		return p.Enabled && strings.TrimSpace(p.SuspendedAt) == ""
+	}
+	return false
+}
+
+// PreferredCardSelectionForAccount 双发时使用该卡台自己的首条可用规则（跳过未启动卡头）。
 func PreferredCardSelectionForAccount(accountID int64) (issuer, segmentType, segmentKey string) {
 	rules, err := GetCardSelectionRulesForAccount(accountID)
 	if err != nil {
 		return "", "", ""
 	}
+	products, _ := GetCardProductsForAccount(accountID)
 	for _, r := range rules {
 		if !r.Enabled || strings.TrimSpace(r.PlanKey) == "" {
+			continue
+		}
+		if !cardProductUsableForPref(r.PlanKey, products) {
 			continue
 		}
 		issuer = strings.ToLower(strings.TrimSpace(r.Channel))

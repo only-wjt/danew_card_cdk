@@ -1032,8 +1032,8 @@ func legacyUUIDCode(planType string, id int64) string {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hexID[0:8], hexID[8:12], hexID[12:16], hexID[16:20], hexID[20:32])
 }
 
-// SaveCardplatformCDKCode 把完整码写入本站 SQLite（发码 / 回填）。
-// 卡台列表只回 code_prefix，完整码仅本站 DB 可补全。
+// SaveCardplatformCDKCode 把完整码写入本站 SQLite（发码 / 从卡台同步 / 回填）。
+// 卡台列表通常只回 code_prefix；完整码以本站 DB 为准，列表若带回 code/full_code 也会落库。
 func SaveCardplatformCDKCode(upstreamID int64, code, prefix, plan string, feeMinor int64) error {
 	return SaveCardplatformCDKCodeWithStatus(upstreamID, code, prefix, plan, feeMinor, "unused")
 }

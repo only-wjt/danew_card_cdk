@@ -5,12 +5,14 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
@@ -144,12 +146,12 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	if req.Count < 1 {
 		req.Count = 1
 	}
-	if req.Count > 50 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "count max 50"})
+	if req.Count > cardplatform.MaxIssueCount {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("count max %d", cardplatform.MaxIssueCount)})
 		return
 	}
 
-	cli := cardplatform.NewFromSettings()
+	cli := cardClientOrSettings(primaryCardAccountID())
 	idem := c.GetHeader("Idempotency-Key")
 	if idem == "" {
 		b := make([]byte, 16)
@@ -184,30 +186,10 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		c.JSON(http.StatusOK, out)
 		return
 	}
-	// 本站策略 / 选卡配置 → 发码偏好（让选卡配置真正生效）
+	// 本站选卡配置 → 发码偏好（跳过未启动卡头；ch1 等历史写法会归一成 one）
 	var issuePrefs []cardplatform.IssueCardPref
-	policy := loadSiteRedeemPolicy()
-	if issuer, segType, segKey := resolveIssueCardPref(policy); segKey != "" || issuer != "" {
-		issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{
-			Issuer: issuer, SegmentType: segType, SegmentKey: segKey,
-		})
-	} else {
-		// 未启用策略时：仍取选卡配置首条，让「选卡配置」页面保存后能影响发码
-		if rules, err := db.GetCardSelectionRules(); err == nil {
-			for _, r := range rules {
-				if !r.Enabled || strings.TrimSpace(r.PlanKey) == "" {
-					continue
-				}
-				iss := strings.ToLower(strings.TrimSpace(r.Channel))
-				if iss == "" {
-					iss = "one"
-				}
-				issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{
-					Issuer: iss, SegmentType: "product", SegmentKey: strings.TrimSpace(r.PlanKey),
-				})
-				break
-			}
-		}
+	if pref, ok := issuePrefFromSite(); ok {
+		issuePrefs = append(issuePrefs, pref)
 	}
 	var res *cardplatform.IssueCDKResult
 	var err error
@@ -217,6 +199,24 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem)
 	}
 	if err != nil {
+		if isIssueTimeoutErr(err) {
+			recCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			recovered, recErr := cli.SyncUpstreamFullCodes(recCtx, "unused", plan, 10)
+			cancel()
+			if recErr == nil && recovered != nil && recovered.Imported > 0 {
+				c.JSON(http.StatusOK, gin.H{
+					"requested":     req.Count,
+					"issued":        recovered.Codes,
+					"count":         len(recovered.Codes),
+					"stored_count":  recovered.Imported,
+					"store_failed":  0,
+					"server_stored": true,
+					"recovered":     true,
+					"msg":           fmt.Sprintf("发码请求超时，已从卡台找回 %d 张完整码（请勿再买一次）", recovered.Imported),
+				})
+				return
+			}
+		}
 		writeCardErr(c, err)
 		return
 	}
@@ -625,7 +625,7 @@ func CardPlatformBatchEnableCDKs(c *gin.Context) {
 func CardPlatformListCDKs(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	ps, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	cli := cardplatform.NewFromSettings()
+	cli := cardClientOrSettings(primaryCardAccountID())
 	res, err := cli.ListCDKsQuery(c.Request.Context(), cardplatform.CDKListQuery{
 		Page: page, PageSize: ps,
 		Status: c.Query("status"), Plan: c.Query("plan"), Query: c.Query("q"),
@@ -656,6 +656,17 @@ func CardPlatformListCDKs(c *gin.Context) {
 	withFull := 0
 	for _, it := range res.List {
 		full, ok := db.LookupCardplatformCDKCode(it.ID, it.CodePrefix)
+		if !ok {
+			if up := it.FullCodeText(); up != "" {
+				prefix := strings.TrimSpace(it.CodePrefix)
+				if prefix == "" && len(up) >= 14 {
+					prefix = up[:14]
+				}
+				if err := db.SaveCardplatformCDKCodeForAccount(it.ID, up, prefix, it.Plan, it.FeeAmountMinor, it.Status, primaryCardAccountID()); err == nil {
+					full, ok = up, true
+				}
+			}
+		}
 		row := rowOut{
 			ID: it.ID, Plan: it.Plan, CodePrefix: it.CodePrefix, Status: it.Status,
 			FeeAmountMinor: it.FeeAmountMinor, CreatedAt: it.CreatedAt,
@@ -674,6 +685,50 @@ func CardPlatformListCDKs(c *gin.Context) {
 		"full_code_on_page":  withFull,
 		"full_code_in_store": db.CountCardplatformCDKCodes(),
 		"server_stored":      true,
+	})
+}
+
+// CardPlatformSyncUpstreamCDKs POST /api/v1/admin/cardplatform/cdks/sync
+// 从卡台列表把完整码拉回本站，超时发码后用来找回，不要再买一次。
+func CardPlatformSyncUpstreamCDKs(c *gin.Context) {
+	var req struct {
+		Status string `json:"status"`
+		Plan   string `json:"plan"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	status := strings.TrimSpace(req.Status)
+	if status == "" {
+		status = "unused"
+	}
+	cli := cardClientOrSettings(primaryCardAccountID())
+	res, err := cli.SyncUpstreamFullCodes(c.Request.Context(), status, strings.TrimSpace(req.Plan), 20)
+	if err != nil && (res == nil || res.Imported == 0) {
+		writeCardErr(c, err)
+		return
+	}
+	if res == nil {
+		res = &cardplatform.SyncUpstreamResult{}
+	}
+	u, _ := c.Get("username")
+	username, _ := u.(string)
+	db.WriteAudit(username, "cardplatform_sync_upstream_cdks",
+		fmt.Sprintf("imported=%d scanned=%d plan=%s", res.Imported, res.Scanned, req.Plan), c.ClientIP())
+	msg := fmt.Sprintf("已从卡台同步 %d 张完整码（扫描 %d）", res.Imported, res.Scanned)
+	if res.NeedCardplatformUpgrade {
+		msg = "卡台列表仍只回前缀，没有完整码可同步。请升级卡台或用本站已存完整码，不要重复购买。"
+	} else if res.Imported == 0 {
+		msg = fmt.Sprintf("未发现新的完整码（扫描 %d，仅前缀 %d）", res.Scanned, res.PrefixOnly)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":                        true,
+		"imported":                  res.Imported,
+		"scanned":                   res.Scanned,
+		"prefix_only":               res.PrefixOnly,
+		"pages":                     res.Pages,
+		"upstream_total":            res.UpstreamTotal,
+		"need_cardplatform_upgrade": res.NeedCardplatformUpgrade,
+		"full_code_in_store":        db.CountCardplatformCDKCodes(),
+		"msg":                       msg,
 	})
 }
 
@@ -990,6 +1045,7 @@ func PublicCDKPreflight(c *gin.Context) {
 			c.JSON(http.StatusBadGateway, gin.H{"error": rerr.Error()})
 			return
 		}
+		injectRedeemCardPolicy(body, route.Account.ID)
 		sitePreflight(c, route, siteCode, body)
 		return
 	}
@@ -997,6 +1053,7 @@ func PublicCDKPreflight(c *gin.Context) {
 	if legacyCode == "" {
 		legacyCode, _ = db.FindCodeByRedemptionToken(str(body["redemption_token"]))
 	}
+	injectRedeemCardPolicy(body, db.CardPlatformAccountIDForCode(legacyCode))
 	cli := legacyCardClientForCode(legacyCode)
 	st, raw, err := cli.Preflight(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
@@ -1053,27 +1110,14 @@ func PublicCDKRedeem(c *gin.Context) {
 		}
 		siteRoute = r
 	}
-	// 本站策略：启用时默认向卡台声明 no_auto_card_switch（不依赖 ACC 换卡策略）
-	policy := loadSiteRedeemPolicy()
+	accountID := db.CardPlatformAccountIDForCode(redeemCode)
 	if siteRoute != nil {
-		policy = loadSiteRedeemPolicyForAccount(siteRoute.Account.ID)
+		accountID = siteRoute.Account.ID
 	}
-	if policy.Enabled {
-		if _, exists := body["no_auto_card_switch"]; !exists {
-			body["no_auto_card_switch"] = policy.NoAutoCardSwitch
-		}
-		// CDK 严格按本站选卡配置：卡台默认级联(537872/星链)只给卡台直充用户,不盖过 CDK 偏好。
-		if _, exists := body["strict_card_preference"]; !exists {
-			body["strict_card_preference"] = policy.StrictCardPreference
-		}
-	}
+	injectRedeemCardPolicy(body, accountID)
 	// 本站坏卡黑名单 → 本单排除这些卡：CDK 走 CDK 自己的选卡规则。实时读黑名单、纯选卡维度
 	// 排除,卡台不冻结这些卡(卡台直充用户依旧可用)。拉黑即时生效,无需固化/对账。
 	if _, exists := body["exclude_card_ids"]; !exists {
-		accountID := db.CardPlatformAccountIDForCode(redeemCode)
-		if siteRoute != nil {
-			accountID = siteRoute.Account.ID
-		}
 		if ids, err := db.ListActiveBlockedCardIDsForAccount(accountID); err == nil && len(ids) > 0 {
 			body["exclude_card_ids"] = ids
 		}

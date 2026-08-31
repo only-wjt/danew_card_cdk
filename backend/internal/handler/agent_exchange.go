@@ -236,23 +236,10 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		return
 	}
 
-	// 发一张同套餐新码（带本站选卡偏好）
+	// 发一张同套餐新码（带本站选卡偏好，跳过未启动卡头）
 	var issuePrefs []cardplatform.IssueCardPref
-	policy := loadSiteRedeemPolicy()
-	if issuer, segType, segKey := resolveIssueCardPref(policy); segKey != "" || issuer != "" {
-		issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{Issuer: issuer, SegmentType: segType, SegmentKey: segKey})
-	} else if rules, err := db.GetCardSelectionRules(); err == nil {
-		for _, r := range rules {
-			if !r.Enabled || strings.TrimSpace(r.PlanKey) == "" {
-				continue
-			}
-			iss := strings.ToLower(strings.TrimSpace(r.Channel))
-			if iss == "" {
-				iss = "one"
-			}
-			issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{Issuer: iss, SegmentType: "product", SegmentKey: strings.TrimSpace(r.PlanKey)})
-			break
-		}
+	if pref, ok := issuePrefFromSite(); ok {
+		issuePrefs = append(issuePrefs, pref)
 	}
 
 	idem := "agent-swap-" + codeHash[:16] + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)

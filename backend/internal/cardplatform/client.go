@@ -20,12 +20,21 @@ import (
 
 const defaultBase = "https://spacexcard.com"
 
+const (
+	defaultHTTPTimeout = 45 * time.Second
+	issueHTTPTimeout   = 180 * time.Second
+	// MaxIssueCount 与卡台 GPTDirectCDKBatchMax 对齐。
+	MaxIssueCount = 200
+)
+
 // Config 从 site_settings（优先）与环境变量读取。
 type Config struct {
 	// SiteBase 如 https://spacexcard.com（不含 /openapi）
 	SiteBase string
 	// APIKey sk_...
 	APIKey string
+	// AccountID 多卡台账户 id；同步完整码落库时写入该账户。
+	AccountID int64
 }
 
 func LoadConfig() Config {
@@ -64,13 +73,28 @@ func New(cfg Config) *Client {
 	return &Client{
 		cfg: cfg,
 		client: &http.Client{
-			Timeout: 45 * time.Second,
+			Timeout: defaultHTTPTimeout,
 		},
 	}
 }
 
 func NewFromSettings() *Client {
 	return New(LoadConfig())
+}
+
+// NewFromAccount 用某一台卡台账户的 Base/Key 发 OpenAPI。
+func NewFromAccount(acc db.CardPlatformAccount) *Client {
+	base := strings.TrimRight(strings.TrimSpace(acc.SiteBase), "/")
+	base = strings.TrimSuffix(base, "/openapi/v1")
+	base = strings.TrimSuffix(base, "/openapi")
+	if base == "" {
+		base = defaultBase
+	}
+	return New(Config{
+		SiteBase:  base,
+		APIKey:    strings.TrimSpace(acc.CredSecret),
+		AccountID: acc.ID,
+	})
 }
 
 // ---- Open API envelope ----
@@ -98,8 +122,15 @@ func (e *APIError) Error() string {
 }
 
 func (c *Client) doOpenAPI(ctx context.Context, method, path string, body any, idempotencyKey string) (json.RawMessage, error) {
+	return c.doOpenAPIWithClient(ctx, c.client, method, path, body, idempotencyKey)
+}
+
+func (c *Client) doOpenAPIWithClient(ctx context.Context, httpc *http.Client, method, path string, body any, idempotencyKey string) (json.RawMessage, error) {
 	if c.cfg.APIKey == "" {
 		return nil, &APIError{HTTPStatus: 401, Msg: "card_api_key not configured"}
+	}
+	if httpc == nil {
+		httpc = c.client
 	}
 	var rdr io.Reader
 	if body != nil {
@@ -122,7 +153,7 @@ func (c *Client) doOpenAPI(ctx context.Context, method, path string, body any, i
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
-	resp, err := c.client.Do(req)
+	resp, err := httpc.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -449,8 +480,8 @@ func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem str
 	if count < 1 {
 		count = 1
 	}
-	if count > 50 {
-		count = 50
+	if count > MaxIssueCount {
+		return nil, fmt.Errorf("count max %d", MaxIssueCount)
 	}
 	body := IssueCDKRequest{Plan: plan, Count: count, FundingConfirmed: true}
 	if len(pref) > 0 {
@@ -461,7 +492,8 @@ func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem str
 			body.PreferredSegmentType = "product"
 		}
 	}
-	data, err := c.doOpenAPI(ctx, http.MethodPost, "/gpt-direct/cdks", body, idem)
+	issueClient := &http.Client{Timeout: issueHTTPTimeout, Transport: c.client.Transport}
+	data, err := c.doOpenAPIWithClient(ctx, issueClient, http.MethodPost, "/gpt-direct/cdks", body, idem)
 	if err != nil {
 		return nil, err
 	}
@@ -483,10 +515,22 @@ func (c *Client) IssueCDKs(ctx context.Context, plan string, count int, idem str
 type CDKListItem struct {
 	ID             int64  `json:"id"`
 	Plan           string `json:"plan"`
+	Code           string `json:"code"`
+	FullCode       string `json:"full_code"`
 	CodePrefix     string `json:"code_prefix"`
 	Status         string `json:"status"`
 	FeeAmountMinor int64  `json:"fee_amount_minor"`
 	CreatedAt      string `json:"created_at"`
+}
+
+func (it CDKListItem) FullCodeText() string {
+	for _, s := range []string{it.FullCode, it.Code} {
+		s = strings.TrimSpace(s)
+		if len(s) >= 20 && strings.Contains(s, "-") {
+			return s
+		}
+	}
+	return ""
 }
 
 type CDKListResult struct {
@@ -512,7 +556,7 @@ func (c *Client) ListCDKsQuery(ctx context.Context, q CDKListQuery) (*CDKListRes
 	if page < 1 {
 		page = 1
 	}
-	if pageSize < 1 || pageSize > 100 {
+	if pageSize < 1 || pageSize > 200 {
 		pageSize = 20
 	}
 	vals := url.Values{}
@@ -544,6 +588,70 @@ func (c *Client) ListCDKsQuery(ctx context.Context, q CDKListQuery) (*CDKListRes
 		}
 	}
 	return &out, nil
+}
+
+// SyncUpstreamResult 从卡台列表拉回完整码并写入本站 SQLite。
+type SyncUpstreamResult struct {
+	Imported                 int         `json:"imported"`
+	Updated                  int         `json:"updated"`
+	PrefixOnly               int         `json:"prefix_only"`
+	Pages                    int         `json:"pages"`
+	Scanned                  int         `json:"scanned"`
+	UpstreamTotal            int         `json:"upstream_total"`
+	Codes                    []IssuedCDK `json:"codes,omitempty"`
+	NeedCardplatformUpgrade  bool        `json:"need_cardplatform_upgrade"`
+}
+
+// SyncUpstreamFullCodes 翻页拉取卡台 CDK，把带完整 code 的写入本站。
+func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string, maxPages int) (*SyncUpstreamResult, error) {
+	if maxPages <= 0 || maxPages > 50 {
+		maxPages = 50
+	}
+	out := &SyncUpstreamResult{Codes: make([]IssuedCDK, 0)}
+	for page := 1; page <= maxPages; page++ {
+		res, err := c.ListCDKsQuery(ctx, CDKListQuery{Page: page, PageSize: 100, Status: status, Plan: plan})
+		if err != nil {
+			return out, err
+		}
+		if res == nil {
+			break
+		}
+		out.Pages++
+		out.UpstreamTotal = res.Total
+		if len(res.List) == 0 {
+			break
+		}
+		for _, it := range res.List {
+			out.Scanned++
+			code := it.FullCodeText()
+			if code == "" {
+				out.PrefixOnly++
+				continue
+			}
+			prefix := strings.TrimSpace(it.CodePrefix)
+			if prefix == "" && len(code) >= 14 {
+				prefix = code[:14]
+			}
+			_, existed := db.LookupCardplatformCDKCode(it.ID, prefix)
+			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status, c.cfg.AccountID); err != nil {
+				continue
+			}
+			if existed {
+				continue
+			}
+			out.Imported++
+			out.Codes = append(out.Codes, IssuedCDK{
+				ID: it.ID, Code: code, Plan: it.Plan,
+				CodePrefix: prefix, FeeAmountMinor: it.FeeAmountMinor,
+			})
+		}
+		if page*100 >= res.Total {
+			break
+		}
+	}
+	out.Updated = out.Imported
+	out.NeedCardplatformUpgrade = out.Scanned > 0 && out.Imported == 0 && out.PrefixOnly == out.Scanned
+	return out, nil
 }
 
 // CDKStatusSummary 卡台 CDK 按状态汇总（翻页聚合）。

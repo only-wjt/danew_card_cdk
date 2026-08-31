@@ -79,7 +79,7 @@
         <div>
           <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 自动选卡优先级</h2>
           <p class="text-sm text-muted mt-1">
-            顺序越靠前优先级越高；已下线或禁用的自动跳过
+            顺序越靠前优先级越高；已下线或未启动的自动跳过。保存后会同步到该卡台账户规则。
             <el-tag type="warning" size="small" effect="plain" class="ml-2">仅美卡参与自动选卡</el-tag>
           </p>
         </div>
@@ -211,8 +211,8 @@
         <el-button type="primary" :loading="policySaving" @click="savePolicy">保存策略</el-button>
       </div>
       <p class="text-xs text-subtle mt-3">
-        说明：一卡几付的硬上限由<strong>卡台账户容量</strong>执行；本站负责「用哪张产品偏好」与「是否允许卡台自动换卡」。
-        保存当前卡台的选卡优先级后，双发会分别把 A、B 各自第一条启用产品写入对应上游码；已发出的码不追溯修改。
+        说明：保存选卡优先级或策略后，会把 select_priority / strict_select 同步到<strong>当前卡台账户</strong>。
+        兑换有规则即严格按本站顺序，不再被卡台 537872/星链级联盖过。未启动卡头会跳过。已发出的码不追溯修改。
       </p>
     </div>
 
@@ -599,7 +599,11 @@ async function saveRules() {
     rules.value = (d.rules || []).map((item: any) => ({
       ...item, _id: ++_idSeq, enabled: item.enabled !== false,
     }))
-    dialog.toast('已保存', 'ok')
+    if (d.cardplatform_ok === false) {
+      dialog.toast('本站已保存，但同步卡台失败：' + (d.cardplatform_err || '未知错误'), 'warn')
+    } else {
+      dialog.toast('已保存并同步到卡台', 'ok')
+    }
   } finally {
     saving.value = false
   }
@@ -670,7 +674,11 @@ async function savePolicy() {
     resolvedPref.issuer = rp.issuer || ''
     resolvedPref.segment_type = rp.segment_type || ''
     resolvedPref.segment_key = rp.segment_key || ''
-    dialog.toast('策略已保存（新发码/新兑换生效）', 'ok')
+    if (d.cardplatform_ok === false) {
+      dialog.toast('策略已保存，但同步卡台失败：' + (d.cardplatform_err || '未知错误'), 'warn')
+    } else {
+      dialog.toast('策略已保存并同步到卡台（新发码/新兑换生效）', 'ok')
+    }
   } finally {
     policySaving.value = false
   }

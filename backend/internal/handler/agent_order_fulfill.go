@@ -44,25 +44,8 @@ func issueCDKsForAgentOrder(ctx context.Context, plan string, count int, idem st
 	}
 
 	var issuePrefs []cardplatform.IssueCardPref
-	policy := loadSiteRedeemPolicy()
-	if issuer, segType, segKey := resolveIssueCardPref(policy); segKey != "" || issuer != "" {
-		issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{
-			Issuer: issuer, SegmentType: segType, SegmentKey: segKey,
-		})
-	} else if rules, err := db.GetCardSelectionRules(); err == nil {
-		for _, r := range rules {
-			if !r.Enabled || strings.TrimSpace(r.PlanKey) == "" {
-				continue
-			}
-			iss := strings.ToLower(strings.TrimSpace(r.Channel))
-			if iss == "" {
-				iss = "one"
-			}
-			issuePrefs = append(issuePrefs, cardplatform.IssueCardPref{
-				Issuer: iss, SegmentType: "product", SegmentKey: strings.TrimSpace(r.PlanKey),
-			})
-			break
-		}
+	if pref, ok := issuePrefFromSite(); ok {
+		issuePrefs = append(issuePrefs, pref)
 	}
 
 	var res *cardplatform.IssueCDKResult

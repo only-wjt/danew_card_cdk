@@ -112,14 +112,14 @@ func doSyncAccount(ctx context.Context, acc db.CardPlatformAccount) (SyncResult,
 	base := strings.TrimRight(strings.TrimSpace(acc.SiteBase), "/")
 	base = strings.TrimSuffix(base, "/openapi/v1")
 	base = strings.TrimSuffix(base, "/openapi")
-	cli := cardplatform.New(cardplatform.Config{SiteBase: base, APIKey: strings.TrimSpace(acc.CredSecret)})
+	cli := cardplatform.NewFromAccount(acc)
 	var res SyncResult
 	plans, err := cli.GetPlans(ctx)
 	if err != nil {
 		_ = db.MarkCardPlatformAccountError(acc.ID, err.Error())
 		return res, err
 	}
-	// /plans 成功已足以证明卡台恢复；/products 失败只影响产品缓存，不应让熔断永久打开。
+	// /plans 成功已足以证明卡台恢复；产品接口失败只影响产品缓存，不应让熔断永久打开。
 	_ = db.MarkCardPlatformAccountOK(acc.ID)
 	for _, p := range plans.SellablePlans() {
 		if err := db.UpsertPlanStatusForAccount(acc.ID, p.Key, p.Label, true, p.ServiceFeeUsdMinor); err != nil {
@@ -128,25 +128,15 @@ func doSyncAccount(ctx context.Context, acc db.CardPlatformAccount) (SyncResult,
 			res.Plans++
 		}
 	}
-	products, err := cli.GetProducts(ctx)
+	items, present, err := fetchProductsForCache(ctx, cli)
 	if err != nil {
-		log.Printf("[plan-sync] account=%d GetProducts: %v", acc.ID, err)
+		log.Printf("[plan-sync] account=%d products: %v", acc.ID, err)
 		return res, nil
 	}
-	present := make(map[string]bool, len(products))
-	for _, p := range products {
-		if strings.TrimSpace(p.ProductCode) == "" {
-			continue
-		}
-		present[p.ProductCode] = true
-		cp := db.CardProductCache{
-			AccountID: acc.ID, ProductCode: p.ProductCode, Issuer: p.Issuer, BIN: p.BIN,
-			Network: p.Network, IssuingArea: p.IssuingArea, Scene: p.Scene,
-			CardGroup: p.CardGroup, Description: p.Description, BinHeads: p.BinHeads,
-			Enabled: true, SuspendedAt: p.SuspendedAt,
-		}
+	for _, cp := range items {
+		cp.AccountID = acc.ID
 		if err := db.UpsertCardProductForAccount(acc.ID, cp); err != nil {
-			log.Printf("[plan-sync] account=%d upsert product %s: %v", acc.ID, p.ProductCode, err)
+			log.Printf("[plan-sync] account=%d upsert product %s: %v", acc.ID, cp.ProductCode, err)
 		} else {
 			res.Products++
 		}
@@ -181,37 +171,16 @@ func doSync(ctx context.Context) (SyncResult, error) {
 		}
 	}
 
-	// 2. 同步实体产品（product_code + BIN + enabled）
-	// 卡台 /products 只返回当前可开（enabled=true）的产品；下架产品不会再出现。
-	products, err := cli.GetProducts(ctx)
+	// 2. 优先 /gpt-direct/card-products（含未启动卡头），失败再回落 /products。
+	items, present, err := fetchProductsForCache(ctx, cli)
 	if err != nil {
 		// 产品接口失败不阻断套餐同步结果，也绝不把全表标下线（避免短暂 5xx 误杀）
-		log.Printf("[plan-sync] GetProducts error: %v", err)
+		log.Printf("[plan-sync] products error: %v", err)
 		return res, nil
 	}
-	present := make(map[string]bool, len(products))
-	for _, p := range products {
-		code := p.ProductCode
-		if code == "" {
-			continue
-		}
-		// OpenAPI /products 只返回当前可开卡产品 → 列表内一律视为在线
-		present[code] = true
-		cp := db.CardProductCache{
-			ProductCode: code,
-			Issuer:      p.Issuer,
-			BIN:         p.BIN,
-			Network:     p.Network,
-			IssuingArea: p.IssuingArea,
-			Scene:       p.Scene,
-			CardGroup:   p.CardGroup,
-			Description: p.Description,
-			BinHeads:    p.BinHeads,
-			Enabled:     true,
-			SuspendedAt: p.SuspendedAt,
-		}
+	for _, cp := range items {
 		if err := db.UpsertCardProduct(cp); err != nil {
-			log.Printf("[plan-sync] upsert product %s: %v", code, err)
+			log.Printf("[plan-sync] upsert product %s: %v", cp.ProductCode, err)
 		} else {
 			res.Products++
 		}
@@ -223,4 +192,112 @@ func doSync(ctx context.Context) (SyncResult, error) {
 		log.Printf("[plan-sync] marked %d products offline (not in openable list)", off)
 	}
 	return res, nil
+}
+
+// fetchProductsForCache 优先卡台 card-products（能区分未启动），没有该接口再走 /products。
+func fetchProductsForCache(ctx context.Context, cli *cardplatform.Client) ([]db.CardProductCache, map[string]bool, error) {
+	if dps, err := cli.GetDirectCardProducts(ctx); err == nil && len(dps) > 0 {
+		present := make(map[string]bool, len(dps))
+		strict := make([]db.CardProductCache, 0, len(dps))
+		loose := make([]db.CardProductCache, 0, len(dps))
+		strictOnline := 0
+		for _, p := range dps {
+			code := strings.TrimSpace(p.ProductCode)
+			if code == "" {
+				continue
+			}
+			present[code] = true
+			susp := ""
+			if p.Suspended {
+				susp = strings.TrimSpace(p.SuspendReason)
+				if susp == "" {
+					susp = "suspended"
+				}
+			}
+			base := db.CardProductCache{
+				ProductCode: code,
+				Issuer:      p.Issuer,
+				BIN:         p.BIN,
+				Description: p.Label,
+				SuspendedAt: susp,
+			}
+			looseEnabled := p.Enabled && !p.Suspended
+			strictEnabled := looseEnabled && (p.Usable || p.ChannelOpen)
+			l, s := base, base
+			l.Enabled = looseEnabled
+			s.Enabled = strictEnabled
+			loose = append(loose, l)
+			strict = append(strict, s)
+			if strictEnabled {
+				strictOnline++
+			}
+		}
+		if strictOnline > 0 {
+			return overlayProductDetails(ctx, cli, strict), present, nil
+		}
+		return overlayProductDetails(ctx, cli, loose), present, nil
+	}
+	products, err := cli.GetProducts(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	present := make(map[string]bool, len(products))
+	items := make([]db.CardProductCache, 0, len(products))
+	for _, p := range products {
+		code := strings.TrimSpace(p.ProductCode)
+		if code == "" {
+			continue
+		}
+		present[code] = true
+		items = append(items, db.CardProductCache{
+			ProductCode: code,
+			Issuer:      p.Issuer,
+			BIN:         p.BIN,
+			Network:     p.Network,
+			IssuingArea: p.IssuingArea,
+			Scene:       p.Scene,
+			CardGroup:   p.CardGroup,
+			Description: p.Description,
+			BinHeads:    p.BinHeads,
+			Enabled:     true,
+			SuspendedAt: p.SuspendedAt,
+		})
+	}
+	return items, present, nil
+}
+
+// overlayProductDetails 用 /products 补 BIN/地区等展示字段；失败则保留 card-products 结果。
+func overlayProductDetails(ctx context.Context, cli *cardplatform.Client, items []db.CardProductCache) []db.CardProductCache {
+	extras, err := cli.GetProducts(ctx)
+	if err != nil || len(extras) == 0 {
+		return items
+	}
+	byCode := make(map[string]cardplatform.ProductInfo, len(extras))
+	for _, p := range extras {
+		code := strings.TrimSpace(p.ProductCode)
+		if code != "" {
+			byCode[strings.ToUpper(code)] = p
+		}
+	}
+	for i, item := range items {
+		p, ok := byCode[strings.ToUpper(item.ProductCode)]
+		if !ok {
+			continue
+		}
+		if item.BIN == "" {
+			item.BIN = p.BIN
+		}
+		item.Network = p.Network
+		item.IssuingArea = p.IssuingArea
+		item.Scene = p.Scene
+		item.CardGroup = p.CardGroup
+		if item.Description == "" {
+			item.Description = p.Description
+		}
+		if len(item.BinHeads) == 0 {
+			item.BinHeads = p.BinHeads
+		}
+		items[i] = item
+	}
+	return items
 }
