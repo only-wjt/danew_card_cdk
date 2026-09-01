@@ -2,7 +2,7 @@
   <div class="min-h-screen">
     <!-- Header -->
     <header class="border-b bd">
-      <div class="max-w-6xl mx-auto flex items-center justify-between px-6 py-5">
+      <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-5">
         <div class="flex items-center gap-3">
           <span class="grid h-10 w-10 place-items-center rounded-xl text-white" style="background: var(--primary)">
             <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 12L2 9z" /><path d="M11 3 8 9l4 12 4-12-3-6" /><path d="M2 9h20" /></svg>
@@ -21,10 +21,10 @@
     </header>
 
     <!-- Main Content -->
-    <div class="max-w-6xl mx-auto px-6 py-16">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
       <!-- Hero -->
       <div class="text-center mb-16 animate-slideInUp">
-        <h2 class="text-4xl sm:text-5xl font-bold text-ink mb-4">{{ t('home.heroTitle') }}</h2>
+        <h2 class="text-3xl sm:text-5xl font-bold text-ink mb-4">{{ t('home.heroTitle') }}</h2>
         <p class="text-lg text-muted">{{ t('home.heroSub') }}</p>
         <a
           :href="CARD_SHOP_URL"

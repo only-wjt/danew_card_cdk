@@ -2,7 +2,7 @@
   <div class="min-h-screen py-12">
     <div class="max-w-4xl mx-auto px-6">
       <!-- Header -->
-      <div class="mb-10 flex items-start justify-between gap-4 animate-slideInUp">
+      <div class="mb-10 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 animate-slideInUp">
         <div>
           <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
           <h1 class="text-3xl font-bold text-ink mb-1">{{ t('dashboard.title') }}</h1>
@@ -53,7 +53,7 @@
           <h3 class="text-base font-semibold text-ink">{{ t('dashboard.accountInfo') }}</h3>
           <div class="flex justify-between items-center">
             <span class="text-muted">{{ t('dashboard.email') }}</span>
-            <span class="text-ink">{{ billingInfo.account_email }}</span>
+            <span class="text-ink text-right break-all">{{ billingInfo.account_email }}</span>
           </div>
           <div class="flex justify-between items-center">
             <span class="text-muted">{{ t('dashboard.subStatus') }}</span>

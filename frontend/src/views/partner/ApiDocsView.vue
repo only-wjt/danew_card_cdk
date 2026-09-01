@@ -289,6 +289,7 @@ onMounted(async () => {
 .op-head {
   width: 100%;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
@@ -313,7 +314,7 @@ onMounted(async () => {
 .m-put { background: #d97706; }
 .m-patch { background: #d97706; }
 .m-delete { background: #dc2626; }
-.op-path { font-size: 13px; color: var(--ink); }
+.op-path { font-size: 13px; color: var(--ink); word-break: break-all; min-width: 0; }
 .op-summary {
   flex: 1;
   font-size: 12px;

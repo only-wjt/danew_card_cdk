@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen py-12">
     <div class="max-w-3xl mx-auto px-6">
-      <div class="mb-8 flex items-start justify-between gap-4">
+      <div class="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
           <h1 class="text-3xl font-bold text-ink mb-1">{{ t('batch.title') }}</h1>
@@ -132,7 +132,7 @@
 
         <!-- run phase -->
         <template v-else>
-          <div class="grid grid-cols-4 gap-2 text-center">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
             <div class="rounded-lg bg-soft py-2">
               <div class="text-lg font-bold tabular-nums text-ink">{{ stats.total }}</div>
               <div class="text-[10px] text-muted">{{ t('batch.statTotal') }}</div>

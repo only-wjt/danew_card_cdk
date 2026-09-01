@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen py-12">
     <div class="max-w-3xl mx-auto px-6 space-y-6">
-      <div class="flex items-start justify-between gap-4">
+      <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <router-link to="/" class="app-link mb-4 inline-block text-sm">返回首页</router-link>
           <h1 class="text-3xl font-bold text-ink">账单查询</h1>

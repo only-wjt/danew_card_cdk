@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen py-12">
     <div class="max-w-4xl mx-auto px-6">
-      <div class="mb-10 flex items-start justify-between gap-4 animate-slideInUp">
+      <div class="mb-10 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 animate-slideInUp">
         <div>
           <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
           <h1 class="text-3xl font-bold text-ink mb-1">{{ t('cdkLookup.title') }}</h1>

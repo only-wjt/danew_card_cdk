@@ -1,5 +1,33 @@
 <template>
   <div class="app-shell layout-sidebar">
+    <MobileNavDrawer
+      :items="navItems"
+      :title="currentTitle"
+      :subtitle="currentSubtitle"
+      home-path="/partner"
+      :is-active="isActive"
+      :breakpoint="768"
+    >
+      <template #brand>
+        <BrandMark :size="22" label="代理" />
+        <span class="brand-text">代理控制台</span>
+      </template>
+      <template #actions>
+        <ThemeToggle />
+        <button type="button" class="btn-ghost !px-2 !min-h-0 !py-1.5 text-sm" @click="doLogout">退出</button>
+      </template>
+      <template #footer>
+        <div class="side-user">
+          <div class="side-avatar">{{ avatarLetter }}</div>
+          <div class="side-user-meta">
+            <div class="side-user-name">{{ auth.name || auth.username }}</div>
+            <div class="side-user-sub">代理账号</div>
+          </div>
+        </div>
+        <button class="btn-secondary w-full !min-h-0 !py-2 text-sm" @click="doLogout">退出登录</button>
+      </template>
+    </MobileNavDrawer>
+
     <aside class="sidenav">
       <div class="side-brand" @click="router.push('/partner')">
         <BrandMark :size="22" label="代理" />
@@ -50,6 +78,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import BrandMark from '../components/BrandMark.vue'
+import MobileNavDrawer from '../components/MobileNavDrawer.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 import { useAgentAuthStore } from '../stores/agentAuth'
 import { agentFetch } from '../lib/agentApi'
@@ -87,6 +116,7 @@ async function doLogout() {
 <style scoped>
 .app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   background: var(--bg);
   background-image: var(--bg-tint);
@@ -100,6 +130,7 @@ async function doLogout() {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 .sidenav {
   width: 240px;
@@ -113,6 +144,7 @@ async function doLogout() {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
 }
 .side-brand {
   display: flex;
@@ -222,5 +254,14 @@ async function doLogout() {
   margin: 0 auto;
   padding: 24px;
   flex: 1;
+}
+
+@media (max-width: 767px) {
+  .app-shell { flex-direction: column; }
+  .sidenav,
+  .subtop { display: none; }
+  .subtop-inner,
+  .page { padding: 16px; }
+  .main-col { min-height: 0; }
 }
 </style>

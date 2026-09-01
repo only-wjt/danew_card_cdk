@@ -397,6 +397,14 @@ textarea.input { min-height: 72px; resize: vertical; }
   gap: 14px;
   align-items: end;
 }
+
+/* 工具栏筛选：桌面并排，窄屏强制单列铺满（覆盖写死宽度） */
+.toolbar-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
 /* 表单栅格：窄屏单列、宽屏双列 */
 .form-grid {
   display: grid;
@@ -554,6 +562,51 @@ html.dark .el-scrollbar__thumb { background: rgba(255,255,255,.16); }
 
 /* 移动端收窄 */
 @media (max-width: 768px) {
+  :root {
+    --page-pad: 14px 14px;
+  }
+  html, body {
+    overflow-x: clip;
+  }
+  body {
+    background-attachment: scroll;
+  }
+  .page {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+  .filter-grid {
+    grid-template-columns: minmax(100%, 1fr);
+  }
+  .toolbar-filters > * {
+    flex: 1 1 100%;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .toolbar-filters .el-input,
+  .toolbar-filters .el-select,
+  .toolbar-filters .el-button,
+  .toolbar-filters .el-input__wrapper,
+  .toolbar-filters .el-select__wrapper {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+  .input,
+  .field-select,
+  .el-input__inner,
+  .el-textarea__inner,
+  .el-select__placeholder,
+  .el-select__selected-item {
+    font-size: 16px !important;
+  }
+  .data-table thead th,
+  .data-table tbody td {
+    padding: 8px 10px;
+  }
+  .el-pagination__jump,
+  .el-pagination__sizes {
+    display: none !important;
+  }
   .el-dialog { width: 94vw !important; max-width: 94vw !important; }
   .el-table { font-size: 13px; }
   .el-table .cell { padding: 0 6px; }

@@ -1,7 +1,7 @@
 <template>
   <div class="min-h-screen py-12">
     <div class="max-w-3xl mx-auto px-6">
-      <div class="mb-8 flex items-start justify-between gap-4">
+      <div class="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
           <h1 class="text-3xl font-bold text-ink mb-1">CDK 兑换</h1>
@@ -175,7 +175,7 @@
         </div>
 
         <!-- 进度步骤条（由 stage / events 推导） -->
-        <div class="grid grid-cols-4 gap-2 text-center text-xs">
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
           <div
             v-for="p in progressSteps"
             :key="p.key"

@@ -1,5 +1,32 @@
 <template>
   <div class="app-shell" :class="[`layout-${layout}`, `nav-${nav}`]">
+    <MobileNavDrawer
+      :items="navItems"
+      :title="currentTitle"
+      home-path="/ops"
+      :is-active="isActive"
+      :breakpoint="layout === 'top' ? 768 : 900"
+    >
+      <template #brand>
+        <BrandMark :size="22" :label="brand.name || 'danew'" />
+        <span class="brand-text">{{ brand.name || '运营控制台' }}</span>
+      </template>
+      <template #actions>
+        <ThemeToggle />
+        <el-popover placement="bottom-end" :width="300" trigger="click">
+          <template #reference>
+            <span class="hicon" title="整站主题"><el-icon><Brush /></el-icon></span>
+          </template>
+          <SkinPicker show-mode title="整站主题" />
+        </el-popover>
+        <el-button size="small" round @click="doLogout">退出</el-button>
+      </template>
+      <template #footer>
+        <span class="admin-name">{{ auth.username || 'admin' }}</span>
+        <el-button size="small" @click="doLogout">退出</el-button>
+      </template>
+    </MobileNavDrawer>
+
     <!-- 侧栏 / 细轨（cyber、slate 等） -->
     <aside v-if="layout === 'sidebar' || layout === 'rail'" class="sidenav">
       <div class="side-brand" @click="router.push('/ops')">
@@ -88,6 +115,8 @@ import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { serverLogout } from '../lib/api'
 import { siteBrand, currentSkinMeta } from '../theme'
+import BrandMark from '../components/BrandMark.vue'
+import MobileNavDrawer from '../components/MobileNavDrawer.vue'
 import SkinPicker from '../components/SkinPicker.vue'
 import ThemeToggle from '../components/ThemeToggle.vue'
 
@@ -130,6 +159,7 @@ async function doLogout() {
 <style scoped>
 .app-shell {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--bg);
@@ -148,6 +178,7 @@ async function doLogout() {
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* ── top nav ── */
@@ -199,6 +230,7 @@ async function doLogout() {
   position: sticky;
   top: 0;
   height: 100vh;
+  height: 100dvh;
   z-index: 50;
 }
 .layout-rail .sidenav {
@@ -276,16 +308,20 @@ async function doLogout() {
   box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.35), 0 0 20px rgba(34, 211, 238, 0.08);
 }
 
-@media (max-width: 900px) {
+@media (max-width: 767px) {
+  .layout-top .topnav { display: none; }
+  .layout-top .nav-inner { height: auto; }
+  .layout-top .main-col { min-height: 0; }
+}
+
+@media (max-width: 899px) {
+  .layout-sidebar,
+  .layout-rail { flex-direction: column; }
   .layout-sidebar .sidenav,
-  .layout-rail .sidenav {
-    width: 56px;
-    padding: 10px 6px;
-  }
-  .side-label, .layout-sidebar .brand-text, .layout-sidebar .admin-name,
-  .layout-sidebar .side-foot .el-button:not(.is-circle) {
-    display: none !important;
-  }
-  .side-brand, .side-link, .side-foot { align-items: center; justify-content: center; }
+  .layout-rail .sidenav,
+  .layout-sidebar .subtop,
+  .layout-rail .subtop { display: none; }
+  .layout-sidebar .main-col,
+  .layout-rail .main-col { min-height: 0; }
 }
 </style>

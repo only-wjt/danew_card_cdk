@@ -156,7 +156,7 @@
         </el-radio-group>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2">
+      <div class="toolbar-filters">
         <el-input
           v-model="listQ"
           clearable
@@ -267,6 +267,7 @@
         本站尚未存入完整码。展开上方「购买并生成」发码，或在批量操作里同步本机缓存。
       </div>
 
+      <div class="overflow-x-auto">
       <el-table
         ref="tableRef"
         :data="displayRows"
@@ -371,12 +372,13 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
 
       <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
         <span>{{ listMode === 'stored' ? '本站完整码库' : '卡台状态' }} · 第 {{ page }} 页 · 共 {{ total }} 条</span>
         <el-pagination
           background
-          layout="total, sizes, prev, pager, next"
+          :layout="pagerLayout"
           :total="total"
           :page-size="pageSize"
           :current-page="page"
@@ -395,6 +397,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
+import { useMaxWidth } from '../../lib/media'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
@@ -450,6 +453,10 @@ const rows = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
+const isMobile = useMaxWidth(768)
+const pagerLayout = computed(() =>
+  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next',
+)
 const loadingList = ref(false)
 const listError = ref('')
 const listQ = ref('')

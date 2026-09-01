@@ -20,6 +20,7 @@
         <el-radio-button v-if="orphanCount" :value="-1">未归属 {{ orphanCount }}</el-radio-button>
       </el-radio-group>
       <div v-if="error" class="alert alert-error mb-3">{{ error }}</div>
+      <div class="overflow-x-auto">
       <table class="data-table">
         <thead>
           <tr>
@@ -48,6 +49,7 @@
           </tr>
         </tbody>
       </table>
+      </div>
     </el-card>
   </div>
 </template>

@@ -148,7 +148,7 @@
     <div class="card !p-0 overflow-hidden">
       <div class="px-4 py-3 border-b bd flex flex-wrap items-center gap-3">
         <span class="text-sm font-semibold text-ink">{{ t('batchRecharge.listTitle') }}</span>
-        <div class="flex flex-wrap items-center gap-2 ml-auto">
+        <div class="toolbar-filters ml-auto">
           <span class="text-xs text-muted">{{ t('batchRecharge.filterSource') }}</span>
           <el-select v-model="filterSource" size="small" style="width: 130px" @change="onFilterChange">
             <el-option :label="t('batchRecharge.sourceAll')" value="" />

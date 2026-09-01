@@ -12,7 +12,7 @@
       </div>
     </div>
 
-    <div class="card !py-3 flex flex-wrap items-center gap-3 text-sm">
+    <div class="card !py-3 toolbar-filters text-sm">
       <span class="text-muted">共 <b class="mono text-ink">{{ total }}</b> 笔</span>
       <el-select
         v-model="statusFilter"
@@ -37,6 +37,7 @@
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
     <div class="card overflow-hidden !p-0">
+      <div class="overflow-x-auto">
       <el-table :data="displayRows" v-loading="loading" size="small" stripe empty-text="暂无兑换订单">
         <el-table-column prop="order_id" label="订单" width="88">
           <template #default="{ row }">
@@ -94,6 +95,7 @@
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </div>
 
     <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
@@ -102,7 +104,7 @@
       </span>
       <el-pagination
         background
-        layout="total, sizes, prev, pager, next, jumper"
+        :layout="pagerLayout"
         :total="total"
         :page-size="pageSize"
         :current-page="page"
@@ -160,11 +162,16 @@
 import { computed, onMounted, ref } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
+import { useMaxWidth } from '../../lib/media'
 
 const rows = ref<any[]>([])
 const total = ref(0)
 const page = ref(1)
 const pageSize = ref(20)
+const isMobile = useMaxWidth(768)
+const pagerLayout = computed(() =>
+  isMobile.value ? 'prev, pager, next' : 'total, sizes, prev, pager, next, jumper',
+)
 const loading = ref(false)
 const error = ref('')
 const statusFilter = ref('')
