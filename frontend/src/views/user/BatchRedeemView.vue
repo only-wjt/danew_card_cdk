@@ -356,6 +356,7 @@ import {
   AUTO_SUBMIT_CONCURRENCY,
   BATCH_MAX_KEYS,
   BATCH_POLL_INTERVAL_MS,
+  BATCH_POLL_MAX_MS,
   VERIFY_CONCURRENCY,
   accessTokenFromSession,
   checkSessionForCdk,
@@ -436,7 +437,9 @@ const sessionBoxRef = ref<HTMLTextAreaElement | null>(null)
 const mailboxFileRef = ref<HTMLInputElement | null>(null)
 const lastFilledItemId = ref<string | null>(null)
 
-const pollTargets = ref<Record<string, { token: string; terminal: boolean }>>({})
+const pollTargets = ref<
+  Record<string, { token: string; terminal: boolean; startedAt: number }>
+>({})
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let pollInFlight = false
 
@@ -553,6 +556,12 @@ async function pollBatch() {
   try {
     await Promise.all(
       entries.map(async ([id, target]) => {
+        if (Date.now() - target.startedAt > BATCH_POLL_MAX_MS) {
+          // 停止查询但不下失败结论：状态仍是未知，交人工确认
+          updateItem(id, { progressMsg: '查询超时，请用卡密状态查询确认后再决定是否重试' })
+          pollTargets.value[id] = { ...target, terminal: true }
+          return
+        }
         try {
           const { r, data } = await api(
             '/api/v1/public/cdk/result?token=' + encodeURIComponent(target.token),
@@ -603,7 +612,10 @@ async function pollBatch() {
 }
 
 function startPoll(id: string, token: string) {
-  pollTargets.value = { ...pollTargets.value, [id]: { token, terminal: false } }
+  pollTargets.value = {
+    ...pollTargets.value,
+    [id]: { token, terminal: false, startedAt: Date.now() },
+  }
   if (!pollTimer) {
     void pollBatch()
     pollTimer = setInterval(() => void pollBatch(), BATCH_POLL_INTERVAL_MS)
@@ -939,12 +951,26 @@ async function runPreflightRedeem(
     const orderEmail = String(order.account_email || order.email || email).trim()
 
     if (!redeem.r.ok && redeem.r.status !== 202) {
+      // 5xx / 网关超时只说明没拿到回执，卡台可能已经在扣款；409 说明这张码已被兑换。
+      // 这两种都不是失败结论，直接判 failed 会诱导操作员重试导致重复扣款 —— 改成去查真实订单。
+      if (redeem.r.status >= 500 || redeem.r.status === 409) {
+        updateItem(item.id, {
+          status: 'processing',
+          email: orderEmail || email,
+          cardLastFour: cardLastFour || item.cardLastFour,
+          progressMsg: '未拿到提交回执，正在查卡台结果…',
+          error: '',
+        })
+        startPoll(item.id, redemptionToken)
+        return 'ok'
+      }
+      const rejectMsg = String(message || redeem.data?.error || redeem.data?.msg || '卡台拒绝了本次兑换')
       updateItem(item.id, {
         status: 'failed',
         email: orderEmail || email,
         cardLastFour: cardLastFour || item.cardLastFour,
-        progressMsg: message || redeem.data?.error || '兑换被拒绝',
-        error: message || redeem.data?.error || '兑换被拒绝',
+        progressMsg: rejectMsg,
+        error: rejectMsg,
       })
       return 'fail'
     }

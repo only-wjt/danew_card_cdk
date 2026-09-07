@@ -215,11 +215,18 @@
           <pre class="rounded-xl bg-soft p-4 overflow-auto max-h-48 mt-2">{{ resultPretty }}</pre>
         </details>
 
-        <div v-if="error" class="alert alert-error">{{ error }}</div>
-        <div v-if="isTerminal(resultStatus) && resultStatus !== 'completed'" class="alert alert-error">
-          兑换未成功。若状态为 review/pending 请勿重复提交；可联系发码方或稍后用同一设备再查结果。
-        </div>
+        <!-- 结论只有一条，且以轮询到的订单状态为准：提交环节的报错不在这里回显 -->
         <div v-if="resultStatus === 'completed'" class="alert alert-success">开通完成，请到 ChatGPT 账号确认套餐。</div>
+        <div v-else-if="submitRejected" class="alert alert-error">{{ submitRejected }}</div>
+        <div v-else-if="isTerminal(resultStatus)" class="alert alert-error">
+          兑换未成功。请勿重复提交，可联系发码方或稍后用同一设备再查结果。
+        </div>
+        <div v-else-if="pollHalted === 'missing'" class="alert alert-error">
+          卡台查不到这笔兑换记录，卡密大概率没有被消耗。请勿重复提交，先用「卡密状态查询」确认后再决定是否重试。
+        </div>
+        <div v-else-if="pollHalted === 'timeout'" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
+          卡台处理已超过 10 分钟，自动查询先停下了。请勿重复提交，稍后用同一浏览器打开本页会继续查结果。
+        </div>
         <button class="btn-secondary" @click="resetAll">再兑一张</button>
       </div>
     </div>
@@ -268,7 +275,13 @@ const resultCardLastFour = ref('')
 const resultBody = ref<any>(null)
 const timeline = ref<any[]>([])
 const polling = ref(false)
+/** 提交时被卡台明确拒绝（4xx）的结论文案。5xx/网关超时不写这里：那只是没拿到回执，成败未知 */
+const submitRejected = ref('')
+/** 轮询主动停下的原因：'' 未停 | 'timeout' 跟太久 | 'missing' 卡台查不到这笔单 */
+const pollHalted = ref<'' | 'timeout' | 'missing'>('')
 let pollTimer: any = null
+let pollStartedAt = 0
+let pollSawOrder = false
 const displayResultEmail = computed(() => resultEmail.value || account.value.email || '')
 
 const PROGRESS_KEY = 'cdk_redeem_progress_v1'
@@ -569,6 +582,14 @@ function clearAccount() {
 }
 
 const TERMINAL = new Set(['completed', 'declined', 'failed_precharge', 'cancelled', 'failed'])
+const POLL_INTERVAL_MS = 3000
+/** 最长跟 10 分钟，之后让用户稍后回来查，避免一直转圈 */
+const POLL_MAX_MS = 10 * 60 * 1000
+/**
+ * 单还没落到卡台时查询会 404，而提交本身可能跑了几十秒，
+ * 所以要给足窗口；一直查不到才认定卡台没收到这笔单。
+ */
+const POLL_MISSING_AFTER_MS = 3 * 60 * 1000
 
 function isTerminal(st: string) {
   return TERMINAL.has(String(st || '').toLowerCase())
@@ -832,6 +853,8 @@ async function doPreflight() {
 
 async function doRedeem() {
   error.value = ''
+  submitRejected.value = ''
+  pollHalted.value = ''
   busy.value = true
   try {
     const client_request_id = 'web-' + deviceId.slice(0, 8) + '-' + Date.now()
@@ -844,11 +867,16 @@ async function doRedeem() {
       }),
     })
     applyResultPayload(data)
-    if (!r.ok && r.status !== 202) {
-      error.value = data?.error || data?.msg || data?.message || '兑换被拒绝'
-    }
-    if (!resultStatus.value) {
-      resultStatus.value = r.ok || r.status === 202 ? 'queued' : 'error'
+    // 这次请求只决定「要不要去查结果」，不决定兑换成败。
+    // 4xx 是卡台给出的业务结论；5xx / 网关超时只是没拿到回执，扣款可能已经在跑，一律交给轮询定论。
+    if (r.status === 409) {
+      // 卡密已被兑换 —— 很可能就是上一次超时的那笔，去查真实订单
+      if (!resultStatus.value) resultStatus.value = 'queued'
+    } else if (!r.ok && r.status !== 202 && r.status < 500) {
+      submitRejected.value = String(data?.error || data?.msg || data?.message || '卡台拒绝了本次兑换')
+      if (!resultStatus.value) resultStatus.value = 'declined'
+    } else if (!resultStatus.value) {
+      resultStatus.value = 'queued'
     }
     step.value = 4
     startPoll()
@@ -857,43 +885,71 @@ async function doRedeem() {
   }
 }
 
+function stopPoll(reason: '' | 'timeout' | 'missing' = '') {
+  polling.value = false
+  if (reason) pollHalted.value = reason
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+}
+
+async function pollResultOnce() {
+  if (Date.now() - pollStartedAt > POLL_MAX_MS) {
+    stopPoll('timeout')
+    return
+  }
+  try {
+    let r: Response
+    let data: any
+    if (redemptionToken.value) {
+      ;({ r, data } = await api(
+        '/api/v1/public/cdk/result?token=' + encodeURIComponent(redemptionToken.value),
+      ))
+    } else {
+      ;({ r, data } = await api(
+        '/api/v1/public/cdk/result-by-code?code=' + encodeURIComponent(code.value.trim()),
+      ))
+      if (r.ok && data?.redemption_token) {
+        redemptionToken.value = data.redemption_token
+      }
+    }
+    if (r.ok) {
+      pollSawOrder = true
+      applyResultPayload(data)
+      // 查到订单后，提交那一刻的报错就不再是结论
+      submitRejected.value = ''
+      saveProgress()
+      if (isTerminal(resultStatus.value)) stopPoll()
+      return
+    }
+    if (
+      (r.status === 404 || r.status === 410) &&
+      !pollSawOrder &&
+      Date.now() - pollStartedAt > POLL_MISSING_AFTER_MS
+    ) {
+      stopPoll('missing')
+    }
+  } catch {
+    /* 瞬时网络抖动，下一轮继续 */
+  }
+}
+
 function startPoll() {
-  if (pollTimer) clearInterval(pollTimer)
-  if (!redemptionToken.value && !code.value.trim()) {
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
+  }
+  if ((!redemptionToken.value && !code.value.trim()) || isTerminal(resultStatus.value)) {
     polling.value = false
     return
   }
+  pollStartedAt = Date.now()
+  pollSawOrder = false
+  pollHalted.value = ''
   polling.value = true
-  const tick = async () => {
-    try {
-      let r: Response
-      let data: any
-      if (redemptionToken.value) {
-        ;({ r, data } = await api(
-          '/api/v1/public/cdk/result?token=' + encodeURIComponent(redemptionToken.value),
-        ))
-      } else {
-        ;({ r, data } = await api(
-          '/api/v1/public/cdk/result-by-code?code=' + encodeURIComponent(code.value.trim()),
-        ))
-        if (r.ok && data?.redemption_token) {
-          redemptionToken.value = data.redemption_token
-        }
-      }
-      if (r.ok) {
-        applyResultPayload(data)
-        saveProgress()
-        if (isTerminal(resultStatus.value)) {
-          polling.value = false
-          if (pollTimer) clearInterval(pollTimer)
-        }
-      }
-    } catch {
-      /* ignore transient network */
-    }
-  }
-  tick()
-  pollTimer = setInterval(tick, 3000)
+  void pollResultOnce()
+  pollTimer = setInterval(() => void pollResultOnce(), POLL_INTERVAL_MS)
 }
 
 onMounted(() => {
@@ -908,10 +964,12 @@ onMounted(() => {
 })
 
 function resetAll() {
-  if (pollTimer) clearInterval(pollTimer)
+  stopPoll()
   clearProgress()
   step.value = 1
   error.value = ''
+  submitRejected.value = ''
+  pollHalted.value = ''
   code.value = ''
   previewInfo.value = null
   redemptionToken.value = ''
