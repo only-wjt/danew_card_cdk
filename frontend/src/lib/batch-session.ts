@@ -5,6 +5,8 @@ export const BATCH_MAX_KEYS = 1000
 export const AUTO_SUBMIT_CONCURRENCY = 6
 export const VERIFY_CONCURRENCY = 6
 export const BATCH_POLL_INTERVAL_MS = 3000
+/** 单条最长跟 10 分钟，之后停下并提示人工用卡密状态查询确认，避免无限轮询 */
+export const BATCH_POLL_MAX_MS = 10 * 60 * 1000
 
 export interface ImportedSession {
   email: string
