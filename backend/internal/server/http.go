@@ -175,6 +175,7 @@ func setupRoutes(r *gin.Engine) {
 		lookup := api.Group("/lookup")
 		{
 			lookup.GET("/cdk", handler.LookupCDKStatus)
+			lookup.POST("/cdk/batch", handler.LookupCDKStatusBatch)
 			// 兼容旧路径
 			lookup.GET("/task", handler.LookupCDKStatus)
 		}

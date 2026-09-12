@@ -15,18 +15,20 @@ func TestSetupRoutesDoesNotPanic(t *testing.T) {
 	setupRoutes(r)
 
 	want := map[string]string{
-		"GET /api/v1/admin/card-platforms":                 "",
-		"POST /api/v1/admin/card-platforms/upsert":         "",
-		"PUT /api/v1/admin/card-platforms/dual-bind":       "",
-		"GET /api/v1/admin/card-platforms/bindings":        "",
-		"POST /api/v1/admin/card-platforms/status":         "",
-		"POST /api/v1/admin/card-platforms/reset-circuit":  "",
-		"POST /api/v1/admin/card-platforms/ping":           "",
-		"POST /api/v1/admin/card-platforms/webhook-url":    "",
-		"POST /api/v1/webhooks/epay":                       "",
+		"GET /api/v1/admin/card-platforms":                "",
+		"POST /api/v1/admin/card-platforms/upsert":        "",
+		"PUT /api/v1/admin/card-platforms/dual-bind":      "",
+		"GET /api/v1/admin/card-platforms/bindings":       "",
+		"POST /api/v1/admin/card-platforms/status":        "",
+		"POST /api/v1/admin/card-platforms/reset-circuit": "",
+		"POST /api/v1/admin/card-platforms/ping":          "",
+		"POST /api/v1/admin/card-platforms/webhook-url":   "",
+		"POST /api/v1/webhooks/epay":                      "",
 		"POST /api/v1/webhooks/cardplatform":              "",
-		"POST /api/v1/webhooks/cardplatform/:accountId":    "",
+		"POST /api/v1/webhooks/cardplatform/:accountId":   "",
 		"POST /api/v1/webhooks/avanfinity":                "",
+		"GET /api/v1/lookup/cdk":                          "",
+		"POST /api/v1/lookup/cdk/batch":                   "",
 	}
 	for _, ri := range r.Routes() {
 		key := ri.Method + " " + ri.Path

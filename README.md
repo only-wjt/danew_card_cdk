@@ -19,7 +19,7 @@
 - 卡密预览与实时套餐服务费展示
 - ChatGPT 凭据预检（session / 邮箱两种模式）
 - 一键兑换 + 进度轮询到终态
-- 凭卡密查询兑换状态与充值邮箱
+- 凭卡密查询兑换状态与充值邮箱（支持单张 / 批量最多 100 张）
 - 粘贴 session 查订阅与账单
 
 ⚙️ **管理端（`/ops`）**
@@ -265,6 +265,7 @@ SQLite 单文件库，所有表由 `backend/internal/db/db.go` 的 `createTables
 - `GET /public/cdk/result?token=` - 按 redemption_token 查兑换进度
 - `GET /public/cdk/result-by-code?code=` - 按卡密反查绑定的 token 后查进度
 - `GET /lookup/cdk?code=` - 卡密状态查询（是否已用 + 充值邮箱，不返回 token / session）
+- `POST /lookup/cdk/batch` - 批量卡密查询（最多 100 张，支持整段粘贴）
 - `GET /lookup/task?code=` - 同上，兼容旧路径
 - `POST /public/billing/check` - 粘贴 session 查 ChatGPT 订阅与账单
 - `POST /billing/check` - 同上，兼容旧路径
@@ -337,7 +338,7 @@ SQLite 单文件库，所有表由 `backend/internal/db/db.go` 的 `createTables
 ```
 
 卡台侧另有回调 `POST /webhooks/cardplatform`，按 `idem_key` 幂等写入 `webhook_events`，与轮询构成双通道。
-公开的 `GET /lookup/cdk?code=` 只回卡密是否已用和充值邮箱，不返回 token / session。
+公开的 `GET /lookup/cdk?code=` 与 `POST /lookup/cdk/batch` 只回卡密是否已用和充值邮箱，不返回 token / session。失败且卡密已重新激活时可重新提交。
 
 ### 管理员批量充值（`/ops`，界面上不出现卡密）
 

@@ -57,6 +57,7 @@ Plus 等卡台档位仍看 `purchase.card_platform_ready`，未配置卡台时�
 | 客户要查什么 | 入口 |
 | --- | --- |
 | 卡密是否已使用 | `GET /lookup/cdk?code=` |
+| 批量查卡密（最多 100 张） | `POST /lookup/cdk/batch`（`{"codes":["…"]}` 或 `{"text":"整段粘贴"}`） |
 | 充值进度 | `GET /public/cdk/result-by-code?code=` |
 | 账单 / 发票 | 账单查询页填卡密（后台按订单邮箱查，代理无需交出 session） |
 
