@@ -6,7 +6,7 @@
         <p class="text-sm text-muted mt-2">{{ t('batchRecharge.subtitle') }}</p>
       </div>
       <div class="flex flex-wrap gap-2">
-        <el-button :loading="listLoading" @click="loadBatches">{{ t('batchRecharge.refresh') }}</el-button>
+        <el-button :loading="listLoading" @click="refreshAll">{{ t('batchRecharge.refresh') }}</el-button>
       </div>
     </div>
 
@@ -19,17 +19,19 @@
           <label>{{ t('batchRecharge.planLabel') }}</label>
           <div class="flex flex-wrap gap-2">
             <button
-              v-for="p in PLANS"
-              :key="p.value"
+              v-for="p in planOptions"
+              :key="p.key"
               type="button"
               class="plan-chip"
-              :class="{ active: plan === p.value }"
-              @click="plan = p.value"
+              :class="{ active: plan === p.key }"
+              @click="plan = p.key"
             >
-              <span class="plan-name">{{ p.value }}</span>
+              <span class="plan-name">{{ p.label }}</span>
+              <span class="plan-key">{{ p.key }}</span>
               <span class="plan-fee">{{ t('batchRecharge.fee') }} {{ usd(DISPLAY_FEE_MINOR) }}</span>
             </button>
           </div>
+          <p v-if="planLoadError" class="text-xs text-warn">{{ planLoadError }}</p>
           <p class="text-xs text-subtle">{{ t('batchRecharge.planHint') }}</p>
         </div>
 
@@ -186,7 +188,7 @@
             </tr>
             <tr v-for="b in batches" :key="b.batch_id">
               <td class="mono">{{ b.batch_id }}</td>
-              <td>{{ b.plan }}</td>
+              <td>{{ planDisplayName(b.plan) }}</td>
               <td class="num">{{ b.total }}</td>
               <td class="num stat-success">{{ b.success ?? 0 }}</td>
               <td class="num stat-failed">{{ b.failed ?? 0 }}</td>
@@ -319,10 +321,10 @@
       :close-on-click-modal="!creating"
     >
       <div class="confirm-box">
-        <div class="confirm-code" :class="{ 'is-high': plan === 'pro_20x' }">{{ plan }}</div>
+        <div class="confirm-code" :class="{ 'is-high': isHighPlan }">{{ plan }}</div>
         <div class="confirm-human">{{ planHumanLabel }}</div>
         <p class="confirm-stop">{{ t('batchRecharge.confirmCannotStop') }}</p>
-        <p v-if="plan === 'pro_20x'" class="confirm-extra">{{ t('batchRecharge.confirmHighPrice') }}</p>
+        <p v-if="isHighPlan" class="confirm-extra">{{ t('batchRecharge.confirmHighPrice') }}</p>
         <dl class="confirm-facts">
           <div>
             <dt>{{ t('batchRecharge.confirmCount') }}</dt>
@@ -356,6 +358,7 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
+import { planLabel } from '../../lib/plan'
 import {
   parseMailboxLines,
   parseMailboxesFromSheet,
@@ -373,8 +376,20 @@ const POLL_INTERVAL_MS = 3000
 const EXPORT_SCOPES = ['all', 'success', 'failed'] as const
 /** 管理端仅展示 $0.00；真实 $1/$5/$10 扣费仍在 admin_batch_recharge.go。 */
 const DISPLAY_FEE_MINOR = 0
-const PLANS = [{ value: 'plus' }, { value: 'pro_5x' }, { value: 'pro_20x' }]
 const ITEM_TERMINAL = new Set(['success', 'failed', 'skipped', 'unknown'])
+
+interface SellablePlan {
+  key: string
+  label?: string
+  flow?: string
+  is_credit?: boolean
+}
+
+const FALLBACK_PLANS: SellablePlan[] = [
+  { key: 'plus', label: 'Plus' },
+  { key: 'pro_5x', label: 'Pro 5x' },
+  { key: 'pro_20x', label: 'Pro 20x' },
+]
 
 interface BatchRow {
   batch_id: string
@@ -419,6 +434,8 @@ interface ResubmitRow {
 }
 
 const plan = ref('plus')
+const planRegistry = ref<SellablePlan[]>([])
+const planLoadError = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
 const mailboxText = ref('')
 const sessionPool = ref<ImportedSession[]>([])
@@ -460,10 +477,46 @@ const previewRows = computed(() =>
 const overLimit = computed(() => itemCount.value > MAX_ITEMS)
 const estimatedFee = computed(() => (DISPLAY_FEE_MINOR / 100).toFixed(2))
 const canSubmit = computed(
-  () => !creating.value && itemCount.value > 0 && !overLimit.value && fundingConfirmed.value,
+  () =>
+    !creating.value &&
+    itemCount.value > 0 &&
+    !overLimit.value &&
+    fundingConfirmed.value &&
+    planOptions.value.some((p) => p.key === plan.value),
 )
 const unknownCount = computed(() => detail.value?.stats?.unknown ?? 0)
-const planHumanLabel = computed(() => t(`batchRecharge.planHuman.${plan.value}`, { fee: usd(DISPLAY_FEE_MINOR) }))
+const planOptions = computed(() => {
+  if (planRegistry.value.length) return planRegistry.value
+  return FALLBACK_PLANS
+})
+const selectedPlan = computed(() => planOptions.value.find((p) => p.key === plan.value))
+const isHighPlan = computed(() => {
+  const key = String(plan.value || '').toLowerCase()
+  const flow = String(selectedPlan.value?.flow || '').toLowerCase()
+  return flow === 'card_attach' || key === 'pro_20x' || key.includes('renew')
+})
+const planHumanLabel = computed(() =>
+  t('batchRecharge.planHumanGeneric', {
+    name: selectedPlan.value?.label || planDisplayName(plan.value),
+    fee: usd(DISPLAY_FEE_MINOR),
+  }),
+)
+
+watch(
+  () => planOptions.value.map((p) => p.key).join(','),
+  () => {
+    if (planOptions.value.length && !planOptions.value.some((p) => p.key === plan.value)) {
+      plan.value = planOptions.value[0].key
+    }
+  },
+)
+
+function planDisplayName(key: string) {
+  const hit =
+    planRegistry.value.find((p) => p.key === key) || FALLBACK_PLANS.find((p) => p.key === key)
+  if (hit?.label) return hit.label
+  return planLabel(key)
+}
 
 const statCells = computed(() => {
   const s = detail.value?.stats
@@ -690,6 +743,39 @@ function onFilterChange() {
   void loadBatches()
 }
 
+function refreshAll() {
+  void loadPlans()
+  void loadBatches()
+}
+
+async function loadPlans() {
+  planLoadError.value = ''
+  try {
+    const r = await authFetch('/api/v1/admin/cardplatform/plans')
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      planRegistry.value = []
+      planLoadError.value = d.error || d.msg || t('batchRecharge.planLoadFailed')
+      return
+    }
+    const rows = Array.isArray(d.registry) ? d.registry : []
+    planRegistry.value = rows
+      .map((row: any) => ({
+        key: String(row?.key || '').trim(),
+        label: String(row?.label || row?.key || '').trim(),
+        flow: String(row?.flow || '').trim(),
+        is_credit: !!row?.is_credit,
+      }))
+      .filter((row: SellablePlan) => row.key && !row.is_credit && !row.key.toLowerCase().startsWith('credit'))
+    if (!planRegistry.value.length) {
+      planLoadError.value = t('batchRecharge.planLoadFailed')
+    }
+  } catch (err: any) {
+    planRegistry.value = []
+    planLoadError.value = err?.message || t('batchRecharge.planLoadFailed')
+  }
+}
+
 async function loadBatches() {
   listLoading.value = true
   listError.value = ''
@@ -816,6 +902,7 @@ async function exportExcel() {
 }
 
 onUnmounted(stopPoll)
+void loadPlans()
 void loadBatches()
 void loadAgentOptions()
 </script>
@@ -848,8 +935,10 @@ void loadAgentOptions()
   background: var(--primary-soft);
   color: var(--primary);
 }
-.plan-name { font-size: 13px; font-weight: 600; font-family: var(--font-mono); }
+.plan-name { font-size: 13px; font-weight: 600; }
+.plan-key { font-size: 11px; font-family: var(--font-mono); color: var(--ink-3); }
 .plan-fee { font-size: 11px; color: var(--ink-3); }
+.plan-chip.active .plan-key { color: var(--primary); }
 .plan-chip.active .plan-fee { color: var(--primary); }
 
 .mode-on {

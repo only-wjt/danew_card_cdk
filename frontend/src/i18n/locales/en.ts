@@ -331,7 +331,8 @@ export default {
     createTitle: 'New Batch',
     planLabel: 'Plan',
     fee: 'Service fee',
-    planHint: 'The service fee is charged at issue time; the upstream subscription is paid by this account.',
+    planHint: 'Plans follow the card-platform sellable list (including Pro 20x renew). The service fee is charged at issue time; the upstream subscription is paid by this account.',
+    planLoadFailed: 'Could not sync card-platform plans; showing the usual subscription plans. Refresh after checking the integration.',
     credMode: 'Credential mode',
     modeSession: 'Session',
     modeMailbox: 'Email + password',
@@ -411,7 +412,7 @@ export default {
     errExport: 'Export failed',
     confirmTitle: 'Confirm the plan before creating',
     confirmCannotStop: 'Once created, the batch starts immediately and cannot be stopped. Double-check the plan.',
-    confirmHighPrice: 'This is the high-price plan (Pro 20x).',
+    confirmHighPrice: 'This is a high-price or renew plan. Please confirm again.',
     confirmCount: 'Items',
     confirmUnitFee: 'Unit service fee',
     confirmTotalFee: 'Estimated total fee',
@@ -421,7 +422,9 @@ export default {
       plus: 'Plus ({fee}/item)',
       pro_5x: 'Pro 5x ({fee}/item)',
       pro_20x: 'Pro 20x ({fee}/item)',
+      pro_20x_renew: 'Pro 20x renew ({fee}/item)',
     },
+    planHumanGeneric: '{name} ({fee}/item)',
     unknownBanner:
       '{n} item(s) in this batch have an unknown result: they may already be charged, so resubmitting is forbidden. Use “Reconcile with upstream” first, or cross-check the order id under Redeem Reconciliation.',
     unknownTip:
