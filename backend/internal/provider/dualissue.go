@@ -18,6 +18,15 @@ type DualIssueResult struct {
 	TotalFee     int64
 }
 
+func targetsSupportPaymentCountry(accounts []db.CardPlatformAccount) bool {
+	for _, acc := range accounts {
+		if SupportsPaymentCountry(acc.Protocol) {
+			return true
+		}
+	}
+	return false
+}
+
 // dualEligiblePlan credit* 不能进新台 generate，只单绑旧台。
 func dualEligiblePlan(plan string) bool {
 	return !strings.HasPrefix(strings.ToLower(strings.TrimSpace(plan)), "credit")
@@ -26,7 +35,7 @@ func dualEligiblePlan(plan string) bool {
 // DualIssueOne 发一张本站码：先写 pending 行，再向各账户各买一张上游码。
 // 主路径要求全部成功；任一失败则整张作废并尽量回收已买到的上游码。
 // allowDegradedSingleBind=true 时允许「只成功一条」降级出货（默认应关）。
-func DualIssueOne(ctx context.Context, plan string, allowDegradedSingleBind bool) (*DualIssueResult, error) {
+func DualIssueOne(ctx context.Context, plan string, allowDegradedSingleBind bool, paymentCountry ...string) (*DualIssueResult, error) {
 	plan = strings.TrimSpace(plan)
 	if plan == "" {
 		return nil, fmt.Errorf("plan required")
@@ -67,6 +76,14 @@ func DualIssueOne(ctx context.Context, plan string, allowDegradedSingleBind bool
 		}
 	}
 
+	payCountry := ""
+	if len(paymentCountry) > 0 {
+		payCountry = strings.ToUpper(strings.TrimSpace(paymentCountry[0]))
+	}
+	if payCountry != "" && !targetsSupportPaymentCountry(accounts) {
+		return nil, fmt.Errorf("没有卡台支持指定付款地区 %s，请改为默认（菲律宾）", payCountry)
+	}
+
 	code, err := NewSiteCode()
 	if err != nil {
 		return nil, err
@@ -87,8 +104,14 @@ func DualIssueOne(ctx context.Context, plan string, allowDegradedSingleBind bool
 		acc := accounts[i]
 		idem := fmt.Sprintf("dual-%s-a%d", row.Code, acc.ID)
 		issuer, segmentType, segmentKey := db.PreferredCardSelectionForAccount(acc.ID)
+		// 不支持的卡台不传地区。空值在发码请求里会被 omitempty 丢掉。
+		country := ""
+		if payCountry != "" && SupportsPaymentCountry(acc.Protocol) {
+			country = payCountry
+		}
 		up, ierr := p.IssueCDK(ctx, plan, idem, IssuePreference{
 			Issuer: issuer, SegmentType: segmentType, SegmentKey: segmentKey,
+			PaymentCountry: country,
 		})
 		if ierr != nil {
 			firstErr = fmt.Errorf("%s 发码失败: %w", acc.Name, ierr)
@@ -175,13 +198,13 @@ func reclaimUpstream(ctx context.Context, p CardProvider, remoteID string) {
 }
 
 // DualIssueBatch 发 n 张本站码，按张原子；返回已成功的本站码。
-func DualIssueBatch(ctx context.Context, plan string, n int, allowDegraded bool) ([]string, error) {
+func DualIssueBatch(ctx context.Context, plan string, n int, allowDegraded bool, paymentCountry ...string) ([]string, error) {
 	if n < 1 {
 		return nil, fmt.Errorf("count must be >= 1")
 	}
 	codes := make([]string, 0, n)
 	for i := 0; i < n; i++ {
-		res, err := DualIssueOne(ctx, plan, allowDegraded)
+		res, err := DualIssueOne(ctx, plan, allowDegraded, paymentCountry...)
 		if err != nil {
 			// 已成功的几张保留（已激活、可用），未齐由调用方决定是否失败整单。
 			return codes, err

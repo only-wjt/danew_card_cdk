@@ -26,6 +26,8 @@ type IssuePreference struct {
 	Issuer      string
 	SegmentType string
 	SegmentKey  string
+	// PaymentCountry 付款地区国家码。空 = 菲律宾。地区和选卡偏好互相独立。
+	PaymentCountry string
 }
 
 // CardProvider 双卡台 adapter 接口。

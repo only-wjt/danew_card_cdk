@@ -10,10 +10,20 @@ fi
 VER="${VER#v}"
 echo "$VER" > "$ROOT/VERSION"
 mkdir -p "$ROOT/dist/web"
-echo "==> go build v$VER"
+echo "==> go build v$VER (linux/amd64)"
 cd "$ROOT/backend"
-go build -trimpath -ldflags="-s -w -X github.com/danew/cdk-recharge-system/internal/handler.BuildVersion=${VER}" \
+# 产物名字是 cdk-bundle-linux-amd64.tgz，必须显式交叉编译。
+# 不设 GOOS/GOARCH 时，在 macOS 上会把 Mach-O 二进制打进这个包，
+# 上传和一键更新都报成功，生产机重启才报 Exec format error。
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -ldflags="-s -w -X github.com/danew/cdk-recharge-system/internal/handler.BuildVersion=${VER}" \
   -o "$ROOT/dist/cdk-recharge" ./cmd/server
+if command -v file >/dev/null 2>&1; then
+  if ! file "$ROOT/dist/cdk-recharge" | grep -q "ELF 64-bit.*x86-64"; then
+    echo "产物不是 linux/amd64 ELF，拒绝打包：$(file "$ROOT/dist/cdk-recharge")"
+    exit 1
+  fi
+fi
 echo "==> frontend build"
 cd "$ROOT/frontend"
 if [[ -f package-lock.json ]]; then npm ci; else npm install; fi

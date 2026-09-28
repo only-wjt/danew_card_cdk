@@ -42,12 +42,12 @@ func planPriceSources(plans []pricedPlanMeta, overrides, defaults db.AgentPlanPr
 		}
 		cents := db.EffectiveAgentPlanPrice(key, overrides, defaults)
 		out = append(out, gin.H{
-			"key":              key,
-			"label":            label,
-			"price_cny_cents":  cents,
-			"price_yuan":       epay.MoneyYuan(cents),
-			"source":           source,
-			"is_credit":        isCredit,
+			"key":             key,
+			"label":           label,
+			"price_cny_cents": cents,
+			"price_yuan":      epay.MoneyYuan(cents),
+			"source":          source,
+			"is_credit":       isCredit,
 		})
 	}
 	for _, p := range plans {
@@ -87,11 +87,11 @@ func AdminGetAgentDefaultPlanFees(c *gin.Context) {
 	}
 	plans, live := pricingCatalog(c)
 	c.JSON(http.StatusOK, gin.H{
-		"fees":              priceMapJSON(defaults),
-		"fees_cents":        priceMapCentsJSON(defaults),
-		"plans":             planPriceSources(plans, nil, defaults),
-		"catalog_source":    catalogSource(live),
-		"currency":          "CNY",
+		"fees":           priceMapJSON(defaults),
+		"fees_cents":     priceMapCentsJSON(defaults),
+		"plans":          planPriceSources(plans, nil, defaults),
+		"catalog_source": catalogSource(live),
+		"currency":       "CNY",
 	})
 }
 
@@ -140,15 +140,15 @@ func AdminGetAgentPlanFees(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"defaults":       priceMapJSON(defaults),
-		"overrides":      priceMapJSON(overrides),
-		"effective":      priceMapJSON(effective),
-		"defaults_cents": priceMapCentsJSON(defaults),
+		"defaults":        priceMapJSON(defaults),
+		"overrides":       priceMapJSON(overrides),
+		"effective":       priceMapJSON(effective),
+		"defaults_cents":  priceMapCentsJSON(defaults),
 		"overrides_cents": priceMapCentsJSON(overrides),
 		"effective_cents": priceMapCentsJSON(effective),
-		"plans":          planPriceSources(plans, overrides, defaults),
-		"catalog_source": catalogSource(live),
-		"currency":       "CNY",
+		"plans":           planPriceSources(plans, overrides, defaults),
+		"catalog_source":  catalogSource(live),
+		"currency":        "CNY",
 	})
 }
 
@@ -199,6 +199,9 @@ func coreSellableFallbackPlans() []pricedPlanMeta {
 		{Key: "credit250", Label: "Codex 点数 250", IsCredit: true},
 		{Key: "credit500", Label: "Codex 点数 500", IsCredit: true},
 		{Key: "credit1000", Label: "Codex 点数 1000", IsCredit: true},
+		{Key: "credit2500", Label: "Codex 点数 2500", IsCredit: true},
+		{Key: "credit5000", Label: "Codex 点数 5000", IsCredit: true},
+		{Key: "credit25000", Label: "Codex 点数 25000", IsCredit: true},
 	}
 }
 
