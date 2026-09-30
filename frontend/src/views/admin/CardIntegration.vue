@@ -238,11 +238,6 @@
       </div>
     </div>
 
-    <p class="text-sm text-muted">
-      代理购卡的易支付配置已移至
-      <router-link class="app-link" to="/ops/agents">代理管理</router-link>。
-    </p>
-
     <!-- 状态摘要卡片（精简，详情进弹窗） -->
     <div class="grid gap-3 sm:grid-cols-3">
       <button type="button" class="status-card" @click="openStatusDialog">

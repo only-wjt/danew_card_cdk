@@ -14,6 +14,11 @@ const routes: RouteRecordRaw[] = [
   // 旧登录路径 → 隐蔽入口
   { path: '/auth/login', redirect: `${OPS_BASE}/login` },
   { path: '/admin', redirect: OPS_BASE },
+  // 代理管理 / 代理购卡已下线，写在通用 /admin 重定向前，避免再跳进后台页
+  { path: '/admin/agents', redirect: '/404' },
+  { path: '/admin/agent-orders', redirect: '/404' },
+  { path: `${OPS_BASE}/agents`, redirect: '/404' },
+  { path: `${OPS_BASE}/agent-orders`, redirect: '/404' },
   { path: '/admin/:pathMatch(.*)*', redirect: (to) => `${OPS_BASE}/${to.params.pathMatch || ''}` },
   {
     path: `${OPS_BASE}/login`,
@@ -109,8 +114,6 @@ const routes: RouteRecordRaw[] = [
       { path: '', name: 'AdminDashboard', component: () => import('../views/admin/AdminDashboard.vue') },
       { path: 'cdkeys', name: 'CDKeyManagement', component: () => import('../views/admin/CDKeyManagement.vue') },
       { path: 'batch-recharge', name: 'BatchRecharge', component: () => import('../views/admin/BatchRechargeView.vue') },
-      { path: 'agents', name: 'AgentManagement', component: () => import('../views/admin/AgentManagement.vue') },
-      { path: 'agent-orders', name: 'AdminAgentOrders', component: () => import('../views/admin/AdminAgentOrders.vue') },
       { path: 'orders', name: 'OrderReconcile', component: () => import('../views/admin/OrderReconcile.vue') },
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
       { path: 'integration', name: 'CardIntegration', component: () => import('../views/admin/CardIntegration.vue') },
@@ -156,7 +159,18 @@ async function ensureSetupStatus(): Promise<boolean> {
   return setupInstalled
 }
 
+const retiredAdminPaths = [`${OPS_BASE}/agents`, `${OPS_BASE}/agent-orders`, '/admin/agents', '/admin/agent-orders']
+
+function isRetiredAdminPath(path: string) {
+  const normalized = path.length > 1 ? path.replace(/\/+$/, '') : path
+  return retiredAdminPaths.some((p) => normalized === p || normalized.startsWith(`${p}/`))
+}
+
 router.beforeEach(async (to) => {
+  if (isRetiredAdminPath(to.path)) {
+    return '/404'
+  }
+
   const authStore = useAuthStore()
   const agentStore = useAgentAuthStore()
   const installed = await ensureSetupStatus()
