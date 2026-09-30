@@ -14,6 +14,7 @@ import (
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/handler"
 	"github.com/danew/cdk-recharge-system/internal/plansync"
+	"github.com/danew/cdk-recharge-system/internal/xmember"
 	"github.com/gin-gonic/gin"
 )
 
@@ -52,6 +53,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 
 	// 启动卡台产品状态后台同步（每3分钟）
 	plansync.Start(ctx)
+	xmember.Start(ctx)
 
 	// 重启后把仍在途的批量充值明细与上游状态对齐一次
 	handler.ResumeInFlightBatchRecharges(ctx)
@@ -170,6 +172,14 @@ func setupRoutes(r *gin.Engine) {
 			pubCDK.GET("/result-by-code", handler.PublicCDKResultByCode)
 			// 代理隐藏换码：密码 + 失败未扣款 CDK → 新码
 			pubCDK.POST("/exchange", handler.PublicAgentCDKExchange)
+		}
+
+		pubX := api.Group("/public/x")
+		{
+			pubX.POST("/preview", handler.PublicXPreview)
+			pubX.POST("/quote", handler.PublicXQuote)
+			pubX.POST("/confirm", handler.PublicXConfirm)
+			pubX.GET("/result", handler.PublicXResult)
 		}
 
 		// 卡密状态查询：是否已用 + 充值邮箱（不返回 token）
@@ -303,6 +313,23 @@ func setupRoutes(r *gin.Engine) {
 			admin.POST("/card-platforms/status", handler.AdminSetCardPlatformStatus)
 			admin.POST("/card-platforms/reset-circuit", handler.AdminResetCardPlatformCircuit)
 			admin.POST("/card-platforms/ping", handler.AdminPingCardPlatform)
+			admin.POST("/card-platforms/probe-x", handler.AdminProbeXAccount)
+			admin.GET("/card-platforms/x-cards", handler.AdminXAccountCards)
+			admin.GET("/card-platforms/x-calls", handler.AdminXCalls)
+			admin.POST("/card-platforms/reorder", handler.AdminReorderCardPlatforms)
+			admin.GET("/x/config", handler.AdminGetXConfig)
+			admin.GET("/x/overview", handler.AdminXOverview)
+			admin.POST("/x/issue", handler.AdminXIssue)
+			admin.GET("/x/batches", handler.AdminXBatches)
+			admin.GET("/x/batches/:id/export", handler.AdminXBatchExport)
+			admin.POST("/x/batches/:id/retry", handler.AdminXRetryBatch)
+			admin.POST("/x/test-quote", handler.AdminXTestQuote)
+			admin.GET("/x/records", handler.AdminXRecords)
+			admin.POST("/x/records/:id/requery", handler.AdminXRequery)
+			admin.POST("/x/records/:id/resolve", handler.AdminXResolve)
+			admin.POST("/x/codes/:id/disable", handler.AdminXDisableCode)
+			admin.PUT("/x/channels", handler.AdminSaveXChannel)
+			admin.PUT("/x/plan-limits", handler.AdminSaveXLimits)
 			admin.PUT("/card-platforms/dual-bind", handler.AdminPutDualBindConfig)
 			admin.GET("/card-platforms/bindings", handler.AdminGetSiteCDKBindings)
 

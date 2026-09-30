@@ -114,6 +114,10 @@
               {{ result.account_email || t('cdkLookup.emailEmpty') }}
             </span>
           </div>
+          <div v-if="result.recipient" class="flex justify-between items-center">
+            <span class="text-muted">开通给</span>
+            <span class="text-ink">{{ result.recipient }}</span>
+          </div>
           <div v-if="result.plan" class="flex justify-between items-center">
             <span class="text-muted">{{ t('cdkLookup.plan') }}</span>
             <span class="text-ink">{{ result.plan }}</span>
@@ -258,6 +262,7 @@ interface CDKStatusResult {
   used: boolean
   can_resubmit?: boolean
   account_email?: string
+  recipient?: string
   plan?: string
   used_at?: string
   notes?: string

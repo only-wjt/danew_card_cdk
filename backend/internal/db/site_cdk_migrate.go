@@ -13,6 +13,9 @@ func migrateSiteDualBindSchema() error {
 	if err := migrateCardPlatformAccounts(); err != nil {
 		return err
 	}
+	if err := migrateXMember(); err != nil {
+		return err
+	}
 	if err := migrateAccountCardSelection(); err != nil {
 		return err
 	}

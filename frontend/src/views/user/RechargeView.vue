@@ -4,8 +4,8 @@
       <div class="mb-8 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
-          <h1 class="text-3xl font-bold text-ink mb-1">CDK 兑换</h1>
-          <p class="text-muted text-sm">经本站转发卡台公开接口：preview → preflight → redeem → 查询结果</p>
+          <h1 class="text-3xl font-bold text-ink mb-1">{{ t('recharge.title') }}</h1>
+          <p class="text-muted text-sm">{{ t('recharge.lead') }}</p>
         </div>
         <div class="flex items-center gap-3">
           <LanguageToggle />
@@ -15,6 +15,20 @@
 
       <RedeemModeTabs />
 
+      <div class="grid sm:grid-cols-2 gap-3 mb-6">
+        <button type="button" class="product-card" :class="{ on: product === 'gpt' }" @click="product = 'gpt'">
+          <div class="font-semibold text-ink">{{ t('recharge.productGpt') }}</div>
+          <p class="mt-1 text-sm text-muted">{{ t('recharge.productGptHint') }}</p>
+        </button>
+        <button type="button" class="product-card" :class="{ on: product === 'x' }" @click="product = 'x'">
+          <div class="font-semibold text-ink">{{ t('recharge.productX') }}</div>
+          <p class="mt-1 text-sm text-muted">{{ t('recharge.productXHint') }}</p>
+        </button>
+      </div>
+
+      <XRedeemView v-if="product === 'x'" :key="xSeed || 'x'" embedded :initial-code="xSeed" @switch-gpt="onSwitchGpt" />
+
+      <template v-else>
       <!-- redeem-flow v2: no public fee reference -->
       <!-- steps -->
       <div class="card mb-6">
@@ -233,6 +247,7 @@
         </div>
         <button class="btn-secondary" @click="resetAll">再兑一张</button>
       </div>
+      </template>
     </div>
   </div>
 </template>
@@ -244,6 +259,7 @@ import { useRoute } from 'vue-router'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
+import XRedeemView from './XRedeemView.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 
@@ -258,6 +274,13 @@ const recoveryPending = ref(false)
 let preflightSequence = 0
 const error = ref('')
 const code = ref('')
+const product = ref<'gpt' | 'x'>('gpt')
+const xSeed = ref('')
+
+function onSwitchGpt(raw: string) {
+  product.value = 'gpt'
+  code.value = raw
+}
 const previewInfo = ref<any>(null)
 const redemptionToken = ref('')
 const preflightToken = ref('')
@@ -773,6 +796,11 @@ async function doPreview() {
     error.value = '请输入 CDK'
     return
   }
+  if (/^DNX-/i.test(code.value.trim())) {
+    xSeed.value = code.value.trim()
+    product.value = 'x'
+    return
+  }
   busy.value = true
   try {
     const cdk = code.value.trim()
@@ -997,6 +1025,11 @@ onMounted(() => {
     nowTick.value = Date.now()
   }, 30000)
   const q = String(route.query.cdk || route.query.code || '').trim()
+  if (route.query.product === 'x' || /^DNX-/i.test(q)) {
+    product.value = 'x'
+    xSeed.value = q
+    return
+  }
   if (loadProgress()) {
     if (q && code.value.trim() !== q) {
       resetAll()
@@ -1062,5 +1095,16 @@ function resetAll() {
 }
 @media (max-width: 640px) {
   .account-facts { grid-template-columns: 1fr; }
+}
+.product-card {
+  text-align: left;
+  border-radius: 1rem;
+  padding: 1rem 1.1rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--brd, rgba(0, 0, 0, 0.08));
+}
+.product-card.on {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
 }
 </style>

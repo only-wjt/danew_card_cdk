@@ -30,6 +30,8 @@ func buildProvider(acc db.CardPlatformAccount) (CardProvider, error) {
 		// Avanfinity 域名现仍兼容 /openapi/v1 + X-API-Key（与现网 client 相同）。
 		// 独立的 2026-08 REST 路径（App-Id 鉴权等）待新台凭证到位后再拆 adapter。
 		return NewSpaceXLegacy(acc), nil
+	case ProtocolAvanfinityAPIv1:
+		return nil, fmt.Errorf("%s 是 X 会员账户，不参与 OpenAI 发码", acc.Name)
 	default:
 		return nil, fmt.Errorf("未知卡台协议 %q", acc.Protocol)
 	}

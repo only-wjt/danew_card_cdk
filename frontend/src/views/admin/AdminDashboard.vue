@@ -28,7 +28,9 @@
         <section class="card space-y-3">
           <h2 class="text-xl font-semibold text-ink">快捷入口</h2>
           <div class="flex flex-wrap gap-2">
+            <router-link to="/ops/x" class="btn-primary">X 会员</router-link>
             <router-link to="/ops/cdkeys" class="btn-primary">CDK 卡密</router-link>
+            <router-link to="/ops/platforms" class="btn-secondary">卡台</router-link>
             <router-link to="/ops/orders" class="btn-secondary">兑换对账</router-link>
             <router-link to="/ops/integration" class="btn-secondary">卡台接入</router-link>
             <router-link to="/ops/webhooks" class="btn-secondary">Webhook 事件</router-link>

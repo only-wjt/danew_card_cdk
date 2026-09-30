@@ -12,6 +12,12 @@ import (
 const (
 	AccountProtocolSpaceXLegacy     = "spacexcard-legacy"
 	AccountProtocolAvanfinity202608 = "avanfinity-2026-08"
+	// AccountProtocolAvanfinityAPIv1 是 X 会员账户：/api/v1 + App ID，不参与 OpenAI 发码。
+	AccountProtocolAvanfinityAPIv1 = "avanfinity-api-v1"
+
+	CapOpenAI  = "openai"
+	CapXCDK    = "x_cdk"
+	CapXDirect = "x_direct"
 )
 
 // CardPlatformAccount 卡台账户（A/B 各一条）。
@@ -19,6 +25,7 @@ type CardPlatformAccount struct {
 	ID               int64  `json:"id"`
 	Name             string `json:"name"`
 	Protocol         string `json:"protocol"`
+	Capabilities     string `json:"capabilities"`
 	SiteBase         string `json:"site_base"`
 	CredPublic       string `json:"cred_public,omitempty"`
 	CredSecret       string `json:"-"`
@@ -71,6 +78,9 @@ func migrateCardPlatformAccounts() error {
 	if err := ensureCardPlatformWebhookPathCol(); err != nil {
 		return err
 	}
+	if err := ensureCardPlatformCapabilitiesCol(); err != nil {
+		return err
+	}
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_cpa_status ON card_platform_accounts(status)`)
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_cpa_priority ON card_platform_accounts(priority)`)
 	_, _ = DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_cpa_webhook_path ON card_platform_accounts(webhook_path) WHERE webhook_path != ''`)
@@ -78,6 +88,77 @@ func migrateCardPlatformAccounts() error {
 		return err
 	}
 	return ensurePrimaryAccount()
+}
+
+func ensureCardPlatformCapabilitiesCol() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('card_platform_accounts') WHERE name='capabilities'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := DB.Exec(`ALTER TABLE card_platform_accounts ADD COLUMN capabilities TEXT NOT NULL DEFAULT 'openai'`)
+	return err
+}
+
+// HasCapability 判断逗号分隔的能力串里有没有某一项。
+func HasCapability(raw, cap string) bool {
+	cap = strings.ToLower(strings.TrimSpace(cap))
+	if cap == "" {
+		return false
+	}
+	for _, part := range strings.Split(raw, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), cap) {
+			return true
+		}
+	}
+	return false
+}
+
+// AccountServesOpenAI 为真时，这个账户可以进主台、双发、套餐同步和熔断。
+// X 会员协议即使能力串被写成 openai，也不算。
+func AccountServesOpenAI(a CardPlatformAccount) bool {
+	if strings.EqualFold(strings.TrimSpace(a.Protocol), AccountProtocolAvanfinityAPIv1) {
+		return false
+	}
+	caps := strings.TrimSpace(a.Capabilities)
+	if caps == "" {
+		return true
+	}
+	return HasCapability(caps, CapOpenAI)
+}
+
+// NormalizeCapabilities 按协议收紧能力。旧协议固定 openai；X 协议只能是 x_cdk / x_direct。
+func NormalizeCapabilities(protocol, raw string) (string, error) {
+	protocol = strings.TrimSpace(protocol)
+	if protocol != AccountProtocolAvanfinityAPIv1 {
+		return CapOpenAI, nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		cap := strings.ToLower(strings.TrimSpace(part))
+		if cap == "" || seen[cap] {
+			continue
+		}
+		seen[cap] = true
+		switch cap {
+		case CapXCDK, CapXDirect:
+			out = append(out, cap)
+		case CapOpenAI:
+			return "", fmt.Errorf("X 会员账户不能勾 OpenAI，两种凭证要分成两行")
+		default:
+			return "", fmt.Errorf("未知能力 %q", cap)
+		}
+	}
+	if len(out) == 0 {
+		return "", fmt.Errorf("X 会员账户至少要勾选 X CDK 或 X 直充")
+	}
+	return strings.Join(out, ","), nil
 }
 
 func ensureCardPlatformWebhookPathCol() error {
@@ -196,7 +277,7 @@ func ListCardPlatformAccounts() ([]CardPlatformAccount, error) {
 		return nil, fmt.Errorf("db not ready")
 	}
 	rows, err := DB.Query(`
-		SELECT id, name, protocol, site_base, COALESCE(cred_public,''), COALESCE(cred_secret,''),
+		SELECT id, name, protocol, COALESCE(capabilities,'openai'), site_base, COALESCE(cred_public,''), COALESCE(cred_secret,''),
 		       COALESCE(webhook_secret,''), COALESCE(webhook_path,''), COALESCE(status,'active'), COALESCE(priority,100),
 		       COALESCE(is_primary_default,0), COALESCE(force_new_card,0),
 		       COALESCE(last_ok_at,''), COALESCE(last_error,''), COALESCE(last_error_at,''),
@@ -214,7 +295,7 @@ func ListCardPlatformAccounts() ([]CardPlatformAccount, error) {
 		var a CardPlatformAccount
 		var priDef, force int
 		if err := rows.Scan(
-			&a.ID, &a.Name, &a.Protocol, &a.SiteBase, &a.CredPublic, &a.CredSecret, &a.WebhookSecret, &a.WebhookPath,
+			&a.ID, &a.Name, &a.Protocol, &a.Capabilities, &a.SiteBase, &a.CredPublic, &a.CredSecret, &a.WebhookSecret, &a.WebhookPath,
 			&a.Status, &a.Priority, &priDef, &force,
 			&a.LastOKAt, &a.LastError, &a.LastErrorAt,
 			&a.CircuitState, &a.CircuitFailCount, &a.CircuitOpenedAt,
@@ -253,7 +334,7 @@ func ActiveDualIssueAccounts() ([]CardPlatformAccount, error) {
 	}
 	out := make([]CardPlatformAccount, 0, len(all))
 	for _, a := range all {
-		if !strings.EqualFold(a.Status, "active") {
+		if !AccountServesOpenAI(a) || !strings.EqualFold(a.Status, "active") {
 			continue
 		}
 		if !strings.EqualFold(a.CircuitState, "open") {
@@ -270,7 +351,8 @@ func CircuitProbeAccounts() ([]CardPlatformAccount, error) {
 	}
 	out := make([]CardPlatformAccount, 0)
 	for _, acc := range all {
-		if strings.EqualFold(acc.Status, "active") &&
+		if AccountServesOpenAI(acc) &&
+			strings.EqualFold(acc.Status, "active") &&
 			strings.EqualFold(acc.CircuitState, "open") &&
 			circuitProbeDue(acc.CircuitOpenedAt) {
 			out = append(out, acc)
@@ -304,6 +386,19 @@ func UpsertCardPlatformAccount(a CardPlatformAccount) (int64, error) {
 	if strings.TrimSpace(a.Protocol) == "" {
 		a.Protocol = AccountProtocolSpaceXLegacy
 	}
+	caps, err := NormalizeCapabilities(a.Protocol, a.Capabilities)
+	if err != nil {
+		return 0, err
+	}
+	a.Capabilities = caps
+	if a.Protocol == AccountProtocolAvanfinityAPIv1 {
+		if a.IsPrimaryDefault {
+			return 0, fmt.Errorf("X 会员账户不能设为主台")
+		}
+		if a.ID <= 0 && strings.TrimSpace(a.CredPublic) == "" {
+			return 0, fmt.Errorf("App ID 必填")
+		}
+	}
 	if strings.TrimSpace(a.Status) == "" {
 		a.Status = "active"
 	}
@@ -311,6 +406,9 @@ func UpsertCardPlatformAccount(a CardPlatformAccount) (int64, error) {
 		a.Priority = 100
 	}
 	if a.ID <= 0 && strings.TrimSpace(a.CredSecret) == "" {
+		if a.Protocol == AccountProtocolAvanfinityAPIv1 {
+			return 0, fmt.Errorf("App Secret 必填")
+		}
 		return 0, fmt.Errorf("API Key 必填")
 	}
 	if a.IsPrimaryDefault && strings.TrimSpace(a.CredSecret) == "" && a.ID > 0 {
@@ -322,13 +420,15 @@ func UpsertCardPlatformAccount(a CardPlatformAccount) (int64, error) {
 	if a.ID > 0 {
 		if _, err := DB.Exec(`
 			UPDATE card_platform_accounts
-			SET name = ?, protocol = ?, site_base = ?, cred_public = ?,
+			SET name = ?, protocol = ?, capabilities = ?, site_base = ?,
+			    cred_public = CASE WHEN ? != '' THEN ? ELSE cred_public END,
 			    cred_secret = CASE WHEN ? != '' THEN ? ELSE cred_secret END,
 			    webhook_secret = CASE WHEN ? != '' THEN ? ELSE webhook_secret END,
 			    status = ?, priority = ?, is_primary_default = ?, force_new_card = ?,
 			    updated_at = CURRENT_TIMESTAMP
 			WHERE id = ?
-		`, a.Name, a.Protocol, a.SiteBase, a.CredPublic,
+		`, a.Name, a.Protocol, a.Capabilities, a.SiteBase,
+			a.CredPublic, a.CredPublic,
 			a.CredSecret, a.CredSecret, a.WebhookSecret, a.WebhookSecret,
 			a.Status, a.Priority, boolToInt(a.IsPrimaryDefault), boolToInt(a.ForceNewCard), a.ID); err != nil {
 			return 0, err
@@ -351,10 +451,10 @@ func UpsertCardPlatformAccount(a CardPlatformAccount) (int64, error) {
 	}
 	res, err := DB.Exec(`
 		INSERT INTO card_platform_accounts
-		(name, protocol, site_base, cred_public, cred_secret, webhook_secret,
+		(name, protocol, capabilities, site_base, cred_public, cred_secret, webhook_secret,
 		 status, priority, is_primary_default, force_new_card, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`, a.Name, a.Protocol, a.SiteBase, a.CredPublic, a.CredSecret, a.WebhookSecret,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+	`, a.Name, a.Protocol, a.Capabilities, a.SiteBase, a.CredPublic, a.CredSecret, a.WebhookSecret,
 		a.Status, a.Priority, boolToInt(a.IsPrimaryDefault), boolToInt(a.ForceNewCard))
 	if err != nil {
 		return 0, err
@@ -498,13 +598,18 @@ func ensurePrimaryAccount() error {
 	err := DB.QueryRow(`
 		SELECT id FROM card_platform_accounts
 		WHERE is_primary_default = 1 AND status = 'active'
+		  AND protocol != ?
+		  AND instr(',' || replace(ifnull(capabilities,''), ' ', '') || ',', ',openai,') > 0
 		ORDER BY priority, id LIMIT 1
-	`).Scan(&id)
+	`, AccountProtocolAvanfinityAPIv1).Scan(&id)
 	if err != nil {
 		err = DB.QueryRow(`
 			SELECT id FROM card_platform_accounts
-			WHERE status = 'active' ORDER BY priority, id LIMIT 1
-		`).Scan(&id)
+			WHERE status = 'active'
+			  AND protocol != ?
+			  AND instr(',' || replace(ifnull(capabilities,''), ' ', '') || ',', ',openai,') > 0
+			ORDER BY priority, id LIMIT 1
+		`, AccountProtocolAvanfinityAPIv1).Scan(&id)
 		if err != nil {
 			return nil
 		}
@@ -599,12 +704,12 @@ func PrimaryCardPlatformAccount() (CardPlatformAccount, error) {
 		return CardPlatformAccount{}, err
 	}
 	for _, a := range all {
-		if a.IsPrimaryDefault {
+		if a.IsPrimaryDefault && AccountServesOpenAI(a) {
 			return a, nil
 		}
 	}
 	for _, a := range all {
-		if strings.EqualFold(a.Status, "active") {
+		if AccountServesOpenAI(a) && strings.EqualFold(a.Status, "active") {
 			return a, nil
 		}
 	}
@@ -649,4 +754,84 @@ func MarkCardPlatformAccountError(id int64, reason string) error {
 		WHERE id = ? AND circuit_fail_count >= ? AND circuit_state != 'open'
 	`, id, circuitFailThreshold)
 	return err
+}
+
+// NoteCardPlatformResult 只记最近一次成功或失败，不动熔断。X 会员账户用这个。
+func NoteCardPlatformResult(id int64, ok bool, reason string) error {
+	if DB == nil || id <= 0 {
+		return nil
+	}
+	if ok {
+		_, err := DB.Exec(`
+			UPDATE card_platform_accounts
+			SET last_ok_at = CURRENT_TIMESTAMP, last_error = '', updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, id)
+		return err
+	}
+	_, err := DB.Exec(`
+		UPDATE card_platform_accounts
+		SET last_error = ?, last_error_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, reason, id)
+	return err
+}
+
+// ReorderOpenAIAccounts 按给定顺序重排 OpenAI 卡台。第一台成为主台。
+// 名单必须正好是全部 OpenAI 账户，避免漏掉的台仍占着旧优先级。
+func ReorderOpenAIAccounts(ids []int64) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	all, err := ListCardPlatformAccounts()
+	if err != nil {
+		return err
+	}
+	want := map[int64]CardPlatformAccount{}
+	for _, a := range all {
+		if AccountServesOpenAI(a) {
+			want[a.ID] = a
+		}
+	}
+	if len(ids) != len(want) {
+		return fmt.Errorf("请一次提交全部 OpenAI 卡台的顺序")
+	}
+	seen := map[int64]bool{}
+	for _, id := range ids {
+		if _, ok := want[id]; !ok || seen[id] {
+			return fmt.Errorf("顺序里有无效卡台")
+		}
+		seen[id] = true
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for i, id := range ids {
+		primary := 0
+		if i == 0 {
+			primary = 1
+		}
+		if _, err := tx.Exec(`
+			UPDATE card_platform_accounts
+			SET priority = ?, is_primary_default = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE id = ?
+		`, (i+1)*10, primary, id); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.Exec(`
+		UPDATE card_platform_accounts SET is_primary_default = 0
+		WHERE protocol = ?
+	`, AccountProtocolAvanfinityAPIv1); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if len(ids) > 0 {
+		return syncPrimaryAccountLegacySettings(ids[0])
+	}
+	return nil
 }

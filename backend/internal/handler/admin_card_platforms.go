@@ -26,14 +26,20 @@ func AdminListCardPlatforms(c *gin.Context) {
 	sharedURL := cardPlatformWebhookURL(c)
 	origin := strings.TrimSuffix(sharedURL, "/api/v1/webhooks/cardplatform")
 	out := make([]gin.H, 0, len(accounts))
+	openaiActive := 0
 	for _, a := range accounts {
+		if db.AccountServesOpenAI(a) && strings.EqualFold(a.Status, "active") && !strings.EqualFold(a.CircuitState, "open") {
+			openaiActive++
+		}
 		accountURL := db.AccountWebhookPublicURL(origin, a.WebhookPath, a.ID)
 		out = append(out, gin.H{
-			"id": a.ID, "name": a.Name, "protocol": a.Protocol, "site_base": a.SiteBase,
-			"status": a.Status, "priority": a.Priority,
+			"id": a.ID, "name": a.Name, "protocol": a.Protocol,
+			"capabilities": a.Capabilities, "app_id": a.CredPublic, "site_base": a.SiteBase,
+			"serves_openai": db.AccountServesOpenAI(a),
+			"status":        a.Status, "priority": a.Priority,
 			"is_primary_default": a.IsPrimaryDefault, "force_new_card": a.ForceNewCard,
-			"has_credential":     strings.TrimSpace(a.CredSecret) != "",
-			"has_webhook_secret": strings.TrimSpace(a.WebhookSecret) != "",
+			"has_credential":      strings.TrimSpace(a.CredSecret) != "",
+			"has_webhook_secret":  strings.TrimSpace(a.WebhookSecret) != "",
 			"webhook_secret_hint": maskSecret(a.WebhookSecret),
 			"webhook_path":        a.WebhookPath,
 			"webhook_url":         accountURL,
@@ -47,7 +53,7 @@ func AdminListCardPlatforms(c *gin.Context) {
 		"unusable":           skipped,
 		"dual_bind":          siteDualBindEnabled(),
 		"allow_single":       allowDegradedSingleBind(),
-		"eligible_issuer":    len(accounts),
+		"eligible_issuer":    openaiActive,
 		"webhook_url":        sharedURL,
 		"legacy_secret_set":  strings.TrimSpace(legacy) != "",
 		"legacy_secret_hint": maskSecret(legacy),
@@ -68,6 +74,7 @@ func AdminUpsertCardPlatform(c *gin.Context) {
 		Priority         int    `json:"priority"`
 		IsPrimaryDefault bool   `json:"is_primary_default"`
 		ForceNewCard     bool   `json:"force_new_card"`
+		Capabilities     string `json:"capabilities"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
@@ -79,6 +86,7 @@ func AdminUpsertCardPlatform(c *gin.Context) {
 		CredSecret: strings.TrimSpace(req.CredSecret), WebhookSecret: strings.TrimSpace(req.WebhookSecret),
 		Status: strings.TrimSpace(req.Status), Priority: req.Priority,
 		IsPrimaryDefault: req.IsPrimaryDefault, ForceNewCard: req.ForceNewCard,
+		Capabilities: req.Capabilities,
 	})
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -177,8 +185,16 @@ func AdminPingCardPlatform(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid account id"})
 		return
 	}
-	_, acc, err := provider.ForAccount(req.ID)
+	acc, err := db.GetCardPlatformAccount(req.ID)
 	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if acc.Protocol == db.AccountProtocolAvanfinityAPIv1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "X 会员卡台请用「测试连接」，不要走 OpenAI 探测"})
+		return
+	}
+	if _, _, err = provider.ForAccount(req.ID); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -240,10 +256,20 @@ func AdminPingCardPlatform(c *gin.Context) {
 	} else if status == 403 {
 		msg = "主机可达；可能 IP 不在白名单（403）"
 	}
-	var spendable string
+	var spendable, reserve string
+	var planFees []gin.H
 	if key != "" {
-		if bal, berr := cardplatform.New(cfg).GetBalance(c.Request.Context()); berr == nil && bal != nil {
+		cli := cardplatform.New(cfg)
+		if bal, berr := cli.GetBalance(c.Request.Context()); berr == nil && bal != nil {
 			spendable = string(bal.SpendableBalance)
+			reserve = string(bal.AccountReserveAmount)
+		}
+		if plans, perr := cli.GetPlans(c.Request.Context()); perr == nil && plans != nil {
+			for _, p := range plans.SellablePlans() {
+				planFees = append(planFees, gin.H{
+					"key": p.Key, "label": p.Label, "fee_usd": p.ServiceFeeUSD,
+				})
+			}
 		}
 	}
 	if status >= 200 && status < 500 && status != 401 && status != 403 {
@@ -252,7 +278,7 @@ func AdminPingCardPlatform(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok": true, "message": msg, "probed": probed, "status": status,
 		"account_id": req.ID, "name": acc.Name, "site_base": base,
-		"spendable_usd": spendable, "egress_ip": egressIP,
+		"spendable_usd": spendable, "reserve_usd": reserve, "plan_fees": planFees, "egress_ip": egressIP,
 	})
 }
 

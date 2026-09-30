@@ -1,6 +1,6 @@
 <template>
   <div class="space-y-4">
-    <div class="card">
+    <div v-if="!embedded" class="card">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 class="text-xl font-bold text-ink">当前卡台</h2>
@@ -23,7 +23,7 @@
         class="mt-3"
         type="warning"
         :closable="false"
-        title="尚未配置卡台账户，请先到「卡台接入」添加主台和备台。"
+        title="尚未配置 OpenAI 卡台，请先到「卡台」添加主台和备台。"
       />
     </div>
 
@@ -374,6 +374,11 @@ interface PlatformAccount {
   status: string
 }
 
+const props = withDefaults(defineProps<{ fixedAccountId?: number; embedded?: boolean }>(), {
+  fixedAccountId: 0,
+  embedded: false,
+})
+
 let _idSeq = 0
 const rules = ref<RuleRow[]>([])
 const products = ref<CardProduct[]>([])
@@ -406,17 +411,29 @@ async function loadAccounts() {
   if (!r.ok) return
   const d = await r.json().catch(() => ({}))
   platformAccounts.value = (Array.isArray(d.accounts) ? d.accounts : [])
+    .filter((a: any) => a.serves_openai !== false)
     .map((a: any) => ({
       id: Number(a.id),
       name: String(a.name || `账户 ${a.id}`),
       is_primary_default: !!a.is_primary_default,
       status: String(a.status || ''),
     }))
-  if (!platformAccounts.value.some((a) => a.id === selectedAccountID.value)) {
+  if (props.fixedAccountId > 0) {
+    selectedAccountID.value = props.fixedAccountId
+  } else if (!platformAccounts.value.some((a) => a.id === selectedAccountID.value)) {
     selectedAccountID.value =
       platformAccounts.value.find((a) => a.is_primary_default)?.id || platformAccounts.value[0]?.id || 0
   }
 }
+
+watch(
+  () => props.fixedAccountId,
+  (id) => {
+    if (!id || id === selectedAccountID.value) return
+    selectedAccountID.value = id
+    switchAccount()
+  },
+)
 
 async function switchAccount() {
   rules.value = []

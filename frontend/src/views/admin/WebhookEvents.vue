@@ -7,12 +7,12 @@
           <el-button :loading="loading" @click="load">刷新</el-button>
         </div>
       </template>
-      <p class="text-sm text-muted mb-3">
+      <p v-if="!embedded" class="text-sm text-muted mb-3">
         按验签归到对应卡台。Secret 在
-        <router-link class="app-link" to="/ops/integration">卡台接入</router-link>
+        <router-link class="app-link" to="/ops/platforms">卡台</router-link>
         各账户下配置。
       </p>
-      <el-radio-group v-model="filterAccountId" size="small" class="mb-3">
+      <el-radio-group v-if="!embedded" v-model="filterAccountId" size="small" class="mb-3">
         <el-radio-button :value="0">全部 {{ events.length }}</el-radio-button>
         <el-radio-button v-for="acc in accounts" :key="acc.id" :value="acc.id">
           {{ acc.name }} {{ countFor(acc.id) }}
@@ -73,6 +73,12 @@ interface WebhookEventRow {
   payload: any
 }
 
+const props = withDefaults(defineProps<{ fixedAccountId?: number; orphansOnly?: boolean; embedded?: boolean }>(), {
+  fixedAccountId: 0,
+  orphansOnly: false,
+  embedded: false,
+})
+
 const accounts = ref<WebhookAccount[]>([])
 const events = ref<WebhookEventRow[]>([])
 const filterAccountId = ref(0)
@@ -116,6 +122,8 @@ async function load() {
     }
     accounts.value = d.accounts || []
     events.value = d.events || []
+    if (props.orphansOnly) filterAccountId.value = -1
+    else if (props.fixedAccountId) filterAccountId.value = props.fixedAccountId
   } finally {
     loading.value = false
   }

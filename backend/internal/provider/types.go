@@ -6,6 +6,8 @@ import "context"
 const (
 	ProtocolSpaceXLegacy     = "spacexcard-legacy"
 	ProtocolAvanfinity202608 = "avanfinity-2026-08"
+	// ProtocolAvanfinityAPIv1 只服务 X 会员，不能进 OpenAI 的 CardProvider。
+	ProtocolAvanfinityAPIv1 = "avanfinity-api-v1"
 )
 
 // SiteCodePrefix 对外本站码前缀（与 GPTD-/SXC-/AVF- 区分）。

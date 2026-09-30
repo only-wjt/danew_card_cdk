@@ -26,6 +26,7 @@ type cdkLookupResult struct {
 	Used         bool    `json:"used"`
 	CanResubmit  bool    `json:"can_resubmit"`
 	AccountEmail string  `json:"account_email,omitempty"`
+	Recipient    string  `json:"recipient,omitempty"`
 	Plan         string  `json:"plan,omitempty"`
 	UsedAt       *string `json:"used_at,omitempty"`
 	Notes        string  `json:"notes,omitempty"`
@@ -149,8 +150,49 @@ func applyLookupFailure(resp *cdkLookupResult, notes string, reusable bool) {
 	}
 }
 
+func lookupXCode(code string) cdkLookupResult {
+	resp := cdkLookupResult{CDKCode: code, Status: "unknown", Message: "未找到该卡密记录"}
+	row, err := db.GetXCodeByCode(code)
+	if err != nil {
+		return resp
+	}
+	resp.Plan = row.Plan
+	red, rerr := db.LatestXRedemption(row.ID)
+	if rerr == nil && red.Recipient != "" {
+		name := red.Recipient
+		if len(name) > 4 {
+			name = name[:2] + "***" + name[len(name)-1:]
+		}
+		resp.Recipient = "@" + name
+	}
+	switch row.Status {
+	case "unused":
+		resp.Status, resp.Used, resp.CanResubmit = "unused", false, true
+		resp.Message = "卡密未使用"
+	case "completed":
+		resp.Status, resp.Used = "used", true
+		resp.Message = "已开通"
+		if resp.Recipient != "" {
+			resp.Message = "已为 " + resp.Recipient + " 开通"
+		}
+	case "disabled":
+		resp.Status = "disabled"
+		resp.Message = "卡密已失效"
+	case "uncertain", "review_required", "requires_action":
+		resp.Status = "processing"
+		resp.Message = "正在核实付款结果，卡密已锁定"
+	default:
+		resp.Status = "processing"
+		resp.Message = "正在开通"
+	}
+	return resp
+}
+
 func lookupOneCDK(ctx context.Context, code, deviceID string) cdkLookupResult {
 	resp := cdkLookupResult{CDKCode: code, Status: "unknown", Message: "未找到该卡密记录"}
+	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(code)), "DNX-") {
+		return lookupXCode(code)
+	}
 	if db.DB == nil {
 		return resp
 	}
