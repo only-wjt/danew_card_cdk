@@ -29,10 +29,14 @@ const (
 
 // Config 从 site_settings（优先）与环境变量读取。
 type Config struct {
-	// SiteBase 如 https://spacexcard.com（不含 /openapi）
+	// SiteBase 如 https://spacexcard.com（不含 /openapi 或 /api/v1）
 	SiteBase string
-	// APIKey sk_...
+	// APIKey 旧协议的 X-API-Key，或新协议的 App Secret。
 	APIKey string
+	// AppID 新协议 X-App-Id。空则仍用 X-API-Key。
+	AppID string
+	// APIv1 为真时走文档里的 /api/v1，而不是旧的 /openapi/v1。
+	APIv1 bool
 	// AccountID 多卡台账户 id；同步完整码落库时写入该账户。
 	AccountID int64
 }
@@ -47,18 +51,29 @@ func LoadConfig() Config {
 		key = os.Getenv("CARD_API_KEY")
 	}
 	base = strings.TrimRight(strings.TrimSpace(base), "/")
-	// 兼容用户填了 .../openapi/v1
-	base = strings.TrimSuffix(base, "/openapi/v1")
-	base = strings.TrimSuffix(base, "/openapi")
+	base = trimAPIBase(base)
 	if base == "" {
 		base = defaultBase
 	}
 	return Config{SiteBase: base, APIKey: strings.TrimSpace(key)}
 }
 
+func trimAPIBase(base string) string {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	base = strings.TrimSuffix(base, "/openapi/v1")
+	base = strings.TrimSuffix(base, "/openapi")
+	base = strings.TrimSuffix(base, "/api/v1")
+	return base
+}
+
 func (c Config) OpenAPIBase() string {
+	if c.APIv1 {
+		return c.SiteBase + "/api/v1"
+	}
 	return c.SiteBase + "/openapi/v1"
 }
+
+func (c *Client) UsesAPIv1() bool { return c != nil && c.cfg.APIv1 }
 
 func (c Config) PublicCDKBase() string {
 	return c.SiteBase + "/api/v1/cdk"
@@ -84,15 +99,16 @@ func NewFromSettings() *Client {
 
 // NewFromAccount 用某一台卡台账户的 Base/Key 发 OpenAPI。
 func NewFromAccount(acc db.CardPlatformAccount) *Client {
-	base := strings.TrimRight(strings.TrimSpace(acc.SiteBase), "/")
-	base = strings.TrimSuffix(base, "/openapi/v1")
-	base = strings.TrimSuffix(base, "/openapi")
+	base := trimAPIBase(acc.SiteBase)
 	if base == "" {
 		base = defaultBase
 	}
+	v1 := acc.Protocol == db.AccountProtocolAvanfinity202608 || acc.Protocol == db.AccountProtocolAvanfinityAPIv1
 	return New(Config{
 		SiteBase:  base,
 		APIKey:    strings.TrimSpace(acc.CredSecret),
+		AppID:     strings.TrimSpace(acc.CredPublic),
+		APIv1:     v1,
 		AccountID: acc.ID,
 	})
 }
@@ -145,7 +161,12 @@ func (c *Client) doOpenAPIWithClient(ctx context.Context, httpc *http.Client, me
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("X-API-Key", c.cfg.APIKey)
+	if c.cfg.APIv1 && c.cfg.AppID != "" {
+		req.Header.Set("X-App-Id", c.cfg.AppID)
+		req.Header.Set("X-App-Secret", c.cfg.APIKey)
+	} else {
+		req.Header.Set("X-API-Key", c.cfg.APIKey)
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -163,11 +184,11 @@ func (c *Client) doOpenAPIWithClient(ctx context.Context, httpc *http.Client, me
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return nil, &APIError{HTTPStatus: resp.StatusCode, Msg: formatCardPlatformBodyError(resp.StatusCode, raw)}
 	}
-	// Open API：成功 code=0（HTTP 可能 200/202）；失败 code!=0 或 HTTP 4xx/5xx
+	// 旧 OpenAPI 成功是 code=0。文档里的 /api/v1 有的接口成功是 0，X 接口成功是 200。
 	if resp.StatusCode == 401 || env.Code == 401 {
 		return nil, &APIError{HTTPStatus: 401, Code: env.Code, Msg: nonEmpty(env.Msg, "unauthorized"), ErrorCode: env.Error}
 	}
-	if env.Code != 0 {
+	if env.Code != 0 && env.Code != 200 {
 		st := resp.StatusCode
 		if st < 400 {
 			st = http.StatusBadRequest
@@ -293,6 +314,15 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 	if !ok {
 		return out, nil
 	}
+	if plans := parsePlanList(plansRaw); plans != nil {
+		for _, p := range plans {
+			if p.Key == "" {
+				continue
+			}
+			out.Plans[p.Key] = p
+		}
+		return out, nil
+	}
 	var plansMap map[string]map[string]interface{}
 	if err := json.Unmarshal(plansRaw, &plansMap); err != nil {
 		// 回退标准结构
@@ -323,6 +353,37 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 		out.Plans[k] = p
 	}
 	return out, nil
+}
+
+func parsePlanList(raw json.RawMessage) []PlanInfo {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed[0] != '[' {
+		return nil
+	}
+	var rows []map[string]interface{}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		return nil
+	}
+	out := make([]PlanInfo, 0, len(rows))
+	for _, m := range rows {
+		key, _ := m["key"].(string)
+		p := PlanInfo{Key: key, Enabled: true}
+		if s, _ := m["label"].(string); s != "" {
+			p.Label = s
+		}
+		if s, _ := m["currency"].(string); s != "" {
+			p.Currency = s
+		}
+		if b, ok := m["enabled"].(bool); ok {
+			p.Enabled = b
+		}
+		p.ServiceFeeUsdMinor = jsonInt64(m, "serviceFeeUsdMinor", "service_fee_usd_minor")
+		p.ExpectedAmountMinor = jsonInt64(m, "expectedAmountMinor", "expected_amount_minor")
+		p.MinAmountMinor = jsonInt64(m, "minAmountMinor", "min_amount_minor")
+		p.MaxAmountMinor = jsonInt64(m, "maxAmountMinor", "max_amount_minor")
+		out = append(out, p)
+	}
+	return out
 }
 
 func jsonInt64(m map[string]interface{}, keys ...string) int64 {
@@ -918,22 +979,76 @@ type ProductInfo struct {
 
 // GetProducts GET /openapi/v1/products — 拉取所有可用卡产品列表
 func (c *Client) GetProducts(ctx context.Context) ([]ProductInfo, error) {
-	data, err := c.doOpenAPI(ctx, http.MethodGet, "/products?page=1&page_size=200", nil, "")
+	path := "/products?page=1&page_size=200"
+	if c.UsesAPIv1() {
+		path = "/products"
+	}
+	data, err := c.doOpenAPI(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, err
 	}
-	// data 是 data 字段内容：可能是数组，也可能是 {list:[...],total:N}
-	var items []ProductInfo
+	return decodeProducts(data)
+}
+
+func decodeProducts(data json.RawMessage) ([]ProductInfo, error) {
+	rawItems, err := productRawList(data)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ProductInfo, 0, len(rawItems))
+	for _, raw := range rawItems {
+		var p ProductInfo
+		_ = json.Unmarshal(raw, &p)
+		var alt struct {
+			ProductCode string   `json:"productCode"`
+			IssuingArea string   `json:"issuingArea"`
+			DisplayBin  string   `json:"displayBin"`
+			DisplayBins []string `json:"displayBins"`
+			Description string   `json:"description"`
+		}
+		_ = json.Unmarshal(raw, &alt)
+		if p.ProductCode == "" {
+			p.ProductCode = alt.ProductCode
+		}
+		if p.IssuingArea == "" {
+			p.IssuingArea = alt.IssuingArea
+		}
+		if p.BIN == "" {
+			p.BIN = alt.DisplayBin
+		}
+		if len(p.BinHeads) == 0 {
+			p.BinHeads = alt.DisplayBins
+		}
+		if p.Description == "" {
+			p.Description = alt.Description
+		}
+		if !jsonHas(raw, "enabled") && p.ProductCode != "" {
+			p.Enabled = true
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func productRawList(data json.RawMessage) ([]json.RawMessage, error) {
+	var items []json.RawMessage
 	if err := json.Unmarshal(data, &items); err == nil {
 		return items, nil
 	}
-	// 尝试 {list: [...]}
 	var wrapped struct {
-		List  []ProductInfo `json:"list"`
-		Total int           `json:"total"`
+		List []json.RawMessage `json:"list"`
 	}
 	if err := json.Unmarshal(data, &wrapped); err != nil {
 		return nil, err
 	}
 	return wrapped.List, nil
+}
+
+func jsonHas(raw json.RawMessage, key string) bool {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return false
+	}
+	_, ok := m[key]
+	return ok
 }

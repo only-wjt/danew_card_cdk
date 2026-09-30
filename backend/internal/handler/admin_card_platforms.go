@@ -258,8 +258,11 @@ func AdminPingCardPlatform(c *gin.Context) {
 	}
 	var spendable, reserve string
 	var planFees []gin.H
-	if key != "" {
+	if key != "" || strings.TrimSpace(acc.CredPublic) != "" {
 		cli := cardplatform.New(cfg)
+		if acc.Protocol == db.AccountProtocolAvanfinity202608 || acc.Protocol == db.AccountProtocolAvanfinityAPIv1 {
+			cli = cardplatform.NewFromAccount(acc)
+		}
 		if bal, berr := cli.GetBalance(c.Request.Context()); berr == nil && bal != nil {
 			spendable = string(bal.SpendableBalance)
 			reserve = string(bal.AccountReserveAmount)

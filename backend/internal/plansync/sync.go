@@ -196,6 +196,9 @@ func doSync(ctx context.Context) (SyncResult, error) {
 
 // fetchProductsForCache 优先卡台 card-products（能区分未启动），没有该接口再走 /products。
 func fetchProductsForCache(ctx context.Context, cli *cardplatform.Client) ([]db.CardProductCache, map[string]bool, error) {
+	if cli.UsesAPIv1() {
+		return productsFromCatalog(ctx, cli)
+	}
 	if dps, err := cli.GetDirectCardProducts(ctx); err == nil && len(dps) > 0 {
 		present := make(map[string]bool, len(dps))
 		strict := make([]db.CardProductCache, 0, len(dps))
@@ -237,6 +240,10 @@ func fetchProductsForCache(ctx context.Context, cli *cardplatform.Client) ([]db.
 		}
 		return overlayProductDetails(ctx, cli, loose), present, nil
 	}
+	return productsFromCatalog(ctx, cli)
+}
+
+func productsFromCatalog(ctx context.Context, cli *cardplatform.Client) ([]db.CardProductCache, map[string]bool, error) {
 	products, err := cli.GetProducts(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -259,7 +266,7 @@ func fetchProductsForCache(ctx context.Context, cli *cardplatform.Client) ([]db.
 			CardGroup:   p.CardGroup,
 			Description: p.Description,
 			BinHeads:    p.BinHeads,
-			Enabled:     true,
+			Enabled:     p.Enabled,
 			SuspendedAt: p.SuspendedAt,
 		})
 	}

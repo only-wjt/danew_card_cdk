@@ -98,21 +98,29 @@
             <el-radio-button value="credentials">凭证</el-radio-button>
           </el-radio-group>
 
-          <div v-if="tab === 'overview' && current.serves_openai" class="card space-y-3">
-            <p class="text-sm text-muted">{{ current.site_base }}</p>
-            <p class="text-sm">熔断 {{ current.circuit_state === 'open' ? '已打开' : '关闭' }} · 最近成功 {{ current.last_ok_at || '—' }}</p>
-            <p class="text-sm">可消费余额 <strong>{{ openaiSpendable ? '$' + openaiSpendable : '读取中…' }}</strong>
-              <span v-if="openaiReserve" class="text-muted"> · 保证金 ${{ openaiReserve }}，可消费余额不含这笔</span>
-            </p>
-            <div v-if="planFees.length" class="text-sm">
-              <div class="text-muted mb-1">套餐服务费</div>
-              <div v-for="p in planFees" :key="p.key" class="flex justify-between gap-4">
-                <span>{{ p.label || p.key }}</span>
-                <span>${{ Number(p.fee_usd || 0).toFixed(2) }}</span>
+          <div v-if="tab === 'overview' && current.serves_openai" class="space-y-3">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div class="card">
+                <div class="text-xs text-muted">可消费余额</div>
+                <div class="mt-1 text-lg font-semibold">{{ openaiSpendable ? '$' + openaiSpendable : '—' }}</div>
+                <div class="text-xs text-muted">{{ openaiReserve ? '含保证金 $' + openaiReserve : '总余额里的保证金单独列出' }}</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">服务费</div>
+                <div class="mt-1 text-sm">{{ feeLine || '点一键检测读取' }}</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">连通</div>
+                <div class="mt-1 text-sm">熔断 {{ current.circuit_state === 'open' ? '已打开' : '关闭' }}</div>
+                <div class="text-xs text-muted">最近成功 {{ current.last_ok_at || '—' }}</div>
               </div>
             </div>
-            <p v-if="pingMsg" class="text-sm">{{ pingMsg }}</p>
-            <el-button v-if="current.circuit_state === 'open'" type="warning" plain @click="resetCircuit">复位熔断</el-button>
+            <p v-if="pingMsg" class="text-sm text-muted">{{ pingMsg }}</p>
+            <div class="flex flex-wrap gap-2">
+              <el-button type="primary" :loading="pinging" @click="pingOpenAI">一键检测</el-button>
+              <el-button :loading="syncingCards" @click="syncOpenAICards">同步套餐</el-button>
+              <el-button v-if="current.circuit_state === 'open'" type="warning" plain @click="resetCircuit">复位熔断</el-button>
+            </div>
           </div>
 
           <div v-else-if="tab === 'overview'" class="space-y-3">
@@ -131,7 +139,53 @@
             </div>
           </div>
 
-          <CardSelectionConfig v-else-if="tab === 'cards' && current.serves_openai" embedded :fixed-account-id="current.id" />
+          <div v-else-if="tab === 'cards' && current.serves_openai" class="space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <p class="text-sm text-muted">跟着左边选中的卡台。顺序只影响这台自动选卡，上移优先级更高。</p>
+              <el-button type="primary" plain :loading="syncingCards" @click="syncOpenAICards">立即同步</el-button>
+            </div>
+            <div class="card overflow-x-auto">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>卡产品</th>
+                    <th>在线</th>
+                    <th>自动选卡顺序</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, i) in cardRows" :key="row.code">
+                    <td>{{ row.label }}</td>
+                    <td>{{ row.online ? '在线' : '下线' }}</td>
+                    <td>{{ row.order || '—' }}</td>
+                    <td class="text-right">
+                      <el-button link :disabled="!row.inRules || i === 0" @click="moveCard(i, -1)">上移</el-button>
+                      <el-button link :disabled="!row.inRules || i === cardRows.length - 1" @click="moveCard(i, 1)">下移</el-button>
+                    </td>
+                  </tr>
+                  <tr v-if="!cardRows.length">
+                    <td colspan="4" class="text-muted">还没有产品。点「立即同步」。</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2">
+              <div class="card">
+                <div class="text-xs text-muted">本站策略</div>
+                <div class="mt-1 text-sm">失败 {{ healthPolicy.threshold || '—' }} 次拉黑</div>
+                <div class="text-xs text-muted">强制新卡：{{ current.force_new_card ? '开' : '关' }}</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">已拉黑的卡</div>
+                <div class="mt-1 text-sm">{{ blockedCards.length }} 张</div>
+                <div v-for="b in blockedCards" :key="b.card_id" class="mt-1 flex items-center justify-between text-xs">
+                  <span>卡 {{ b.card_id }}</span>
+                  <el-button link @click="unblock(b.card_id)">解冻</el-button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div v-else-if="tab === 'cards'" class="card space-y-3">
             <p class="text-sm text-muted">{{ capLabel(current) }} 兑换时用哪张卡。通道开关和花费上限在「X 会员」。</p>
@@ -182,11 +236,14 @@
             <el-form label-position="top">
               <el-form-item label="名称"><el-input v-model="edit.name" /></el-form-item>
               <el-form-item label="卡台地址"><el-input v-model="edit.site_base" /></el-form-item>
-              <template v-if="!current.serves_openai">
+              <template v-if="!current.serves_openai || current.protocol === 'avanfinity-2026-08'">
                 <el-form-item label="App ID"><el-input v-model="edit.cred_public" /></el-form-item>
                 <el-form-item label="App Secret"><el-input v-model="edit.cred_secret" type="password" show-password placeholder="留空不修改" /></el-form-item>
-                <el-checkbox v-model="edit.xCdk">X CDK</el-checkbox>
-                <el-checkbox v-model="edit.xDirect" class="ml-4">X 直充</el-checkbox>
+                <template v-if="!current.serves_openai">
+                  <el-checkbox v-model="edit.xCdk">X CDK</el-checkbox>
+                  <el-checkbox v-model="edit.xDirect" class="ml-4">X 直充</el-checkbox>
+                </template>
+                <p v-else class="text-xs text-muted">Avanfinity 用 App ID 和 App Secret，请求走 /api/v1。</p>
               </template>
               <el-form-item v-else label="Open API Key">
                 <el-input v-model="edit.cred_secret" type="password" show-password placeholder="留空不修改" />
@@ -253,6 +310,11 @@
           <el-checkbox v-model="create.xCdk">X CDK</el-checkbox>
           <el-checkbox v-model="create.xDirect" class="ml-4">X 直充</el-checkbox>
         </template>
+        <template v-else-if="create.kind === 'avan_openai'">
+          <el-form-item label="App ID"><el-input v-model="create.app_id" /></el-form-item>
+          <el-form-item label="App Secret"><el-input v-model="create.secret" type="password" show-password /></el-form-item>
+          <p class="text-xs text-muted">按文档走 /api/v1。新卡台默认排在最后，不设为主台。</p>
+        </template>
         <template v-else>
           <el-form-item label="Open API Key"><el-input v-model="create.secret" type="password" show-password /></el-form-item>
           <p class="text-xs text-muted">新卡台默认排在最后，不设为主台。顺序到「发码策略」里调。回调 Secret 可以稍后填。</p>
@@ -271,7 +333,6 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
-import CardSelectionConfig from './CardSelectionConfig.vue'
 import WebhookEvents from './WebhookEvents.vue'
 
 interface Acc {
@@ -285,6 +346,7 @@ interface Acc {
   status: string
   priority: number
   is_primary_default: boolean
+  force_new_card?: boolean
   has_credential: boolean
   has_webhook_secret: boolean
   webhook_url?: string
@@ -302,6 +364,28 @@ const egressIp = ref('')
 const dlg = ref(false)
 const saving = ref(false)
 const pinging = ref(false)
+const syncingCards = ref(false)
+const cardProducts = ref<any[]>([])
+const cardRules = ref<any[]>([])
+const blockedCards = ref<any[]>([])
+const healthPolicy = reactive({ threshold: 0 })
+const feeLine = computed(() => {
+  if (!planFees.value.length) return ''
+  return planFees.value.map((p) => `${p.label || p.key} $${Number(p.fee_usd || 0).toFixed(2)}`).join(' · ')
+})
+const cardRows = computed(() => {
+  const order = new Map<string, number>()
+  cardRules.value.forEach((r, i) => order.set(r.plan_key, i + 1))
+  const rows = cardProducts.value.map((p) => ({
+    code: p.product_code,
+    label: [p.issuer, p.product_code, p.bin || p.description].filter(Boolean).join(' · '),
+    online: p.enabled !== false && !p.suspended_at,
+    order: order.get(p.product_code) || 0,
+    inRules: order.has(p.product_code),
+  }))
+  rows.sort((a, b) => (a.order || 999) - (b.order || 999))
+  return rows
+})
 const probing = ref(false)
 const savingHook = ref(false)
 const savingChannel = ref(false)
@@ -501,6 +585,8 @@ async function createAccount() {
     if (x) {
       body.cred_public = create.app_id.trim()
       body.capabilities = capsOf(create.xCdk, create.xDirect)
+    } else if (create.kind === 'avan_openai') {
+      body.cred_public = create.app_id.trim()
     }
     const r = await authFetch('/api/v1/admin/card-platforms/upsert', { method: 'POST', body: JSON.stringify(body) })
     const d = await r.json().catch(() => ({}))
@@ -541,6 +627,8 @@ async function saveEdit() {
     if (!a.serves_openai) {
       body.cred_public = edit.cred_public.trim()
       body.capabilities = capsOf(edit.xCdk, edit.xDirect)
+    } else if (a.protocol === 'avanfinity-2026-08') {
+      body.cred_public = edit.cred_public.trim()
     }
     const r = await authFetch('/api/v1/admin/card-platforms/upsert', { method: 'POST', body: JSON.stringify(body) })
     const d = await r.json().catch(() => ({}))
@@ -780,8 +868,90 @@ async function loadCalls() {
 }
 watch(tab, (v) => {
   if (v === 'cards' && current.value && !current.value.serves_openai) loadXPay()
+  if (v === 'cards' && current.value?.serves_openai) void loadOpenAICards()
   if (v === 'calls') loadCalls()
 })
+
+async function loadOpenAICards() {
+  const a = current.value
+  if (!a) return
+  const q = `account_id=${a.id}`
+  const [st, rules, health] = await Promise.all([
+    authFetch(`/api/v1/admin/card-selection/plan-status?${q}`),
+    authFetch(`/api/v1/admin/card-selection/rules?${q}`),
+    authFetch(`/api/v1/admin/card-health?${q}`),
+  ])
+  const sd = await st.json().catch(() => ({}))
+  const rd = await rules.json().catch(() => ({}))
+  const hd = await health.json().catch(() => ({}))
+  cardProducts.value = sd.products || []
+  cardRules.value = rd.rules || []
+  blockedCards.value = (hd.blocklist || []).filter((b: any) => b.active)
+  healthPolicy.threshold = hd.policy?.fail_threshold || 0
+}
+
+async function syncOpenAICards() {
+  const a = current.value
+  if (!a) return
+  syncingCards.value = true
+  try {
+    const r = await authFetch(`/api/v1/admin/card-selection/sync?account_id=${a.id}`, { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '同步失败', 'err')
+      return
+    }
+    cardProducts.value = d.products || []
+    dialog.toast(`已同步 ${cardProducts.value.length} 个产品`, 'ok')
+    await load()
+  } finally {
+    syncingCards.value = false
+  }
+}
+
+async function moveCard(index: number, dir: number) {
+  const rows = cardRows.value.filter((row) => row.inRules)
+  const row = cardRows.value[index]
+  if (!row?.inRules) return
+  const pos = rows.findIndex((item) => item.code === row.code)
+  const next = pos + dir
+  if (pos < 0 || next < 0 || next >= rows.length) return
+  const swapped = rows.slice()
+  const tmp = swapped[pos]
+  swapped[pos] = swapped[next]
+  swapped[next] = tmp
+  const a = current.value
+  if (!a) return
+  const payload = swapped.map((item, i) => {
+    const src = cardRules.value.find((r) => r.plan_key === item.code) || {}
+    return { id: src.id || 0, sort_order: i + 1, plan_key: item.code, display_name: src.display_name || item.label, bin_prefix: src.bin_prefix || '', channel: src.channel || '', enabled: src.enabled !== false }
+  })
+  const r = await authFetch('/api/v1/admin/card-selection/rules', {
+    method: 'PUT',
+    body: JSON.stringify({ account_id: a.id, rules: payload }),
+  })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    dialog.toast(d.error || '保存顺序失败', 'err')
+    return
+  }
+  cardRules.value = d.rules || cardRules.value
+}
+
+async function unblock(cardId: number) {
+  const a = current.value
+  if (!a) return
+  const r = await authFetch('/api/v1/admin/card-health/unblock', {
+    method: 'POST',
+    body: JSON.stringify({ account_id: a.id, card_id: cardId }),
+  })
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    dialog.toast(d.error || '解冻失败', 'err')
+    return
+  }
+  await loadOpenAICards()
+}
 
 onMounted(async () => {
   await Promise.all([load(), loadEgress(), loadSwap()])
