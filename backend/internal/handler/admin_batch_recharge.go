@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -72,6 +73,7 @@ var batchRechargePlanFallbackFeeMinor = map[string]int64{
 	"plus":    100,
 	"pro_5x":  500,
 	"pro_20x": 1000,
+	"pro_50x": 1000,
 }
 
 // batchRechargeCredential 单条 ChatGPT 账号凭据。明文不进日志；创建批次时写入明细表供导出，
@@ -230,10 +232,8 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 	}
 
 	plan := strings.TrimSpace(req.Plan)
-	switch plan {
-	case "plus", "pro_5x", "pro_20x":
-	default:
-		c.JSON(http.StatusBadRequest, gin.H{"error": "plan must be plus | pro_5x | pro_20x"})
+	if plan == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "plan is required"})
 		return
 	}
 	if !req.FundingConfirmed {
@@ -309,6 +309,22 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		return
 	}
 	cli := cardplatform.NewFromSettings()
+	var sellable map[string]bool
+	if plans, err := cli.GetPlans(c.Request.Context()); err == nil && plans != nil {
+		// nil 表示没拿到清单，走三个订阅档回落；空 map 表示卡台有响应但没有可批量充值的档。
+		sellable = map[string]bool{}
+		for _, p := range plans.SellablePlans() {
+			if batchRechargePlan(p) {
+				sellable[p.Key] = true
+			}
+		}
+	}
+	if !batchPlanAllowed(plan, sellable) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "plan not open for CDK: " + plan + "; available: " + strings.Join(batchPlanAvailable(sellable), " | "),
+		})
+		return
+	}
 
 	// 余额预检：服务费在发码时即时扣款，必须用 spendable_balance
 	// （20U 风险保证金含在 balance 里但不可消费，docs/danew-openapi-zh.md:29）
@@ -390,6 +406,53 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		"estimated_fee_usd": needUSD,
 		"status":            batchStatusRunning,
 	})
+}
+
+// batchRechargePlan 批量充值只跑订阅/续费。点数档垫的是比索付款，
+// 这个页面把服务费显示成 $0，余额预检也只看服务费，放进来会把大额垫付藏掉。
+func batchRechargePlan(p cardplatform.SellablePlan) bool {
+	key := strings.ToLower(strings.TrimSpace(p.Key))
+	if key == "" || p.IsCredit || strings.HasPrefix(key, "credit") {
+		return false
+	}
+	return true
+}
+
+func isBatchCreditPlan(plan string) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(plan)), "credit")
+}
+
+// batchPlanAllowed 批量充值档位：卡台下发了可卖清单就按清单；拿不到时只回落常用订阅档。
+// sellable == nil 表示没拿到清单。空 map 表示拿到了，但没有可批量充值的档。
+func batchPlanAllowed(plan string, sellable map[string]bool) bool {
+	plan = strings.TrimSpace(plan)
+	if plan == "" || isBatchCreditPlan(plan) {
+		return false
+	}
+	if sellable != nil {
+		return sellable[plan]
+	}
+	switch plan {
+	case "plus", "pro_5x", "pro_20x", "pro_50x":
+		return true
+	default:
+		return false
+	}
+}
+
+func batchPlanAvailable(sellable map[string]bool) []string {
+	if sellable == nil {
+		return []string{"plus", "pro_5x", "pro_20x", "pro_50x"}
+	}
+	out := make([]string, 0, len(sellable))
+	for k := range sellable {
+		if isBatchCreditPlan(k) {
+			continue
+		}
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // batchRechargeServiceFeeMinor 取套餐服务费（美分）。拉不到实时价就退回文档默认价。

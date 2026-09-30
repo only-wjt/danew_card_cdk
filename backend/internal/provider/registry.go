@@ -7,6 +7,18 @@ import (
 	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
+// SupportsPaymentCountry 付款地区只存在于旧台 OpenAPI（spacexcard-legacy）。
+// Avanfinity 没有 payment_country：双发时带上，要么被拒导致整单回滚，
+// 要么被忽略后备台仍按菲律宾扣款，而界面却显示成选中的地区。
+func SupportsPaymentCountry(protocol string) bool {
+	switch strings.TrimSpace(protocol) {
+	case "", ProtocolSpaceXLegacy:
+		return true
+	default:
+		return false
+	}
+}
+
 // Build 按账户协议构造 adapter（测试里可替换成假实现）。
 var Build = buildProvider
 

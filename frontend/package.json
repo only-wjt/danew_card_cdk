@@ -1,12 +1,13 @@
 {
   "name": "cdk-recharge-system",
-  "version": "1.4.19",
+  "version": "1.4.24",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:grace-recovery": "node scripts/test-grace-recovery.mjs",
     "lint": "eslint . --fix",
     "typecheck": "vue-tsc --noEmit"
   },

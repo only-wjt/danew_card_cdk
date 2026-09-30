@@ -19,7 +19,7 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 | 资金上限 | 发码时按套餐估算的授权上限(`owner_funding_cap_minor`),单次兑换实付不得超过它。 |
 | 一次性码 | 完整码只在**发码响应**返回一次,请务必保存;之后列表只显示码前缀。 |
 
-套餐:`plus` / `pro_5x` / `pro_20x`。
+套餐:`plus` / `pro_5x` / `pro_20x` / `pro_50x`。
 
 ---
 
@@ -58,6 +58,8 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 ```
 
 > session 获取:登录 ChatGPT 后访问 `https://chatgpt.com/api/auth/session`,复制返回 JSON 里的 access token。
+
+预检若返回 `subscription_recovery_required` 或 `subscription_is_delinquent`,账号处于宽限期或欠费续费。须先让用户确认,再调用 `POST /api/v1/cdk/recover-subscription`(body 为 `redemption_token`、`preflight_token`、`confirmed: true`)。这一步只取消宽限期内的原订阅并刷新预检,不消耗 CDK、不扣款。确认解除后用新的 `preflight_token` 再兑换;结果未确认时不要重复取消。
 
 ### 2.3 兑换 `POST /api/v1/cdk/redeem`
 
@@ -128,7 +130,7 @@ CDK(激活码/卡密)让你把 GPT 直充做成「一次性兑换码」生意:�
 | --- | --- |
 | `page` / `page_size` | 分页；`page_size` 1–100，默认 20 |
 | `status` | `unused` / `reserved` / `consumed` / `frozen` / `disabled` 等 |
-| `plan` | `plus` / `pro_5x` / `pro_20x` |
+| `plan` | `plus` / `pro_5x` / `pro_20x` / `pro_50x` |
 | `q` | 模糊：CDK id 或 `code_prefix` 子串（可搜前缀片段） |
 
 示例:`GET /openapi/v1/gpt-direct/cdks?page=1&page_size=50&status=unused&q=GPTD-AB12`

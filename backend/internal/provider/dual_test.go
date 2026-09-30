@@ -64,6 +64,10 @@ func (f *fakeProvider) Preflight(ctx context.Context, body map[string]any, devic
 	return 200, []byte(`{}`), nil
 }
 
+func (f *fakeProvider) RecoverSubscription(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
+	return 200, []byte(`{"code":0,"data":{"status":"pending"}}`), nil
+}
+
 func (f *fakeProvider) Redeem(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
 	return 200, []byte(`{}`), nil
 }
@@ -262,6 +266,66 @@ func TestDualIssueSuccessBindsBothPlatforms(t *testing.T) {
 	row, ok := db.GetSiteCDKByCode(res.SiteCode)
 	if !ok || row.IssueStatus != db.IssueStatusActive {
 		t.Fatalf("site code not activated: %+v ok=%v", row, ok)
+	}
+}
+
+func TestDualIssueForwardsPaymentCountry(t *testing.T) {
+	withTestDB(t)
+	seedAccounts(t, 2)
+	a := &fakeProvider{accountID: 1}
+	b := &fakeProvider{accountID: 2}
+	restore := stubBuild(map[int64]CardProvider{1: a, 2: b})
+	defer restore()
+
+	if _, err := DualIssueOne(context.Background(), "gpt_plus_1m", false, "cl"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.prefs) != 1 || a.prefs[0].PaymentCountry != "CL" {
+		t.Fatalf("A payment country not forwarded: %+v", a.prefs)
+	}
+	if len(b.prefs) != 1 || b.prefs[0].PaymentCountry != "CL" {
+		t.Fatalf("B payment country not forwarded: %+v", b.prefs)
+	}
+}
+
+func TestDualIssuePaymentCountrySkipsUnsupportedPlatform(t *testing.T) {
+	withTestDB(t)
+	seedAccounts(t, 2)
+	if _, err := db.DB.Exec(`UPDATE card_platform_accounts SET protocol = ? WHERE id = 2`, db.AccountProtocolAvanfinity202608); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeProvider{accountID: 1}
+	b := &fakeProvider{accountID: 2}
+	restore := stubBuild(map[int64]CardProvider{1: a, 2: b})
+	defer restore()
+
+	if _, err := DualIssueOne(context.Background(), "gpt_plus_1m", false, "us"); err != nil {
+		t.Fatal(err)
+	}
+	if len(a.prefs) != 1 || a.prefs[0].PaymentCountry != "US" {
+		t.Fatalf("supporting platform should receive region: %+v", a.prefs)
+	}
+	if len(b.prefs) != 1 || b.prefs[0].PaymentCountry != "" {
+		t.Fatalf("avanfinity must not receive payment country: %+v", b.prefs)
+	}
+}
+
+func TestDualIssueRejectsRegionWhenNoPlatformSupportsIt(t *testing.T) {
+	withTestDB(t)
+	seedAccounts(t, 2)
+	if _, err := db.DB.Exec(`UPDATE card_platform_accounts SET protocol = ?`, db.AccountProtocolAvanfinity202608); err != nil {
+		t.Fatal(err)
+	}
+	a := &fakeProvider{accountID: 1}
+	b := &fakeProvider{accountID: 2}
+	restore := stubBuild(map[int64]CardProvider{1: a, 2: b})
+	defer restore()
+
+	if _, err := DualIssueOne(context.Background(), "gpt_plus_1m", false, "cl"); err == nil {
+		t.Fatal("expected rejection when every platform lacks payment country")
+	}
+	if len(a.issued) != 0 || len(b.issued) != 0 {
+		t.Fatal("rejected region must not issue on either platform")
 	}
 }
 

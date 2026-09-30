@@ -41,9 +41,16 @@ func (p *spacexLegacy) AccountID() int64 { return p.account.ID }
 func (p *spacexLegacy) IssueCDK(ctx context.Context, plan string, idem string, pref IssuePreference) (*IssuedUpstream, error) {
 	var res *cardplatform.IssueCDKResult
 	var err error
-	if strings.TrimSpace(pref.SegmentKey) != "" || strings.TrimSpace(pref.Issuer) != "" {
+	payCountry := ""
+	// 两台目前共用这个 adapter。Avanfinity 账户即使调用方带了地区，也不许写进请求。
+	if SupportsPaymentCountry(p.account.Protocol) {
+		payCountry = strings.ToUpper(strings.TrimSpace(pref.PaymentCountry))
+	}
+	// 没配选卡、但指定了地区时也要传 pref，否则会静默退回菲律宾。
+	if strings.TrimSpace(pref.SegmentKey) != "" || strings.TrimSpace(pref.Issuer) != "" || payCountry != "" {
 		res, err = p.client.IssueCDKs(ctx, plan, 1, idem, cardplatform.IssueCardPref{
 			Issuer: pref.Issuer, SegmentType: pref.SegmentType, SegmentKey: pref.SegmentKey,
+			PaymentCountry: payCountry,
 		})
 	} else {
 		res, err = p.client.IssueCDKs(ctx, plan, 1, idem)
@@ -81,6 +88,11 @@ func (p *spacexLegacy) Preview(ctx context.Context, remoteCode, device string) (
 
 func (p *spacexLegacy) Preflight(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
 	st, raw, err := p.client.Preflight(ctx, body, device)
+	return st, raw, err
+}
+
+func (p *spacexLegacy) RecoverSubscription(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
+	st, raw, err := p.client.RecoverSubscription(ctx, body, device)
 	return st, raw, err
 }
 

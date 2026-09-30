@@ -33,6 +33,18 @@ describe('planSatisfied · 绑卡档（Pro 20x 续费）', () => {
 })
 
 describe('planLabel', () => {
+  it('50x is distinct from 20x and allows upgrades from existing lower subscriptions', () => {
+    for (const current of ['plus', 'prolite', 'pro', 'pro_20x', 'chatgptpro']) {
+      expect(planSatisfied(current, 'pro_50x')).toBe(false)
+    }
+    for (const current of ['pro_50x', 'promax', 'chatgptpromaxplan']) {
+      expect(planLabel(current)).toBe('Pro 50x')
+      expect(planSatisfied(current, 'pro_50x')).toBe(true)
+      expect(planSatisfied(current, 'pro_20x')).toBe(true)
+      expect(planSatisfied(current, 'credit25000')).toBe(false)
+    }
+  })
+
   it('续费档要能看出是「续费」，不能被显示成 Pro 20x', () => {
     expect(planLabel('pro_20x_renew')).toBe('Pro 20x 续费')
   })

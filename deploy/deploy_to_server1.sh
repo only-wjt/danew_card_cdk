@@ -15,9 +15,15 @@ else
   SCP=(scp -o BatchMode=yes -o StrictHostKeyChecking=accept-new -P "$SSH_PORT")
 fi
 
-echo "==> build backend"
-cd "$ROOT/backend"
-go build -ldflags="-s -w" -o "$ROOT/dist/cdk-recharge" ./cmd/server/main.go
+echo "==> build backend (linux/amd64)"
+# SQLite 需要 CGO；统一由 Linux 构建器静态链接，不能生成禁用 SQLite 的空壳。
+bash "$ROOT/scripts/build-linux-backend.sh" "$ROOT/dist/cdk-recharge"
+if command -v file >/dev/null 2>&1; then
+  if ! file "$ROOT/dist/cdk-recharge" | grep -q "ELF 64-bit.*x86-64"; then
+    echo "产物不是 linux/amd64 ELF，拒绝上传：$(file "$ROOT/dist/cdk-recharge")"
+    exit 1
+  fi
+fi
 
 echo "==> build frontend"
 cd "$ROOT/frontend"
