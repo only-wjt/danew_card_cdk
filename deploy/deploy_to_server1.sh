@@ -16,11 +16,8 @@ else
 fi
 
 echo "==> build backend (linux/amd64)"
-cd "$ROOT/backend"
-# 这个包要 scp 到 Linux 生产机。不设 GOOS/GOARCH 时，在 macOS 上会上传 Mach-O，
-# 覆盖成功后 systemctl restart 才报 Exec format error。
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -ldflags="-s -w" -o "$ROOT/dist/cdk-recharge" ./cmd/server/main.go
+# SQLite 需要 CGO；统一由 Linux 构建器静态链接，不能生成禁用 SQLite 的空壳。
+bash "$ROOT/scripts/build-linux-backend.sh" "$ROOT/dist/cdk-recharge"
 if command -v file >/dev/null 2>&1; then
   if ! file "$ROOT/dist/cdk-recharge" | grep -q "ELF 64-bit.*x86-64"; then
     echo "产物不是 linux/amd64 ELF，拒绝上传：$(file "$ROOT/dist/cdk-recharge")"

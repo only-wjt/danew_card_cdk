@@ -64,6 +64,10 @@ func (f *fakeProvider) Preflight(ctx context.Context, body map[string]any, devic
 	return 200, []byte(`{}`), nil
 }
 
+func (f *fakeProvider) RecoverSubscription(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
+	return 200, []byte(`{"code":0,"data":{"status":"pending"}}`), nil
+}
+
 func (f *fakeProvider) Redeem(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
 	return 200, []byte(`{}`), nil
 }

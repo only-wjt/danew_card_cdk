@@ -147,6 +147,7 @@ function planLabel(key: string) {
   const hit = plans.value.find((p) => p.key === key)
   if (hit?.label) return hit.label
   if (key === 'gpt_white') return 'GPT白号'
+  if (key === 'pro_50x') return 'Pro 50x'
   if (key === 'pro' || key === 'pro_20x') return 'Pro 20x'
   return key || '—'
 }

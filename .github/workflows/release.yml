@@ -42,8 +42,7 @@ jobs:
         working-directory: backend
         run: |
           mkdir -p ../dist
-          go build -trimpath -ldflags="-s -w -X github.com/danew/cdk-recharge-system/internal/handler.BuildVersion=${{ steps.ver.outputs.version }}" \
-            -o ../dist/cdk-recharge ./cmd/server
+          bash ../scripts/build-linux-backend.sh "$GITHUB_WORKSPACE/dist/cdk-recharge" "${{ steps.ver.outputs.version }}"
 
       - name: Build frontend
         working-directory: frontend

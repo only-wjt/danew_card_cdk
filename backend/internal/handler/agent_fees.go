@@ -196,6 +196,7 @@ func coreSellableFallbackPlans() []pricedPlanMeta {
 		{Key: "plus", Label: "Plus"},
 		{Key: "pro_5x", Label: "Pro 5x"},
 		{Key: "pro_20x", Label: "Pro 20x"},
+		{Key: "pro_50x", Label: "Pro 50x"},
 		{Key: "credit250", Label: "Codex 点数 250", IsCredit: true},
 		{Key: "credit500", Label: "Codex 点数 500", IsCredit: true},
 		{Key: "credit1000", Label: "Codex 点数 1000", IsCredit: true},
@@ -211,12 +212,16 @@ func localStockPlans() []pricedPlanMeta {
 
 func corePricedPlans() []pricedPlanMeta {
 	core := coreSellableFallbackPlans()
+	split := 0
+	for split < len(core) && !core[split].IsCredit {
+		split++
+	}
 	out := make([]pricedPlanMeta, 0, len(core)+2)
-	out = append(out, core[:3]...)
+	out = append(out, core[:split]...)
 	// pro 与 pro_20x 同一档，不再单独挂 Pro；Go 仍单独保留。
 	out = append(out, pricedPlanMeta{Key: "go", Label: "Go"})
 	out = append(out, localStockPlans()...)
-	out = append(out, core[3:]...)
+	out = append(out, core[split:]...)
 	return out
 }
 

@@ -21,8 +21,8 @@ func TestBatchPlanAllowedFollowsSellableRegistry(t *testing.T) {
 }
 
 func TestBatchPlanAllowedFallbackWithoutRegistry(t *testing.T) {
-	if !batchPlanAllowed("plus", nil) || !batchPlanAllowed("pro_20x", nil) {
-		t.Fatal("fallback should keep the three subscription plans")
+	if !batchPlanAllowed("plus", nil) || !batchPlanAllowed("pro_20x", nil) || !batchPlanAllowed("pro_50x", nil) {
+		t.Fatal("fallback should keep the subscription plans")
 	}
 	if batchPlanAllowed("pro_20x", map[string]bool{}) {
 		t.Fatal("empty live catalog must not fall back to guessed plans")

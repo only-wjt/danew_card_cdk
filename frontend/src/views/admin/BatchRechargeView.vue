@@ -389,6 +389,7 @@ const FALLBACK_PLANS: SellablePlan[] = [
   { key: 'plus', label: 'Plus' },
   { key: 'pro_5x', label: 'Pro 5x' },
   { key: 'pro_20x', label: 'Pro 20x' },
+  { key: 'pro_50x', label: 'Pro 50x' },
 ]
 
 interface BatchRow {
@@ -493,7 +494,7 @@ const selectedPlan = computed(() => planOptions.value.find((p) => p.key === plan
 const isHighPlan = computed(() => {
   const key = String(plan.value || '').toLowerCase()
   const flow = String(selectedPlan.value?.flow || '').toLowerCase()
-  return flow === 'card_attach' || key === 'pro_20x' || key.includes('renew')
+  return flow === 'card_attach' || key === 'pro_20x' || key === 'pro_50x' || key.includes('renew')
 })
 const planHumanLabel = computed(() =>
   t('batchRecharge.planHumanGeneric', {

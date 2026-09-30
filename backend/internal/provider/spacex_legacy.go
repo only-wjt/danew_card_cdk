@@ -91,6 +91,11 @@ func (p *spacexLegacy) Preflight(ctx context.Context, body map[string]any, devic
 	return st, raw, err
 }
 
+func (p *spacexLegacy) RecoverSubscription(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
+	st, raw, err := p.client.RecoverSubscription(ctx, body, device)
+	return st, raw, err
+}
+
 func (p *spacexLegacy) Redeem(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
 	st, raw, err := p.client.Redeem(ctx, body, device)
 	return st, raw, err

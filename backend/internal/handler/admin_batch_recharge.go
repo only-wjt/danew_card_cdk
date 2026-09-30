@@ -73,6 +73,7 @@ var batchRechargePlanFallbackFeeMinor = map[string]int64{
 	"plus":    100,
 	"pro_5x":  500,
 	"pro_20x": 1000,
+	"pro_50x": 1000,
 }
 
 // batchRechargeCredential 单条 ChatGPT 账号凭据。明文不进日志；创建批次时写入明细表供导出，
@@ -432,7 +433,7 @@ func batchPlanAllowed(plan string, sellable map[string]bool) bool {
 		return sellable[plan]
 	}
 	switch plan {
-	case "plus", "pro_5x", "pro_20x":
+	case "plus", "pro_5x", "pro_20x", "pro_50x":
 		return true
 	default:
 		return false
@@ -441,7 +442,7 @@ func batchPlanAllowed(plan string, sellable map[string]bool) bool {
 
 func batchPlanAvailable(sellable map[string]bool) []string {
 	if sellable == nil {
-		return []string{"plus", "pro_5x", "pro_20x"}
+		return []string{"plus", "pro_5x", "pro_20x", "pro_50x"}
 	}
 	out := make([]string, 0, len(sellable))
 	for k := range sellable {

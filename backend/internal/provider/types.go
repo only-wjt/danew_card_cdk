@@ -40,6 +40,7 @@ type CardProvider interface {
 	IssueCDK(ctx context.Context, plan string, idem string, pref IssuePreference) (*IssuedUpstream, error)
 	Preview(ctx context.Context, remoteCode, device string) (status int, raw []byte, err error)
 	Preflight(ctx context.Context, body map[string]any, device string) (status int, raw []byte, err error)
+	RecoverSubscription(ctx context.Context, body map[string]any, device string) (status int, raw []byte, err error)
 	Redeem(ctx context.Context, body map[string]any, device string) (status int, raw []byte, err error)
 	Result(ctx context.Context, token, device string) (status int, raw []byte, err error)
 	Disable(ctx context.Context, remoteID string) error

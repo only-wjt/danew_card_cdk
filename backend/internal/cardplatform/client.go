@@ -876,6 +876,15 @@ func (c *Client) Preflight(ctx context.Context, body any, device string) (int, j
 	return c.doPublicCDK(ctx, http.MethodPost, "/preflight", body, device)
 }
 
+// RecoverSubscription 用持卡人的 redemption/preflight token 取消宽限期原订阅。
+// 超时单独加长，且不改共享 client，避免拖慢同一进程里的其它请求。
+func (c *Client) RecoverSubscription(ctx context.Context, body any, device string) (int, json.RawMessage, error) {
+	copyClient := *c.client
+	copyClient.Timeout = 180 * time.Second
+	recoveryClient := &Client{cfg: c.cfg, client: &copyClient}
+	return recoveryClient.doPublicCDK(ctx, http.MethodPost, "/recover-subscription", body, device)
+}
+
 func (c *Client) Redeem(ctx context.Context, body any, device string) (int, json.RawMessage, error) {
 	return c.doPublicCDK(ctx, http.MethodPost, "/redeem", body, device)
 }

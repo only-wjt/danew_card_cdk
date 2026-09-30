@@ -116,7 +116,7 @@ func TestResolveAgentPlanCatalogKeepsLocalStockWithLive(t *testing.T) {
 
 func TestCoreSellableFallbackHasUserNamedPlans(t *testing.T) {
 	got := coreSellableFallbackPlans()
-	if len(got) == 0 || got[0].Key != "plus" || got[1].Key != "pro_5x" || got[2].Key != "pro_20x" {
+	if len(got) < 4 || got[0].Key != "plus" || got[1].Key != "pro_5x" || got[2].Key != "pro_20x" || got[3].Key != "pro_50x" {
 		t.Fatalf("fallback order = %#v", got)
 	}
 }
