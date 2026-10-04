@@ -3,6 +3,20 @@ export default {
 
   grace: {"title": "原订阅续费异常", "hint": "原订阅处于宽限期或欠费续费状态。请先取消原订阅，刷新状态后再充值。", "action": "取消原订阅并重新检测", "confirm": "确认取消这个账号宽限期内的原订阅？可能立即结束宽限期权益。处理后只刷新状态，需要再次点击兑换，不会自动消耗 CDK 或扣款。", "pending": "原订阅尚未确认解除，请重新检测账号。不要连续重复取消或兑换。", "done": "原订阅已解除，状态已刷新。核对套餐后可再次点击兑换。", "refreshFailed": "暂时无法确认处理结果，请重新检测账号，不要重复取消。", "processing": "正在处理并刷新…", "recheck": "重新检测账号", "dismiss": "暂不处理", "confirmAction": "确认取消"},
 
+  hero: {
+    badgeOfficial: '官方渠道',
+    badgeSelf: '全程自助',
+    badgeTrack: '进度可查',
+    redeemEyebrow: '卡密兑换',
+    redeemTitle: 'CDK 兑换',
+    redeemSub: '输入卡密，核对账号后一键兑换。全程自助，结果可随时查询。',
+    steps: { preview: '验证卡密', cred: '填写凭证', redeem: '确认兑换', result: '查看结果' },
+    batchEyebrow: '批量处理',
+    lookupEyebrow: '售后查询',
+    billingEyebrow: '订阅账单',
+    billingSub: '用卡密（使用兑换时绑定的 Session）或直接粘贴 Session，查询订阅状态与账单链接。',
+    dashboardEyebrow: '进度追踪',
+  },
   common: {
     back: '← 返回',
     backHome: '← 返回首页',

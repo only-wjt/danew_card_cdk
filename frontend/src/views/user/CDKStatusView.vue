@@ -1,17 +1,7 @@
 <template>
-  <div class="min-h-screen py-12">
-    <div class="max-w-5xl mx-auto px-6">
-      <div class="mb-10 flex items-start justify-between gap-4 animate-slideInUp">
-        <div>
-          <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
-          <h1 class="text-3xl font-bold text-ink mb-1">{{ t('cdkLookup.title') }}</h1>
-          <p class="text-muted">{{ t('cdkLookup.subtitle') }}</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageToggle />
-          <ThemeToggle />
-        </div>
-      </div>
+  <div class="u-page">
+    <UserPageHeader :eyebrow="t('hero.lookupEyebrow')" :title="t('cdkLookup.title')" :subtitle="t('cdkLookup.subtitle')" />
+    <div class="u-main max-w-5xl">
 
       <RedeemModeTabs />
 
@@ -240,8 +230,7 @@
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import ThemeToggle from '../../components/ThemeToggle.vue'
-import LanguageToggle from '../../components/LanguageToggle.vue'
+import UserPageHeader from '../../components/UserPageHeader.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import { parseCdks } from '../../lib/batch-session'
 import { copyToClipboard } from '../../lib/clipboard'

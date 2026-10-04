@@ -1,18 +1,7 @@
 <template>
-  <div class="min-h-screen py-12">
-    <div class="max-w-4xl mx-auto px-6">
-      <!-- Header -->
-      <div class="mb-10 flex items-start justify-between gap-4 animate-slideInUp">
-        <div>
-          <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
-          <h1 class="text-3xl font-bold text-ink mb-1">{{ t('dashboard.title') }}</h1>
-          <p class="text-muted">{{ t('dashboard.subtitle') }}</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageToggle />
-          <ThemeToggle />
-        </div>
-      </div>
+  <div class="u-page">
+    <UserPageHeader :eyebrow="t('hero.dashboardEyebrow')" :title="t('dashboard.title')" :subtitle="t('dashboard.subtitle')" />
+    <div class="u-main max-w-4xl">
 
       <!-- Query Section -->
       <div class="card animate-slideInUp space-y-5">
@@ -107,8 +96,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import ThemeToggle from '../../components/ThemeToggle.vue'
-import LanguageToggle from '../../components/LanguageToggle.vue'
+import UserPageHeader from '../../components/UserPageHeader.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 

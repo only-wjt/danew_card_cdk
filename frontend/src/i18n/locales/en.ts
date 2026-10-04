@@ -3,6 +3,20 @@ export default {
 
   grace: {"title": "Previous subscription needs attention", "hint": "The previous subscription is in a grace period or has an overdue renewal. Cancel it and refresh before recharging.", "action": "Cancel previous subscription and recheck", "confirm": "Cancel this account’s grace-period subscription? Grace-period access may end immediately. This only refreshes the account. Click redeem again yourself; no code is consumed and no payment is made automatically.", "pending": "The previous subscription has not been confirmed ended. Recheck the account without repeatedly cancelling or redeeming.", "done": "The previous subscription has ended and the account was refreshed. Review the plan and click redeem again.", "refreshFailed": "The result could not be confirmed. Recheck the account before trying another cancellation.", "processing": "Processing and refreshing…", "recheck": "Recheck account", "dismiss": "Not now", "confirmAction": "Confirm"},
 
+  hero: {
+    badgeOfficial: 'Official channel',
+    badgeSelf: 'Fully self-service',
+    badgeTrack: 'Trackable progress',
+    redeemEyebrow: 'Redeem',
+    redeemTitle: 'Redeem CDK',
+    redeemSub: 'Enter your code, confirm the account and redeem in one go. Check the result any time.',
+    steps: { preview: 'Verify code', cred: 'Credentials', redeem: 'Confirm', result: 'Result' },
+    batchEyebrow: 'Batch',
+    lookupEyebrow: 'After-sales',
+    billingEyebrow: 'Billing',
+    billingSub: 'Use a CDK (the Session bound at redemption) or paste a Session to check subscription status and invoice links.',
+    dashboardEyebrow: 'Tracking',
+  },
   common: {
     back: '← Back',
     backHome: '← Back to Home',

@@ -1,40 +1,14 @@
 <template>
-  <div class="min-h-screen">
-    <!-- Header -->
-    <header class="border-b bd">
-      <div class="max-w-6xl mx-auto flex items-center justify-between px-6 py-5">
-        <div class="flex items-center gap-3">
-          <span class="grid h-10 w-10 place-items-center rounded-xl text-white" style="background: var(--primary)">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 12L2 9z" /><path d="M11 3 8 9l4 12 4-12-3-6" /><path d="M2 9h20" /></svg>
-          </span>
-          <div>
-            <h1 class="text-xl font-bold text-ink">{{ brand.name || t('home.brand') }}</h1>
-            <p class="text-xs text-muted">{{ brand.sub || t('home.brandSub') }}</p>
-          </div>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageToggle />
-          <!-- 用户仅可切换明暗；整站主题由管理员在 /ops/appearance 设置 -->
-          <ThemeToggle />
-        </div>
-      </div>
-    </header>
-
-    <!-- Main Content -->
-    <div class="max-w-6xl mx-auto px-6 py-16">
-      <!-- Hero -->
-      <div class="text-center mb-16 animate-slideInUp">
-        <h2 class="text-4xl sm:text-5xl font-bold text-ink mb-4">{{ t('home.heroTitle') }}</h2>
-        <p class="text-lg text-muted">{{ t('home.heroSub') }}</p>
-      </div>
-
+  <div class="u-page">
+    <UserPageHeader :eyebrow="t('hero.redeemEyebrow')" :title="t('home.heroTitle')" :subtitle="t('home.heroSub')" badges />
+    <div class="u-main max-w-6xl">
       <!-- Main Services -->
       <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-6 animate-slideInUp">
         <router-link
           v-for="svc in services"
           :key="svc.to"
           :to="svc.to"
-          class="card card-hover group"
+          class="card card-hover group svc-card"
         >
           <span class="grid h-12 w-12 place-items-center rounded-2xl" style="background: var(--primary-soft); color: var(--primary)" v-html="svc.icon" />
           <h3 class="mt-4 text-xl font-bold text-ink">{{ svc.title }}</h3>
@@ -50,7 +24,7 @@
       </div>
 
       <!-- Flow Section -->
-      <div class="mt-20 pt-16 border-t bd">
+      <div class="mt-16 pt-12 border-t bd">
         <h3 class="text-2xl font-bold text-ink mb-10 text-center">{{ t('home.flowTitle') }}</h3>
         <div class="grid md:grid-cols-2 lg:grid-cols-4 gap-8">
           <div v-for="flow in flows" :key="flow.title" class="space-y-4">
@@ -71,11 +45,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import ThemeToggle from '../components/ThemeToggle.vue'
-import LanguageToggle from '../components/LanguageToggle.vue'
-import { siteBrand } from '../theme'
-
-const brand = siteBrand
+import UserPageHeader from '../components/UserPageHeader.vue'
 
 const { t } = useI18n({ useScope: 'global' })
 

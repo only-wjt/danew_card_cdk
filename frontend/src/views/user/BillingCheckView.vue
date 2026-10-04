@@ -1,20 +1,8 @@
 <template>
-  <div class="min-h-screen py-12">
-    <div class="max-w-3xl mx-auto px-6 space-y-6">
-      <div class="flex items-start justify-between gap-4">
-        <div>
-          <router-link to="/" class="app-link mb-4 inline-block text-sm">返回首页</router-link>
-          <h1 class="text-3xl font-bold text-ink">账单查询</h1>
-          <p class="text-sm text-muted mt-1">
-            支持 <b>卡密</b>（使用兑换时绑定的 session）或直接粘贴 session 查询订阅与账单链接。
-          </p>
-        </div>
-        <div class="flex gap-2">
-          <LanguageToggle />
-          <ThemeToggle />
-        </div>
-      </div>
-
+  <div class="u-page">
+    <UserPageHeader :eyebrow="t('hero.billingEyebrow')" :title="t('redeemTabs.billing')" :subtitle="t('hero.billingSub')" />
+    <div class="u-main max-w-3xl space-y-6">
+      <RedeemModeTabs class="!mb-0" />
       <div class="card space-y-4">
         <div class="flex gap-2">
           <button
@@ -128,8 +116,11 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
-import LanguageToggle from '../../components/LanguageToggle.vue'
-import ThemeToggle from '../../components/ThemeToggle.vue'
+import { useI18n } from 'vue-i18n'
+import UserPageHeader from '../../components/UserPageHeader.vue'
+import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
+const { t } = useI18n({ useScope: 'global' })
+
 
 const route = useRoute()
 const mode = ref<'cdk' | 'session'>('cdk')

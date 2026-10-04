@@ -1,27 +1,17 @@
 <template>
-  <div class="min-h-screen py-12">
-    <div class="max-w-3xl mx-auto px-6">
-      <div class="mb-8 flex items-start justify-between gap-4">
-        <div>
-          <router-link to="/" class="app-link mb-4 inline-block text-sm">{{ t('common.back') }}</router-link>
-          <h1 class="text-3xl font-bold text-ink mb-1">CDK 兑换</h1>
-          <p class="text-muted text-sm">经本站转发卡台公开接口：preview → preflight → redeem → 查询结果</p>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageToggle />
-          <ThemeToggle />
-        </div>
-      </div>
-
+  <div class="u-page">
+    <UserPageHeader :eyebrow="t('hero.redeemEyebrow')" :title="t('hero.redeemTitle')" :subtitle="t('hero.redeemSub')" badges />
+    <div class="u-main max-w-3xl">
       <RedeemModeTabs />
 
       <!-- redeem-flow v2: no public fee reference -->
       <!-- steps -->
-      <div class="card mb-6">
-        <div class="flex gap-2 text-sm flex-wrap">
-          <span v-for="(s, i) in steps" :key="s" class="pill" :class="step === i + 1 ? 'pill-info' : ''">{{ i + 1 }}. {{ s }}</span>
-        </div>
-      </div>
+      <ol class="stepper" :aria-label="t('hero.redeemTitle')">
+        <li v-for="(s, i) in steps" :key="s" :class="{ 'is-done': step > i + 1, 'is-current': step === i + 1 }" :aria-current="step === i + 1 ? 'step' : undefined">
+          <span class="stepper-dot">{{ i + 1 }}</span>
+          <span class="stepper-label">{{ s }}</span>
+        </li>
+      </ol>
 
       <!-- 1 preview -->
       <div v-show="step === 1" class="card space-y-4">
@@ -228,15 +218,14 @@ import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
-import LanguageToggle from '../../components/LanguageToggle.vue'
-import ThemeToggle from '../../components/ThemeToggle.vue'
+import UserPageHeader from '../../components/UserPageHeader.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
-const steps = ['预览', '凭证', '兑换', '结果']
+const steps = computed(() => [t('hero.steps.preview'), t('hero.steps.cred'), t('hero.steps.redeem'), t('hero.steps.result')])
 const step = ref(1)
 const busy = ref(false)
 const recoveringSubscription = ref(false)

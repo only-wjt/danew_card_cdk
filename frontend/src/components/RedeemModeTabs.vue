@@ -35,27 +35,4 @@ function isActive(to: string) {
 }
 </script>
 
-<style scoped>
-.redeem-tabs {
-  background: var(--surface-2, var(--soft));
-}
-.redeem-tab {
-  display: block;
-  text-align: center;
-  padding: 0.65rem 0.5rem;
-  border-radius: 0.75rem;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--muted);
-  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
-}
-.redeem-tab:hover {
-  color: var(--ink);
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
-.redeem-tab.active {
-  color: var(--primary);
-  background: var(--surface, #fff);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent);
-}
-</style>
+<!-- 样式在 styles/skins.css（.redeem-tabs / .redeem-tab），各皮肤自定 -->
