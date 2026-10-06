@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>danew 双卡台 · 全站原型</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="proto">
+    <header class="proto-head">
+      <h1>danew 全站原型（双卡台版）</h1>
+      <p>GPT 走 SpaceX，Avanfinity 做备台、默认关闭。X 统一发 DNX- 码，每个套餐在 SpaceX（客户填 X Cookie）和 Avanfinity CDK（客户填 X 用户名）里二选一，码发出时就定死，兑换时不切台。</p>
+      <p class="muted">代理功能已停用，原型不再展示；开发时只隐藏路由和入口，代码和数据保留。</p>
+      <p class="muted">金额、卡号、用户名、IP 全是示例数据。按钮都能点，状态会变；刷新页面恢复初始状态。</p>
+      <nav id="entry" class="entry"></nav>
+      <nav id="pages" class="pages"></nav>
+    </header>
+
+    <section class="browser">
+      <div class="browser-bar"><span class="dots"><i></i><i></i><i></i></span><span id="url" class="url mono"></span></div>
+      <div id="frame" class="frame"></div>
+    </section>
+
+    <section id="notes" class="notes"></section>
+  </div>
+
+  <div id="modal-mask" class="modal-mask" hidden>
+    <div class="modal">
+      <div class="modal-head"><b id="modal-title"></b><button class="x" data-act="closeModal">×</button></div>
+      <div id="modal-body" class="modal-body"></div>
+      <div id="modal-foot" class="modal-foot"></div>
+    </div>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+  <script src="site.js"></script>
+  <script src="ops-main.js"></script>
+  <script src="ops-x.js"></script>
+  <script src="ops-platforms.js"></script>
+  <script>render()</script>
+</body>
+</html>
