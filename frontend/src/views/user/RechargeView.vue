@@ -65,12 +65,15 @@
           <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'mailbox' }" @click="credMode = 'mailbox'">邮箱</button>
         </div>
         <template v-if="credMode === 'session' || isXPremiumPlan(targetPlan)">
-          <p v-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}</p>
+          <p v-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}
+            <button type="button" class="app-link" @click="cookieGuide = true">怎么获取 Cookie？</button>
+          </p>
           <p v-else class="text-sm text-muted">打开
             <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
             复制<strong>完整 JSON</strong>（必须含 <code>sessionToken</code>）。已禁用纯 Access Token。
           </p>
           <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" :placeholder="isXPremiumPlan(targetPlan) ? t('xPremium.placeholder') : sessionPlaceholder" />
+          <XCookieGuide v-model="cookieGuide" @fill="sessionRaw = $event" />
         </template>
         <template v-else>
           <input v-model="email" class="input" placeholder="email@outlook.com" />
@@ -261,6 +264,7 @@ import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import XRedeemView from './XRedeemView.vue'
+import XCookieGuide from '../../components/XCookieGuide.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
@@ -289,6 +293,7 @@ const preflightToken = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
 const sessionPlaceholder = '{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ...五段JWE..."}'
 const sessionRaw = ref('')
+const cookieGuide = ref(false)
 const email = ref('')
 const password = ref('')
 /** 预检成功后的账号/订阅摘要（与卡台 GPT 直充 preflight 字段对齐） */
