@@ -9,11 +9,32 @@
     </div>
 
     <div class="grid gap-3 md:grid-cols-2">
-      <div v-for="ch in visibleStrips" :key="ch.channel" class="card space-y-2">
+      <div class="card space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="dot" :class="spacexAcc && spacexCount ? 'ok' : 'off'" />
+          <span class="font-semibold">SpaceX</span>
+          <el-tag size="small" :type="spacexCount ? 'success' : 'info'" effect="plain">{{ spacexCount ? `供 ${spacexCount} 个套餐` : '没有套餐走这里' }}</el-tag>
+        </div>
+        <p class="text-sm">{{ spacexAcc ? spacexAcc.name + '（GPT 主台，同一套凭证）' : '还没有 SpaceX 主台' }}</p>
+        <p class="text-sm text-muted">发码时锁定付款地区，客户兑换时填 X Cookie。</p>
+        <p v-if="spacexAcc?.last_error" class="text-sm" style="color: var(--warn, #b45309)">{{ spacexAcc.last_error }}</p>
+        <el-button size="small" @click="goPlatform(spacexAcc?.id || 0)">在卡台查看</el-button>
+      </div>
+      <div v-if="!avanXAcc" class="card space-y-2">
+        <div class="flex items-center gap-2">
+          <span class="dot idle" />
+          <span class="font-semibold">Avanfinity X</span>
+          <el-tag size="small" type="info" effect="plain">未接入 · 可选</el-tag>
+        </div>
+        <p class="text-sm text-muted">现在所有 X 套餐都能走 SpaceX，不接也能发码。要用 Avanfinity 出码，先在卡台页添加一台「Avanfinity · X CDK」。</p>
+        <el-button size="small" @click="router.push('/ops/platforms')">去卡台添加</el-button>
+      </div>
+      <div v-for="ch in avanStrips" :key="ch.channel" class="card space-y-2">
         <div class="flex items-center gap-2">
           <span class="dot" :class="ch.alert || !ch.enabled ? 'off' : 'ok'" />
-          <span class="font-semibold">{{ channelName(ch.channel) }}</span>
+          <span class="font-semibold">{{ ch.channel === 'x_cdk' ? 'Avanfinity X' : channelName(ch.channel) }}</span>
           <el-tag size="small" :type="ch.enabled ? 'success' : 'info'" effect="plain">{{ ch.enabled ? '已启用' : '未启用' }}</el-tag>
+          <el-tag v-if="ch.channel === 'x_cdk'" size="small" effect="plain">{{ avanCount ? `供 ${avanCount} 个套餐` : '没有套餐走这里' }}</el-tag>
         </div>
         <p class="text-sm">{{ ch.account_name || '未绑定卡台' }}</p>
         <p class="text-sm text-muted">
@@ -248,13 +269,22 @@ interface RecordRow {
 
 const router = useRouter()
 const route = useRoute()
-const tab = ref(String(route.query.tab || 'records'))
+const tab = ref(String(route.query.tab || 'issue'))
 watch(() => route.query.tab, (v) => { if (v) tab.value = String(v) })
 const supply = ref<SupplyRow[]>([])
 const regions = ['JP', 'US', 'PH', 'NG', 'TR', 'EG']
 const sellable = computed(() => supply.value.filter((p) => p.source !== 'off'))
 const currentSupply = computed(() => sellable.value.find((p) => p.key === issue.plan))
 const visibleStrips = computed(() => strips.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
+// SpaceX 的 X 套餐和 GPT 共用主台凭证；Avanfinity X 是单独一台 api-v1 账户。
+const spacexAcc = computed(() => {
+  const sx = accounts.value.filter((a) => !a.protocol || a.protocol === 'spacexcard-legacy')
+  return sx.find((a) => a.is_primary_default) || sx.find((a) => a.status === 'active') || sx[0]
+})
+const avanXAcc = computed(() => accounts.value.find((a) => a.protocol === 'avanfinity-api-v1'))
+const spacexCount = computed(() => supply.value.filter((p) => p.source === 'spacex').length)
+const avanCount = computed(() => supply.value.filter((p) => p.source === 'avan').length)
+const avanStrips = computed(() => (avanXAcc.value ? visibleStrips.value : visibleStrips.value.filter((s) => s.channel !== 'x_cdk')))
 const visibleChannels = computed(() => channels.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
 const visibleLimits = computed(() => limits.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
 const channels = ref<any[]>([])
@@ -568,6 +598,7 @@ onUnmounted(() => {
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; background: #16a34a; }
 .dot.off { background: #d97706; }
 .dot.ok { background: #16a34a; }
+.dot.idle { background: #9ca3af; }
 .src-tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; opacity: .8; }
 .src-tag.spacex { color: #2563eb; }
 .src-tag.avan { color: #7c3aed; }

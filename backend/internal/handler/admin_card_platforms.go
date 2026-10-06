@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -256,33 +257,66 @@ func AdminPingCardPlatform(c *gin.Context) {
 	} else if status == 403 {
 		msg = "主机可达；可能 IP 不在白名单（403）"
 	}
-	var spendable, reserve string
+	var spendable, reserve, balanceErr, plansErr string
 	var planFees []gin.H
+	v1 := acc.Protocol == db.AccountProtocolAvanfinity202608
 	if key != "" || strings.TrimSpace(acc.CredPublic) != "" {
 		cli := cardplatform.New(cfg)
-		if acc.Protocol == db.AccountProtocolAvanfinity202608 || acc.Protocol == db.AccountProtocolAvanfinityAPIv1 {
+		if v1 {
 			cli = cardplatform.NewFromAccount(acc)
 		}
-		if bal, berr := cli.GetBalance(c.Request.Context()); berr == nil && bal != nil {
+		if bal, berr := cli.GetBalance(c.Request.Context()); berr != nil {
+			balanceErr = pingErrText(berr)
+		} else if bal != nil {
 			spendable = string(bal.SpendableBalance)
 			reserve = string(bal.AccountReserveAmount)
 		}
-		if plans, perr := cli.GetPlans(c.Request.Context()); perr == nil && plans != nil {
+		if plans, perr := cli.GetPlans(c.Request.Context()); perr != nil {
+			plansErr = pingErrText(perr)
+		} else if plans != nil {
 			for _, p := range plans.SellablePlans() {
 				planFees = append(planFees, gin.H{
 					"key": p.Key, "label": p.Label, "fee_usd": p.ServiceFeeUSD,
 				})
 			}
 		}
+	} else {
+		balanceErr = "还没填凭证"
 	}
-	if status >= 200 && status < 500 && status != 401 && status != 403 {
+	// /openapi/v1 在 Avanfinity 上返回 SPA 页面（200），探测地址不能代表凭证可用，以余额接口为准。
+	healthy := status >= 200 && status < 500 && status != 401 && status != 403
+	if v1 {
+		healthy = balanceErr == ""
+		if !healthy {
+			msg = balanceErr
+		}
+	}
+	if healthy {
 		_ = db.MarkCardPlatformAccountOK(acc.ID)
+	} else if v1 {
+		_ = db.MarkCardPlatformAccountError(acc.ID, balanceErr)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"ok": true, "message": msg, "probed": probed, "status": status,
+		"ok": healthy || !v1, "message": msg, "probed": probed, "status": status,
 		"account_id": req.ID, "name": acc.Name, "site_base": base,
 		"spendable_usd": spendable, "reserve_usd": reserve, "plan_fees": planFees, "egress_ip": egressIP,
+		"balance_error": balanceErr, "plans_error": plansErr,
 	})
+}
+
+// pingErrText 把卡台错误翻成运营能看懂的一句话。
+func pingErrText(err error) string {
+	var apiErr *cardplatform.APIError
+	if errors.As(err, &apiErr) {
+		switch apiErr.HTTPStatus {
+		case http.StatusUnauthorized:
+			return "凭证被拒（401）：" + apiErr.Msg + "。核对 App ID / App Secret"
+		case http.StatusForbidden:
+			return "被拒（403）：" + apiErr.Msg + "。检查出口 IP 是否在白名单"
+		}
+		return apiErr.Msg
+	}
+	return err.Error()
 }
 
 // AdminPutDualBindConfig PUT /api/v1/admin/card-platforms/dual-bind

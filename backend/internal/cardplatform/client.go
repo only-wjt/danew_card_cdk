@@ -120,6 +120,19 @@ type envelope struct {
 	Msg   string          `json:"msg"`
 	Data  json.RawMessage `json:"data"`
 	Error string          `json:"error_code"`
+	// /api/v1 失败时返回 {"error":"API 密钥无效"}，不是 envelope。
+	ErrText json.RawMessage `json:"error"`
+}
+
+func (e envelope) message(fallback string) string {
+	if s := strings.TrimSpace(e.Msg); s != "" {
+		return s
+	}
+	var s string
+	if len(e.ErrText) > 0 && json.Unmarshal(e.ErrText, &s) == nil && strings.TrimSpace(s) != "" {
+		return strings.TrimSpace(s)
+	}
+	return fallback
 }
 
 // APIError 业务/HTTP 错误
@@ -144,6 +157,9 @@ func (c *Client) doOpenAPI(ctx context.Context, method, path string, body any, i
 func (c *Client) doOpenAPIWithClient(ctx context.Context, httpc *http.Client, method, path string, body any, idempotencyKey string) (json.RawMessage, error) {
 	if c.cfg.APIKey == "" {
 		return nil, &APIError{HTTPStatus: 401, Msg: "card_api_key not configured"}
+	}
+	if c.cfg.APIv1 && c.cfg.AppID == "" {
+		return nil, &APIError{HTTPStatus: 401, Msg: "Avanfinity 需要同时填 App ID 和 App Secret"}
 	}
 	if httpc == nil {
 		httpc = c.client
@@ -186,17 +202,17 @@ func (c *Client) doOpenAPIWithClient(ctx context.Context, httpc *http.Client, me
 	}
 	// 旧 OpenAPI 成功是 code=0。文档里的 /api/v1 有的接口成功是 0，X 接口成功是 200。
 	if resp.StatusCode == 401 || env.Code == 401 {
-		return nil, &APIError{HTTPStatus: 401, Code: env.Code, Msg: nonEmpty(env.Msg, "unauthorized"), ErrorCode: env.Error}
+		return nil, &APIError{HTTPStatus: 401, Code: env.Code, Msg: env.message("unauthorized"), ErrorCode: env.Error}
 	}
 	if env.Code != 0 && env.Code != 200 {
 		st := resp.StatusCode
 		if st < 400 {
 			st = http.StatusBadRequest
 		}
-		return nil, &APIError{HTTPStatus: st, Code: env.Code, Msg: nonEmpty(env.Msg, "business error"), ErrorCode: env.Error}
+		return nil, &APIError{HTTPStatus: st, Code: env.Code, Msg: env.message("business error"), ErrorCode: env.Error}
 	}
 	if resp.StatusCode >= 400 {
-		return nil, &APIError{HTTPStatus: resp.StatusCode, Code: env.Code, Msg: nonEmpty(env.Msg, resp.Status), ErrorCode: env.Error}
+		return nil, &APIError{HTTPStatus: resp.StatusCode, Code: env.Code, Msg: env.message(resp.Status), ErrorCode: env.Error}
 	}
 	return env.Data, nil
 }
@@ -462,7 +478,38 @@ func (c *Client) GetBalance(ctx context.Context) (*BalanceResponse, error) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		return nil, err
 	}
+	// /api/v1 用 camelCase，余额可能是字符串。
+	if out.SpendableBalance == "" {
+		var alt struct {
+			Spendable json.RawMessage `json:"spendableBalance"`
+			Total     json.RawMessage `json:"totalBalance"`
+			Reserve   json.RawMessage `json:"accountReserveAmount"`
+		}
+		_ = json.Unmarshal(data, &alt)
+		if n := rawNumber(alt.Spendable); n != "" {
+			out.SpendableBalance = n
+		} else if out.Balance != "" {
+			out.SpendableBalance = out.Balance
+		}
+		if out.Balance == "" {
+			out.Balance = rawNumber(alt.Total)
+		}
+		if out.AccountReserveAmount == "" {
+			out.AccountReserveAmount = rawNumber(alt.Reserve)
+		}
+	}
 	return &out, nil
+}
+
+func rawNumber(raw json.RawMessage) json.Number {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if s == "" || s == "null" {
+		return ""
+	}
+	if _, err := strconv.ParseFloat(s, 64); err != nil {
+		return ""
+	}
+	return json.Number(s)
 }
 
 type IssueCDKRequest struct {
