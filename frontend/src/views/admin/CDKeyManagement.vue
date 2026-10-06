@@ -49,6 +49,14 @@
         <span class="fold-caret">{{ issueOpen ? '收起' : '展开' }}</span>
       </button>
       <div v-show="issueOpen" class="p-4 space-y-4 border-t" style="border-color: var(--brd)">
+        <label class="flex flex-wrap items-center gap-2 text-sm text-muted">
+          产品
+          <select v-model="directProduct" class="input !w-48 !py-1" :disabled="issuing || loadingMeta" @change="onDirectProductChange">
+            <option value="gpt">ChatGPT</option>
+            <option value="x">X 订阅码</option>
+          </select>
+          <span v-if="directProduct === 'x'" class="text-xs">卡台 Cookie 兑换，和本站 DNX- 用户名开通不是同一条线</span>
+        </label>
         <div class="grid gap-2 sm:grid-cols-3">
           <button
             v-for="p in planCards"
@@ -80,12 +88,12 @@
           <!-- Element Plus 不把空字符串当「已选中」，未选时不会显示 value="" 那条，
                会回落到内置英文 placeholder「Select」。显式写明不选就是菲律宾。 -->
           <el-select v-model="form.payment_country" size="small" style="width: 150px"
-                     placeholder="默认(菲律宾)">
-            <el-option label="默认(菲律宾)" value="" />
+                     :placeholder="directProduct === 'x' ? '默认(日本)' : '默认(菲律宾)'">
+            <el-option v-if="directProduct !== 'x'" label="默认(菲律宾)" value="" />
             <el-option v-for="r in paymentRegions" :key="r.country"
                        :label="`${regionLabel(r.country)} (${r.currency})`" :value="r.country" />
           </el-select>
-          <span v-if="dualBindEnabled && form.payment_country" class="text-xs text-muted">
+          <span v-if="dualBindEnabled && directProduct !== 'x' && form.payment_country" class="text-xs text-muted">
             只传给支持付款地区的卡台，另一台仍按默认菲律宾出码
           </span>
           <el-checkbox v-model="form.funding_confirmed">确认承担兑换资金</el-checkbox>
@@ -93,6 +101,7 @@
             {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${planLabel(form.plan)} · $${estimatedTotal}` }}
           </el-button>
         </div>
+        <p v-if="isRenewPlan" class="text-xs font-semibold" style="color: var(--err)">续费完成后请联系客户取消自动续费，不取消次月可能会连续扣款</p>
         <p v-if="!configured" class="text-xs" style="color: var(--err)">
           请先在
           <router-link class="app-link" to="/ops/integration">卡台配置</router-link>
@@ -327,6 +336,11 @@
         <el-table-column prop="plan" label="套餐" width="100">
           <template #default="{ row }">{{ planLabel(row.plan) }}</template>
         </el-table-column>
+        <el-table-column label="区域" min-width="145">
+          <template #default="{ row }">
+            <span :class="row.payment_country == null ? 'text-muted' : ''">{{ cdkRegionLabel(row.payment_country) }}</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }">
             <el-tag size="small" :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag>
@@ -414,6 +428,7 @@ import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 import { useMaxWidth } from '../../lib/media'
+import { isCardAttachPlan } from '../../lib/plan'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
@@ -454,6 +469,7 @@ const configured = ref(false)
 const dualBindEnabled = ref(false)
 const activePlatformN = ref(0)
 
+const directProduct = ref<'gpt' | 'x'>('gpt')
 const form = reactive({
   plan: 'plus',
   count: 1,
@@ -465,10 +481,17 @@ const form = reactive({
 // 地区清单只认卡台下发的 payment_regions，本站不写死。
 const paymentRegions = ref<Array<{ country: string; currency: string }>>([])
 const REGION_NAMES: Record<string, string> = {
-  PH: '菲律宾', US: '美国', JP: '日本', CL: '智利', EG: '埃及', IN: '印度', KR: '韩国',
+  PH: '菲律宾', US: '美国', JP: '日本', CL: '智利', EG: '埃及', IN: '印度', KR: '韩国', NG: '尼日利亚', TR: '土耳其',
 }
 function regionLabel(code: string): string {
   return REGION_NAMES[code] || code
+}
+function cdkRegionLabel(country: unknown): string {
+  if (country == null) return '待同步'
+  const code = String(country).trim().toUpperCase()
+  if (!code) return '默认（菲律宾）'
+  const name = regionLabel(code)
+  return name === code ? code : `${name} (${code})`
 }
 function recentRegionText(region: string): string {
   const name = region ? regionLabel(region) : '默认(菲律宾)'
@@ -535,6 +558,8 @@ const planCards = computed(() =>
     requiresActiveSubscription: !!meta.requires_active_subscription,
   })),
 )
+
+const isRenewPlan = computed(() => isCardAttachPlan(form.plan, planMeta(form.plan)?.flow))
 
 const canIssue = computed(() =>
   configured.value && form.funding_confirmed && form.count >= 1 && form.count <= ISSUE_MAX && !issuing.value &&
@@ -1321,12 +1346,18 @@ async function copyRowCode(row: any) {
   dialog.toast(isFull ? '已复制完整卡密' : '已复制前缀（非完整码）', isFull ? 'ok' : 'warn')
 }
 
+function onDirectProductChange() {
+  form.plan = directProduct.value === 'x' ? '' : 'plus'
+  form.payment_country = directProduct.value === 'x' ? 'JP' : ''
+  void loadMeta()
+}
+
 async function loadMeta() {
   loadingMeta.value = true
   metaError.value = ''
   try {
     const [pr, br, er, sr, cr] = await Promise.all([
-      authFetch('/api/v1/admin/cardplatform/plans'),
+      authFetch(`/api/v1/admin/cardplatform/plans?product=${directProduct.value}`),
       authFetch('/api/v1/admin/cardplatform/balance'),
       authFetch('/api/v1/admin/network/egress'),
       authFetch('/api/v1/admin/settings'),
@@ -1364,7 +1395,11 @@ async function loadMeta() {
         : []
       // 卡台不再下发某个地区时，把已选中的收回到「默认」。
       if (form.payment_country && !paymentRegions.value.some((r) => r.country === form.payment_country)) {
-        form.payment_country = ''
+        form.payment_country = directProduct.value === 'x' ? 'JP' : ''
+      }
+      if (directProduct.value === 'x' && !form.payment_country) form.payment_country = 'JP'
+      if (directProduct.value === 'x' && !planKeys.value.includes(form.plan)) {
+        form.plan = planKeys.value[0] || ''
       }
       pricingVersion.value = d.version ?? null
       priceSource.value = 'live'

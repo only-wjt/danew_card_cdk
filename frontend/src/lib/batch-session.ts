@@ -1,4 +1,7 @@
-import * as XLSX from 'xlsx'
+import { xPremiumCredential } from './x-premium'
+
+// xlsx 只在真正读/写 Excel 时加载。
+const loadXLSX = () => import('xlsx')
 
 /** 批量上限：前端受理条数（并发提交，非同时跑满） */
 export const BATCH_MAX_KEYS = 1000
@@ -218,6 +221,7 @@ export function accessTokenFromSession(raw: string): string {
  * 或裸五段 JWE；禁止纯 Access Token。
  */
 export function extractCdkSession(raw: string): string {
+  if (xPremiumCredential(raw)) return raw.trim()
   const s = raw.trim()
   if (!s) return ''
   if (!s.startsWith('{') && s.split('.').length >= 5) return s
@@ -296,6 +300,7 @@ function normalizeSessionCell(raw: string): string {
 }
 
 function looksLikeSessionJson(s: string): boolean {
+  if (xPremiumCredential(s)) return true
   const t = normalizeSessionCell(s)
   if (!t.startsWith('{') || t.length < 80) return false
   if (!t.includes('accessToken') && !t.includes('access_token') && !t.includes('sessionToken')) {
@@ -584,6 +589,7 @@ export async function readWorkbookRows(file: File): Promise<unknown[][]> {
       }
     }
     try {
+      const XLSX = await loadXLSX()
       const wb = XLSX.read(text, { type: 'string', raw: false })
       const sheetName = wb.SheetNames[0]
       const sheet = wb.Sheets[sheetName]
@@ -600,7 +606,7 @@ export async function readWorkbookRows(file: File): Promise<unknown[][]> {
     return manual
   }
 
-  const buf = await file.arrayBuffer()
+  const [buf, XLSX] = await Promise.all([file.arrayBuffer(), loadXLSX()])
   const wb = XLSX.read(buf, { type: 'array', cellText: true, cellDates: false })
   const sheetName =
     wb.SheetNames.find((n) => /数据|data|session|账号|account/i.test(n)) || wb.SheetNames[0]
@@ -613,10 +619,11 @@ export async function readWorkbookRows(file: File): Promise<unknown[][]> {
   }) as unknown[][]
 }
 
-export function exportSuccessWorkbook(
+export async function exportSuccessWorkbook(
   rows: Array<[string, string, string, string]>,
   filenamePrefix = 'batch_success',
 ) {
+  const XLSX = await loadXLSX()
   const sheet = XLSX.utils.aoa_to_sheet([['邮箱', 'GPT密码', '邮箱密码', 'at'], ...rows])
   sheet['!cols'] = [{ wch: 32 }, { wch: 24 }, { wch: 24 }, { wch: 72 }]
   sheet['!autofilter'] = { ref: `A1:D${rows.length + 1}` }

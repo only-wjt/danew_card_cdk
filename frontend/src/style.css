@@ -33,6 +33,7 @@ html {
   --bg-tint: radial-gradient(1200px 600px at 12% -10%, rgba(192, 86, 58, 0.06), transparent 60%),
     radial-gradient(900px 500px at 110% 0%, rgba(192, 86, 58, 0.05), transparent 55%);
   --surface: #fbf8f1;
+  --surface-solid: #fbf8f1;
   --surface-2: #f4eee3;
   /* 皮肤未单独定义时退回 surface-2，hover 填充与斑马纹因此不会互相吃掉 */
   --surface-3: var(--surface-2);
@@ -997,6 +998,7 @@ html[data-skin='danew'] {
   --bg: rgb(var(--c-bg));
   --bg-tint: none;
   --surface: rgb(var(--c-surface));
+  --surface-solid: rgb(var(--c-surface));
   --surface-2: rgb(var(--c-surface-2));
   --surface-3: rgb(var(--c-surface-3));
   --brd: rgb(var(--c-brd));
@@ -1131,3 +1133,208 @@ html[data-skin='danew'] .el-table th.el-table__cell {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+
+/* ══════ zovo：卡台新版（与 cardplatform aixluv 主题同一套设计语言）══════
+   日间 = 流金 gold（象牙底 + 暗金，主按钮墨色）；夜间 = 曜夜 night（深黑 + 雾金，主按钮金色渐变）。
+   面板是半透明「玻璃」，叠在固定的柔光氛围层上；浮层用不透明的 --surface-solid。
+   不用 backdrop-filter：大面积模糊每帧都要重算，低端机滚动会掉帧。 */
+html[data-skin="zovo"] {
+  --font-sans: 'Manrope', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, -apple-system, sans-serif;
+  --font-display: 'Cormorant Garamond', 'Noto Serif SC', 'Songti SC', 'STSong', serif;
+  --font-serif: var(--font-display);
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 20px;
+
+  --bg: #f3eee3;
+  --bg-tint: none;
+  --surface: #fffdf7;
+  --surface-solid: #fffdf7;
+  --surface-2: #ece5d6;
+  --brd: rgba(23, 19, 10, 0.12);
+  --brd-2: rgba(23, 19, 10, 0.2);
+  --ink: #17130a;
+  --ink-2: #403a2d;
+  --ink-3: #7a7261;
+
+  --primary: #9c7c3c;
+  --primary-hover: #b08e4a;
+  --primary-active: #8a6c30;
+  --primary-soft: rgba(196, 160, 92, 0.14);
+  --primary-on: #fffdf7;
+  --row-hover: rgba(196, 160, 92, 0.1);
+
+  --good: #4e8a5c;
+  --good-soft: rgba(78, 138, 92, 0.14);
+  --warn: #b07a2f;
+  --warn-soft: rgba(176, 122, 47, 0.14);
+  --err: #c0492f;
+  --err-soft: rgba(192, 73, 47, 0.12);
+  --info: #6a6cc0;
+  --info-soft: rgba(106, 108, 192, 0.14);
+
+  --shadow: 0 2px 6px rgba(40, 30, 10, 0.06), 0 30px 70px rgba(60, 45, 15, 0.12);
+  --shadow-sm: 0 2px 6px rgba(40, 30, 10, 0.06);
+  --glow: rgba(196, 160, 92, 0.35);
+  --accent-grad: linear-gradient(120deg, #17130a, #2a2418);
+}
+html.dark[data-skin="zovo"] {
+  --font-display: 'Sora', 'Noto Serif SC', 'Songti SC', 'STSong', sans-serif;
+
+  --bg: #0c0c11;
+  --surface: rgba(255, 255, 255, 0.035);
+  --surface-solid: #14141b;
+  --surface-2: rgba(255, 255, 255, 0.06);
+  --brd: rgba(255, 255, 255, 0.1);
+  --brd-2: rgba(255, 255, 255, 0.2);
+  --ink: #f4f1ea;
+  --ink-2: #d6d1c6;
+  --ink-3: #928d82;
+
+  --primary: #cbb079;
+  --primary-hover: #e2cb96;
+  --primary-active: #b39a63;
+  --primary-soft: rgba(203, 176, 121, 0.12);
+  --primary-on: #07070a;
+  --row-hover: rgba(203, 176, 121, 0.07);
+
+  --good: #6fbf8a;
+  --good-soft: rgba(111, 191, 138, 0.16);
+  --warn: #d9b070;
+  --warn-soft: rgba(217, 176, 112, 0.16);
+  --err: #e8705a;
+  --err-soft: rgba(232, 112, 90, 0.18);
+  --info: #8fb0d6;
+  --info-soft: rgba(143, 176, 214, 0.16);
+
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 40px 90px rgba(0, 0, 0, 0.6);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --glow: rgba(203, 176, 121, 0.4);
+  --accent-grad: linear-gradient(120deg, #cbb079, #e2cb96);
+  --el-mask-color: rgba(5, 5, 8, 0.7);
+}
+
+/* 氛围层：右上金色柔光 + 左下淡金光晕 + 磨砂颗粒。固定定位的独立层，滚动不触发重绘 */
+html[data-skin="zovo"] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(46vw 46vw at 96% -6%, var(--glow), transparent 62%),
+    radial-gradient(40vw 40vw at -6% 106%, var(--primary-soft), transparent 64%);
+  opacity: 0.55;
+}
+html[data-skin="zovo"] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  opacity: 0.05;
+}
+html.dark[data-skin="zovo"] body::after { opacity: 0.07; }
+
+html[data-skin="zovo"] h1,
+html[data-skin="zovo"] h2,
+html[data-skin="zovo"] .page-title,
+html[data-skin="zovo"] .brand-title { letter-spacing: -0.01em; font-weight: 600; }
+html[data-skin="zovo"] .stat-value { font-family: var(--font-mono); letter-spacing: -0.02em; }
+
+/* 主按钮：日间墨色、夜间金色渐变 + 柔光（同卡台 theme-btn-primary） */
+html[data-skin="zovo"] .btn-primary {
+  background: var(--accent-grad);
+  color: var(--bg);
+  box-shadow: 0 10px 30px -10px var(--glow);
+}
+html.dark[data-skin="zovo"] .btn-primary { color: #0a0a12; }
+html[data-skin="zovo"] .btn-primary:hover { background: var(--accent-grad); filter: brightness(1.06); box-shadow: 0 16px 40px -10px var(--glow); }
+html[data-skin="zovo"] .btn-primary:active { filter: brightness(0.96); }
+html[data-skin="zovo"] .btn-primary:disabled,
+html[data-skin="zovo"] .btn-primary[disabled] { opacity: 0.5; box-shadow: none; filter: none; cursor: not-allowed; }
+html[data-skin="zovo"] .btn-secondary,
+html[data-skin="zovo"] .btn-ghost { background: var(--surface-2); border: 1px solid var(--brd); color: var(--ink-2); }
+html[data-skin="zovo"] .btn-secondary:hover,
+html[data-skin="zovo"] .btn-ghost:hover { color: var(--primary-hover); border-color: color-mix(in oklab, var(--primary) 45%, transparent); background: var(--primary-soft); }
+
+/* Element Plus 主按钮同风格 */
+html[data-skin="zovo"] .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) {
+  background: var(--accent-grad) !important;
+  border-color: transparent !important;
+  color: var(--bg) !important;
+  box-shadow: 0 8px 24px -12px var(--glow);
+}
+html.dark[data-skin="zovo"] .el-button--primary:not(.is-plain):not(.is-text):not(.is-link) { color: #0a0a12 !important; }
+html[data-skin="zovo"] .el-button--primary:not(.is-plain):not(.is-text):not(.is-link):hover { filter: brightness(1.06); }
+html[data-skin="zovo"] .el-button--primary.is-disabled { opacity: 0.5; filter: none; box-shadow: none; }
+html[data-skin="zovo"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.is-text):not(.is-link) {
+  background: var(--surface-2);
+  border-color: var(--brd);
+  color: var(--ink-2);
+}
+html[data-skin="zovo"] .el-button:not(.el-button--primary):not(.el-button--danger):not(.is-text):not(.is-link):hover {
+  color: var(--primary-hover);
+  border-color: color-mix(in oklab, var(--primary) 45%, transparent);
+  background: var(--primary-soft);
+}
+
+/* 面板 / 卡片：玻璃质感，悬停描金边 */
+html[data-skin="zovo"] .card,
+html[data-skin="zovo"] .el-card { background: var(--surface) !important; border-color: var(--brd) !important; box-shadow: var(--shadow-sm); }
+html[data-skin="zovo"] a.card:hover,
+html[data-skin="zovo"] button.card:hover,
+html[data-skin="zovo"] .card-hover:hover {
+  border-color: color-mix(in oklab, var(--primary) 34%, transparent) !important;
+  box-shadow: 0 20px 36px -28px color-mix(in oklab, var(--primary) 40%, rgba(0, 0, 0, 0.3));
+  transform: translateY(-2px);
+}
+
+/* 输入框：聚焦描金 + 光环 */
+html[data-skin="zovo"] .input { background: var(--surface-2); }
+html[data-skin="zovo"] .input:focus { border-color: color-mix(in oklab, var(--primary) 60%, transparent); box-shadow: 0 0 0 3px var(--primary-soft); }
+html[data-skin="zovo"] .el-input__wrapper.is-focus,
+html[data-skin="zovo"] .el-select__wrapper.is-focused,
+html[data-skin="zovo"] .el-textarea__inner:focus {
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--primary) 60%, transparent) inset, 0 0 0 3px var(--primary-soft) !important;
+}
+
+/* 胶囊/状态：细边 + 柔底 */
+html[data-skin="zovo"] .pill { background: var(--surface-2); border-color: var(--brd); }
+html[data-skin="zovo"] .el-tag { border-radius: 999px; }
+html[data-skin="zovo"] .el-tag--primary,
+html[data-skin="zovo"] .el-tag:not([class*="el-tag--success"]):not([class*="el-tag--warning"]):not([class*="el-tag--danger"]):not([class*="el-tag--info"]) {
+  --el-tag-bg-color: var(--primary-soft);
+  --el-tag-border-color: color-mix(in oklab, var(--primary) 30%, transparent);
+  --el-tag-text-color: var(--primary);
+}
+
+/* 表格：表头与行在玻璃面板上保持层次 */
+html[data-skin="zovo"] .el-table th.el-table__cell,
+html[data-skin="zovo"] .data-table thead th { background: var(--surface-2) !important; color: var(--ink-3) !important; font-weight: 600; letter-spacing: 0.02em; }
+html[data-skin="zovo"] .data-table tbody tr:hover td { background: var(--row-hover); }
+
+/* 分页当前页、开关、单选：跟主色 */
+html[data-skin="zovo"] .el-pagination .el-pager li.is-active { color: var(--primary) !important; font-weight: 700; }
+/* 带背景的分页：选中页是主色底，数字必须用 primary-on（否则金底金字看不见） */
+html[data-skin="zovo"] .el-pagination.is-background .el-pager li.is-active {
+  background: var(--accent-grad) !important;
+  color: var(--primary-on) !important;
+}
+html.dark[data-skin="zovo"] .el-pagination.is-background .el-pager li.is-active { color: #0a0a12 !important; }
+html[data-skin="zovo"] .el-pagination.is-background .el-pager li:not(.is-active),
+html[data-skin="zovo"] .el-pagination.is-background .btn-prev,
+html[data-skin="zovo"] .el-pagination.is-background .btn-next { background: var(--surface-2) !important; color: var(--ink-2); }
+html[data-skin="zovo"] .el-radio-button__original-radio:checked + .el-radio-button__inner {
+  background: var(--primary-soft) !important;
+  color: var(--primary) !important;
+  border-color: color-mix(in oklab, var(--primary) 45%, transparent) !important;
+  box-shadow: none !important;
+}
+html[data-skin="zovo"] ::selection { background: var(--primary-soft); color: var(--ink); }
+html.dark[data-skin="zovo"] ::-webkit-scrollbar { width: 10px; height: 10px; }
+html.dark[data-skin="zovo"] ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; }
+html.dark[data-skin="zovo"] ::-webkit-scrollbar-track { background: transparent; }

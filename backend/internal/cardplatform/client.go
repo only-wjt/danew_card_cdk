@@ -276,10 +276,18 @@ type PlansResponse struct {
 	PaymentRegions []PaymentRegion `json:"payment_regions,omitempty"`
 }
 
-// GetPlans GET /gpt-direct/plans — 实时服务费与套餐开关
-// 卡台返回 PaymentConfig：version + plans[key].serviceFeeUsdMinor
-func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
-	data, err := c.doOpenAPI(ctx, http.MethodGet, "/gpt-direct/plans", nil, "")
+// GetPlans GET /gpt-direct/plans — 实时服务费与套餐开关。
+// products 传 "x" 时只取卡台 X 订阅目录，并丢掉 GPT 回落。
+func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansResponse, error) {
+	product := "gpt"
+	if len(products) > 0 && strings.EqualFold(strings.TrimSpace(products[0]), "x") {
+		product = "x"
+	}
+	path := "/gpt-direct/plans"
+	if product == "x" {
+		path += "?product=x"
+	}
+	data, err := c.doOpenAPI(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -312,7 +320,7 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 	}
 	plansRaw, ok := raw["plans"]
 	if !ok {
-		return out, nil
+		return scopeXCatalogue(product, out), nil
 	}
 	if plans := parsePlanList(plansRaw); plans != nil {
 		for _, p := range plans {
@@ -321,7 +329,7 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 			}
 			out.Plans[p.Key] = p
 		}
-		return out, nil
+		return scopeXCatalogue(product, out), nil
 	}
 	var plansMap map[string]map[string]interface{}
 	if err := json.Unmarshal(plansRaw, &plansMap); err != nil {
@@ -330,7 +338,7 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 		if err2 := json.Unmarshal(data, &std); err2 != nil {
 			return nil, err
 		}
-		return &std, nil
+		return scopeXCatalogue(product, &std), nil
 	}
 	for k, m := range plansMap {
 		p := PlanInfo{Key: k, Enabled: true}
@@ -352,7 +360,39 @@ func (c *Client) GetPlans(ctx context.Context) (*PlansResponse, error) {
 		p.MaxAmountMinor = jsonInt64(m, "maxAmountMinor", "max_amount_minor")
 		out.Plans[k] = p
 	}
-	return out, nil
+	return scopeXCatalogue(product, out), nil
+}
+
+// scopeXCatalogue 把 product=x 的响应收成 X 订阅档，老卡台忽略 product 参数时也不回落成 Plus。
+func scopeXCatalogue(product string, out *PlansResponse) *PlansResponse {
+	if product != "x" || out == nil {
+		return out
+	}
+	all := out.Plans
+	if all == nil {
+		all = map[string]PlanInfo{}
+	}
+	out.Plans = map[string]PlanInfo{}
+	registry := make([]PlanRegistryItem, 0)
+	for _, entry := range out.Registry {
+		if info, ok := all["x_"+entry.Key]; ok && IsXPremiumPlan(entry.Key) {
+			info.Key = entry.Key
+			out.Plans[entry.Key] = info
+			registry = append(registry, entry)
+		}
+	}
+	out.Registry = registry
+	regions := make([]PaymentRegion, 0)
+	for _, r := range out.PaymentRegions {
+		if country, err := XPaymentCountry(r.Country); err == nil && country == r.Country {
+			regions = append(regions, r)
+		}
+	}
+	if len(regions) == 0 {
+		regions = []PaymentRegion{{Country: "JP", Currency: "JPY"}}
+	}
+	out.PaymentRegions = regions
+	return out
 }
 
 func parsePlanList(raw json.RawMessage) []PlanInfo {
@@ -456,6 +496,7 @@ type IssuedCDK struct {
 	Plan           string `json:"plan"`
 	CodePrefix     string `json:"code_prefix"`
 	FeeAmountMinor int64  `json:"fee_amount_minor"`
+	PaymentCountry string `json:"payment_country"`
 }
 
 type IssueCDKResult struct {
@@ -608,6 +649,7 @@ type CDKListItem struct {
 	FullCode       string `json:"full_code"`
 	CodePrefix     string `json:"code_prefix"`
 	Status         string `json:"status"`
+	PaymentCountry string `json:"payment_country"`
 	FeeAmountMinor int64  `json:"fee_amount_minor"`
 	CreatedAt      string `json:"created_at"`
 }
@@ -714,6 +756,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 			out.Scanned++
 			code := it.FullCodeText()
 			if code == "" {
+				_ = db.UpdateCardplatformCDKRegion(it.ID, it.PaymentCountry)
 				out.PrefixOnly++
 				continue
 			}
@@ -722,7 +765,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 				prefix = code[:14]
 			}
 			_, existed := db.LookupCardplatformCDKCode(it.ID, prefix)
-			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status, c.cfg.AccountID); err != nil {
+			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status, c.cfg.AccountID, it.PaymentCountry); err != nil {
 				continue
 			}
 			if existed {
@@ -732,6 +775,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 			out.Codes = append(out.Codes, IssuedCDK{
 				ID: it.ID, Code: code, Plan: it.Plan,
 				CodePrefix: prefix, FeeAmountMinor: it.FeeAmountMinor,
+				PaymentCountry: it.PaymentCountry,
 			})
 		}
 		if page*100 >= res.Total {

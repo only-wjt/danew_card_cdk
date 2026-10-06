@@ -1,3 +1,5 @@
+import { isXPremiumPlan } from './x-premium'
+
 // 档位判定：可读名 + 「账号是否已满足该档」（兑换前的重复购买闸）。
 //
 // 这两条判据原来内联在 RechargeView.vue 里，只有渲染才能碰到，测不动——
@@ -26,6 +28,9 @@ export function isCardAttachPlan(plan: string, planFlow?: string): boolean {
 /** 档位可读名。续费档必须排在 'pro' 兜底之前，否则显示成「Pro 20x」看不出是续费。 */
 export function planLabel(value: string): string {
   const n = String(value || 'free').trim().toLowerCase()
+  if (isXPremiumPlan(n)) {
+    return 'X ' + n.replace(/^x_/, '').replace('premium_plus', 'Premium+').replace('premium', 'Premium').replace('basic', 'Basic').replace('_monthly', ' / month').replace('_yearly', ' / year')
+  }
   if (n === 'pro_20x_renew' || n.includes('renew')) return 'Pro 20x 续费'
   if (n.includes('promax') || n === 'pro_50x') return 'Pro 50x'
   if (n.includes('prolite') || n.includes('5x') || n === 'pro_5x') return 'Pro 5x'
@@ -44,6 +49,8 @@ export function planLabel(value: string): string {
 export function planSatisfied(currentPlan: string, requestedPlan: string, planFlow?: string): boolean {
   const current = String(currentPlan || '').trim().toLowerCase()
   const req = String(requestedPlan || '').trim().toLowerCase()
+  if (isXPremiumPlan(req)) return current.startsWith('x_') && current !== 'x_free'
+  if (current.startsWith('x_')) return false
   if (isCardAttachPlan(req, planFlow)) return false
   const currentRank =
     current.includes('promax') || current === 'pro_50x'

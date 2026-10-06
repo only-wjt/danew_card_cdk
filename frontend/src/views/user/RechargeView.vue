@@ -59,17 +59,18 @@
 
       <!-- 2 preflight -->
       <div v-show="step === 2" class="card space-y-4">
-        <h2 class="text-xl font-bold text-ink">ChatGPT 凭证</h2>
-        <div class="flex gap-2">
+        <h2 class="text-xl font-bold text-ink">{{ isXPremiumPlan(targetPlan) ? t('xPremium.credential') : 'ChatGPT 凭证' }}</h2>
+        <div v-if="!isXPremiumPlan(targetPlan)" class="flex gap-2">
           <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'session' }" @click="credMode = 'session'">Session</button>
           <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'mailbox' }" @click="credMode = 'mailbox'">邮箱</button>
         </div>
-        <template v-if="credMode === 'session'">
-          <p class="text-sm text-muted">打开
+        <template v-if="credMode === 'session' || isXPremiumPlan(targetPlan)">
+          <p v-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}</p>
+          <p v-else class="text-sm text-muted">打开
             <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
             复制<strong>完整 JSON</strong>（必须含 <code>sessionToken</code>）。已禁用纯 Access Token。
           </p>
-          <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" placeholder='{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ...五段JWE..."}' />
+          <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" :placeholder="isXPremiumPlan(targetPlan) ? t('xPremium.placeholder') : sessionPlaceholder" />
         </template>
         <template v-else>
           <input v-model="email" class="input" placeholder="email@outlook.com" />
@@ -262,6 +263,7 @@ import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import XRedeemView from './XRedeemView.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
+import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -285,6 +287,7 @@ const previewInfo = ref<any>(null)
 const redemptionToken = ref('')
 const preflightToken = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
+const sessionPlaceholder = '{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ...五段JWE..."}'
 const sessionRaw = ref('')
 const email = ref('')
 const password = ref('')
@@ -829,6 +832,7 @@ async function doPreview() {
       error.value = '未返回 redemption_token，请检查卡台 Base 配置'
       return
     }
+    if (isXPremiumPlan(String(previewInfo.value?.plan || ''))) credMode.value = 'session'
     step.value = 2
   } finally {
     busy.value = false
@@ -844,9 +848,9 @@ async function doPreflight() {
   try {
     let credential: any
     if (credMode.value === 'session') {
-      const session = extractSession(sessionRaw.value)
+      const session = isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
       if (!session) {
-        error.value = '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
+        error.value = isXPremiumPlan(targetPlan.value) ? t('xPremium.invalid') : '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
         return
       }
       credential = { mode: 'session', session }

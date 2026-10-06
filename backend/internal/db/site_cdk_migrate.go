@@ -103,7 +103,10 @@ func migrateCardplatformCDKCodesWithID() error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return ensureCardplatformCDKExtraCols()
 }
 
 func ensureCardplatformCDKExtraCols() error {
@@ -120,6 +123,7 @@ func ensureCardplatformCDKExtraCols() error {
 		{"failover_used", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN failover_used INTEGER NOT NULL DEFAULT 0`},
 		{"failover_reason", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN failover_reason TEXT NOT NULL DEFAULT ''`},
 		{"active_binding_id", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN active_binding_id INTEGER NOT NULL DEFAULT 0`},
+		{"payment_country", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN payment_country TEXT`},
 	}
 	for _, c := range cols {
 		var n int

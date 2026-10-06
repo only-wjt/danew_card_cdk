@@ -56,6 +56,8 @@ if [[ -x $REMOTE_DIR/cdk-recharge ]]; then
   cp -a $REMOTE_DIR/cdk-recharge $REMOTE_DIR/cdk-recharge.bak.\$(date +%Y%m%d%H%M%S)
 fi
 tar -xzf /tmp/cdk-bundle.tgz -C $REMOTE_DIR
+# 旧构建遗留的 sourcemap 不再随 web/assets 留在机器上。
+find "$REMOTE_DIR/web/assets" -name '*.map' -delete 2>/dev/null || true
 chmod +x $REMOTE_DIR/cdk-recharge
 if [[ ! -f $REMOTE_DIR/app.env ]]; then
   cat > $REMOTE_DIR/app.env <<EOF

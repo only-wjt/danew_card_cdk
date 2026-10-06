@@ -60,8 +60,9 @@ func writeCardErr(c *gin.Context, err error) {
 // CardPlatformPlans GET /api/v1/admin/cardplatform/plans
 // 实时套餐服务费（CDK 收费价）
 func CardPlatformPlans(c *gin.Context) {
+	product := strings.TrimSpace(c.Query("product"))
 	cli := cardplatform.NewFromSettings()
-	plans, err := cli.GetPlans(c.Request.Context())
+	plans, err := cli.GetPlans(c.Request.Context(), product)
 	if err != nil {
 		writeCardErr(c, err)
 		return
@@ -82,8 +83,19 @@ func CardPlatformPlans(c *gin.Context) {
 		"registry": sellable,
 		// 付款地区只认支持该能力的卡台下发的清单。Avanfinity 没有这个字段，
 		// 不能拿它的响应来填下拉，也不能在它没返回时假装两边都能选。
-		"payment_regions": paymentRegionsForUI(c.Request.Context(), plans),
+		// X 订阅码的地区已经在 GetPlans 里收过，不再拿 GPT 双绑的地区清单替换。
+		"payment_regions": planRegionsForResponse(c, product, plans),
 	})
+}
+
+func planRegionsForResponse(c *gin.Context, product string, plans *cardplatform.PlansResponse) []cardplatform.PaymentRegion {
+	if strings.EqualFold(strings.TrimSpace(product), "x") {
+		if plans == nil {
+			return nil
+		}
+		return plans.PaymentRegions
+	}
+	return paymentRegionsForUI(c.Request.Context(), plans)
 }
 
 // paymentRegionsForUI 地区清单只来自支持 payment_country 的卡台。
@@ -166,8 +178,12 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	// 里面有 claude_*（没有 CDK 兑换流程）也有 enabled=false 的档（兑换时被 ACC 挡）。
 	// 按 SellableKeys 校验，跟界面上能看到的是同一份，不会出现「看得见发不出」
 	// 或者「发得出兑不掉」。
+	planProduct := "gpt"
+	if cardplatform.IsXPremiumPlan(plan) {
+		planProduct = "x"
+	}
 	if cli := cardplatform.NewFromSettings(); cli != nil {
-		if plans, err := cli.GetPlans(c.Request.Context()); err == nil && plans != nil && len(plans.Plans) > 0 {
+		if plans, err := cli.GetPlans(c.Request.Context(), planProduct); err == nil && plans != nil && len(plans.Plans) > 0 {
 			sellable := plans.SellableKeys()
 			if len(sellable) > 0 && !sellable[plan] {
 				known := make([]string, 0, len(sellable))
@@ -206,16 +222,31 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		idem = "cdk-issue-" + hex.EncodeToString(b)
 	}
 	payCountry := strings.ToUpper(strings.TrimSpace(req.PaymentCountry))
+	xPlan := cardplatform.IsXPremiumPlan(plan)
+	if xPlan {
+		var regionErr error
+		payCountry, regionErr = cardplatform.XPaymentCountry(payCountry)
+		if regionErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": regionErr.Error()})
+			return
+		}
+	}
 	// 单台发码只打主台。主台不支持地区时，选了地区不能静默按菲律宾发出去。
-	if payCountry != "" && !siteDualBindEnabled() {
+	// X 订阅码始终带地区，而且不走本站 DN- 双发。
+	if (payCountry != "" && !siteDualBindEnabled()) || xPlan {
 		acc, err := db.PrimaryCardPlatformAccount()
 		if err != nil || !provider.SupportsPaymentCountry(acc.Protocol) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "当前发码卡台不支持指定付款地区，请改为默认（菲律宾）"})
+			msg := "当前发码卡台不支持指定付款地区，请改为默认（菲律宾）"
+			if xPlan {
+				msg = "当前主台不支持 X 订阅码，需要支持付款地区的卡台"
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}
 	}
 	// 本站统一发码：生成 DN- 码并在各卡台各买一张，兑换时才决定打哪台。
-	if siteDualBindEnabled() {
+	// X 订阅码是卡台自己的产品，不进 DN-/DNX- 本站码。
+	if siteDualBindEnabled() && !xPlan {
 		codes, derr := provider.DualIssueBatch(c.Request.Context(), plan, req.Count, allowDegradedSingleBind(), payCountry)
 		u, _ := c.Get("username")
 		username, _ := u.(string)
@@ -233,8 +264,9 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 			row, _ := db.GetSiteCDKByCode(code)
 			issued = append(issued, gin.H{
 				"id": row.ID, "code": code, "plan": plan,
-				"code_prefix": provider.SiteCodePrefixOf(code),
-				"code_length": len(code), "full_code": code,
+				"code_prefix":     provider.SiteCodePrefixOf(code),
+				"payment_country": payCountry,
+				"code_length":     len(code), "full_code": code,
 				"stored": true, "has_full_code": true, "site_code": true,
 			})
 		}
@@ -304,7 +336,8 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 			issued = append(issued, gin.H{
 				"id": it.ID, "code": "", "plan": it.Plan,
 				"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
-				"incomplete": true, "stored": false,
+				"payment_country": payCountry,
+				"incomplete":      true, "stored": false,
 			})
 			continue
 		}
@@ -313,7 +346,7 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		}
 		// 本站 SQLite 持久化完整码（卡台列表只回 prefix）
 		storedOK := false
-		if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, "unused", primaryCardAccountID()); err != nil {
+		if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, "unused", primaryCardAccountID(), payCountry); err != nil {
 			storeFailed++
 			log.Printf("[cdk-issue] save full code failed id=%d prefix=%s: %v", it.ID, prefix, err)
 		} else {
@@ -323,10 +356,11 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		issued = append(issued, gin.H{
 			"id": it.ID, "code": code, "plan": it.Plan,
 			"code_prefix": prefix, "fee_amount_minor": it.FeeAmountMinor,
-			"code_length":   len(code),
-			"full_code":     code,
-			"stored":        storedOK,
-			"has_full_code": true,
+			"payment_country": payCountry,
+			"code_length":     len(code),
+			"full_code":       code,
+			"stored":          storedOK,
+			"has_full_code":   true,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -473,8 +507,8 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		return
 	}
 
-	// 当前页向卡台核对状态（仅本页 ID；bulk 大导出跳过以免拖慢）
-	statusMap := map[int64]string{}
+	// 当前页向卡台核对状态和发卡地区（仅本页 ID；bulk 大导出跳过以免拖慢）
+	metadata := map[int64]cardplatform.CDKListItem{}
 	if !skipSync && !bulkLegacy && len(list) > 0 && len(list) <= 200 {
 		ids := make([]int64, 0, len(list))
 		for _, it := range list {
@@ -482,7 +516,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 				ids = append(ids, it.UpstreamID)
 			}
 		}
-		statusMap = refreshStoredCDKStatuses(c.Request.Context(), ids)
+		metadata = refreshStoredCDKMetadata(c.Request.Context(), ids)
 	}
 
 	noteIDs := make([]int64, 0, len(list))
@@ -495,8 +529,13 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	out := make([]gin.H, 0, len(list))
 	for _, it := range list {
 		st := it.Status
-		if s, ok := statusMap[it.UpstreamID]; ok && s != "" {
-			st = s
+		country := it.PaymentCountry
+		if current, ok := metadata[it.UpstreamID]; ok {
+			if current.Status != "" {
+				st = current.Status
+			}
+			synced := current.PaymentCountry
+			country = &synced
 		}
 		if st == "" {
 			st = "unused"
@@ -505,6 +544,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 			"id": it.UpstreamID, "code": it.Code, "full_code": it.Code,
 			"row_id":      it.RowID,
 			"code_prefix": it.CodePrefix, "plan": it.Plan, "status": st,
+			"payment_country":  country,
 			"fee_amount_minor": it.FeeAmountMinor, "created_at": it.CreatedAt,
 			"code_kind": it.CodeKind, "issue_status": it.IssueStatus,
 			"dual_eligible": it.DualEligible,
@@ -530,23 +570,19 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		"page_size":          pageSize,
 		"full_code_in_store": db.CountCardplatformCDKCodes(),
 		"server_stored":      true,
-		"status_synced":      len(statusMap) > 0,
+		"status_synced":      len(metadata) > 0,
 	})
 }
 
-// refreshStoredCDKStatuses 按上游 id 轻量查询卡台状态并回写本站缓存。
+// refreshStoredCDKMetadata 按上游 id 轻量查询卡台状态，并顺手缓存发卡地区。
 // 每页并发有限，避免整库扫描。
-func refreshStoredCDKStatuses(ctx context.Context, ids []int64) map[int64]string {
-	out := make(map[int64]string, len(ids))
+func refreshStoredCDKMetadata(ctx context.Context, ids []int64) map[int64]cardplatform.CDKListItem {
+	out := make(map[int64]cardplatform.CDKListItem, len(ids))
 	if len(ids) == 0 {
 		return out
 	}
 	cli := cardplatform.NewFromSettings()
-	type pair struct {
-		id int64
-		st string
-	}
-	ch := make(chan pair, len(ids))
+	ch := make(chan cardplatform.CDKListItem, len(ids))
 	sem := make(chan struct{}, 6)
 	var wg sync.WaitGroup
 	for _, id := range ids {
@@ -563,10 +599,11 @@ func refreshStoredCDKStatuses(ctx context.Context, ids []int64) map[int64]string
 				return
 			}
 			for _, it := range res.List {
-				if it.ID == id && strings.TrimSpace(it.Status) != "" {
-					st := strings.ToLower(strings.TrimSpace(it.Status))
-					_ = db.UpdateCardplatformCDKStatus(id, st)
-					ch <- pair{id: id, st: st}
+				if it.ID == id {
+					it.Status = strings.ToLower(strings.TrimSpace(it.Status))
+					it.PaymentCountry = strings.ToUpper(strings.TrimSpace(it.PaymentCountry))
+					_ = db.UpdateCardplatformCDKMetadata(id, it.Status, it.PaymentCountry)
+					ch <- it
 					return
 				}
 			}
@@ -577,7 +614,7 @@ func refreshStoredCDKStatuses(ctx context.Context, ids []int64) map[int64]string
 		close(ch)
 	}()
 	for p := range ch {
-		out[p.id] = p.st
+		out[p.ID] = p
 	}
 	return out
 }
@@ -706,6 +743,7 @@ func CardPlatformListCDKs(c *gin.Context) {
 		Plan           string `json:"plan"`
 		CodePrefix     string `json:"code_prefix"`
 		Status         string `json:"status"`
+		PaymentCountry string `json:"payment_country"`
 		FeeAmountMinor int64  `json:"fee_amount_minor"`
 		CreatedAt      string `json:"created_at"`
 		Code           string `json:"code,omitempty"`
@@ -728,17 +766,19 @@ func CardPlatformListCDKs(c *gin.Context) {
 				if prefix == "" && len(up) >= 14 {
 					prefix = up[:14]
 				}
-				if err := db.SaveCardplatformCDKCodeForAccount(it.ID, up, prefix, it.Plan, it.FeeAmountMinor, it.Status, primaryCardAccountID()); err == nil {
+				if err := db.SaveCardplatformCDKCodeForAccount(it.ID, up, prefix, it.Plan, it.FeeAmountMinor, it.Status, primaryCardAccountID(), it.PaymentCountry); err == nil {
 					full, ok = up, true
 				}
 			}
 		}
 		row := rowOut{
 			ID: it.ID, Plan: it.Plan, CodePrefix: it.CodePrefix, Status: it.Status,
+			PaymentCountry: strings.ToUpper(strings.TrimSpace(it.PaymentCountry)),
 			FeeAmountMinor: it.FeeAmountMinor, CreatedAt: it.CreatedAt,
 			HasFullCode: ok, Note: notes[it.ID],
 		}
 		if ok {
+			_ = db.UpdateCardplatformCDKRegion(it.ID, row.PaymentCountry)
 			row.Code = full
 			row.FullCode = full
 			withFull++
@@ -1394,6 +1434,21 @@ func docsDefaultPlans() map[string]cardplatform.SellablePlan {
 
 // 公开展示服务费参考价（不暴露 API Key；若未配置 Key 则返回文档默认价）
 func PublicCDKPlans(c *gin.Context) {
+	if c.Query("product") == "x" {
+		// X 没有可以安全回落的 GPT 价目，老卡台没返回 X 档时也不要列出 Plus。
+		plans, err := cardplatform.NewFromSettings().GetPlans(c.Request.Context(), "x")
+		if err != nil {
+			writeCardErr(c, err)
+			return
+		}
+		rows := plans.SellablePlans()
+		items := map[string]cardplatform.SellablePlan{}
+		for _, p := range rows {
+			items[p.Key] = p
+		}
+		c.JSON(http.StatusOK, gin.H{"version": plans.Version, "plans": items, "registry": rows, "payment_regions": plans.PaymentRegions})
+		return
+	}
 	cli := cardplatform.NewFromSettings()
 	cfg := cardplatform.LoadConfig()
 	if cfg.APIKey == "" {

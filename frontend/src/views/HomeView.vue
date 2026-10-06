@@ -1,36 +1,18 @@
 <template>
-  <div class="min-h-screen">
-    <!-- Header -->
-    <header class="border-b bd">
-      <div class="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3 px-4 sm:px-6 py-5">
-        <div class="flex items-center gap-3">
-          <span class="grid h-10 w-10 place-items-center rounded-xl text-white" style="background: var(--primary)">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l4 6-10 12L2 9z" /><path d="M11 3 8 9l4 12 4-12-3-6" /><path d="M2 9h20" /></svg>
-          </span>
-          <div>
-            <h1 class="text-xl font-bold text-ink">{{ brand.name || t('home.brand') }}</h1>
-            <p class="text-xs text-muted">{{ brand.sub || t('home.brandSub') }}</p>
-          </div>
-        </div>
-        <div class="flex items-center gap-3">
-          <LanguageToggle />
-          <!-- 用户仅可切换明暗；整站主题由管理员在 /ops/appearance 设置 -->
-          <ThemeToggle />
-        </div>
-      </div>
-    </header>
+  <div class="u-page">
+    <UserPageHeader
+      :title="t('home.heroTitle')"
+      :subtitle="t('home.heroSub')"
+      badges
+    />
 
-    <!-- Main Content -->
-    <div class="max-w-6xl mx-auto px-4 sm:px-6 py-10 sm:py-16">
-      <!-- Hero -->
-      <div class="text-center mb-16 animate-slideInUp">
-        <h2 class="text-3xl sm:text-5xl font-bold text-ink mb-4">{{ t('home.heroTitle') }}</h2>
-        <p class="text-lg text-muted">{{ t('home.heroSub') }}</p>
+    <div class="u-main max-w-6xl pb-16">
+      <div class="mb-12 text-center">
         <a
           :href="CARD_SHOP_URL"
           target="_blank"
           rel="noopener noreferrer"
-          class="btn-primary mt-8"
+          class="btn-primary"
         >{{ t('home.buyCdk') }}</a>
       </div>
 
@@ -117,13 +99,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
-import ThemeToggle from '../components/ThemeToggle.vue'
-import LanguageToggle from '../components/LanguageToggle.vue'
-import { siteBrand } from '../theme'
+import UserPageHeader from '../components/UserPageHeader.vue'
 
 const CARD_SHOP_URL = 'https://card.danew.cc'
-
-const brand = siteBrand
 
 const { t } = useI18n({ useScope: 'global' })
 

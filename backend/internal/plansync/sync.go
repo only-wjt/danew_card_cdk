@@ -142,7 +142,7 @@ func doSyncAccount(ctx context.Context, acc db.CardPlatformAccount) (SyncResult,
 		}
 	}
 	if _, err := db.MarkCardProductsOfflineExceptForAccount(acc.ID, present); err != nil {
-		log.Printf("[plan-sync] account=%d mark offline: %v", acc.ID, err)
+		log.Printf("[plan-sync] account=%d prune products: %v", acc.ID, err)
 	}
 	return res, nil
 }
@@ -185,11 +185,11 @@ func doSync(ctx context.Context) (SyncResult, error) {
 			res.Products++
 		}
 	}
-	// 3. 本次未返回的历史缓存 → 标已下线（如全部 VISA 已从卡台下架）
+	// 3. 本次未返回的历史缓存直接删除，不保留下架卡 BIN。空清单在 db 层会被跳过。
 	if off, err := db.MarkCardProductsOfflineExcept(present); err != nil {
-		log.Printf("[plan-sync] mark offline: %v", err)
+		log.Printf("[plan-sync] prune products: %v", err)
 	} else if off > 0 {
-		log.Printf("[plan-sync] marked %d products offline (not in openable list)", off)
+		log.Printf("[plan-sync] removed %d delisted products (not in openable list)", off)
 	}
 	return res, nil
 }

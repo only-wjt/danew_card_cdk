@@ -12,6 +12,19 @@ export default {
     dismiss: '暂不处理',
     confirmAction: '确认取消',
   },
+  xPremium: {
+    placeholder: 'JSON：auth_token、ct0、billing_email',
+    product: '产品',
+    credential: 'X 登录凭证',
+    hint: '粘贴 JSON：auth_token、ct0、billing_email。仅新订阅，价格在预检时按所选地区报价；自动续费请在 X 里管理。',
+    invalid: '请填写包含 auth_token、ct0、billing_email 的有效 X Cookie JSON',
+    batchHint: '卡台 X 订阅码请配对 X Cookie JSON（auth_token、ct0、billing_email），不要使用 ChatGPT Session。DNX- 本站码仍走用户名开通。',
+  },
+  hero: {
+    badgeOfficial: '官方渠道',
+    badgeSelf: '全程自助',
+    badgeTrack: '进度可查',
+  },
   common: {
     back: '← 返回',
     backHome: '← 返回首页',

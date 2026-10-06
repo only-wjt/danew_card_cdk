@@ -12,6 +12,19 @@ export default {
     dismiss: 'Not now',
     confirmAction: 'Confirm',
   },
+  xPremium: {
+    placeholder: 'JSON: auth_token, ct0, billing_email',
+    product: 'Product',
+    credential: 'X credentials',
+    hint: 'Paste JSON with auth_token, ct0 and billing_email. New subscriptions quote in the selected region. Manage automatic renewal in X.',
+    invalid: 'Enter valid X cookie JSON containing auth_token, ct0 and billing_email',
+    batchHint: 'Pair card-platform X codes with X cookie JSON (auth_token, ct0, billing_email), not a ChatGPT session. DNX- codes still use a username.',
+  },
+  hero: {
+    badgeOfficial: 'Official channel',
+    badgeSelf: 'Fully self-service',
+    badgeTrack: 'Trackable progress',
+  },
   common: {
     back: '← Back',
     backHome: '← Back to Home',

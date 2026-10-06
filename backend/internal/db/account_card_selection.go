@@ -334,19 +334,22 @@ func encodeCardSelectionStrings(values []string) string {
 }
 
 func MarkCardProductsOfflineExceptForAccount(accountID int64, present map[string]bool) (int, error) {
+	// 按账户删除下架卡段。空清单不动，避免一次异常响应清掉这一台的 BIN。
+	if len(present) == 0 {
+		return 0, nil
+	}
 	products, err := GetCardProductsForAccount(accountID)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	for _, p := range products {
-		if present[p.ProductCode] || !p.Enabled {
+		if present[p.ProductCode] {
 			continue
 		}
 		res, err := DB.Exec(`
-			UPDATE account_card_product_cache
-			SET enabled=0, synced_at=CURRENT_TIMESTAMP
-			WHERE account_id=? AND product_code=? AND enabled=1
+			DELETE FROM account_card_product_cache
+			WHERE account_id=? AND product_code=?
 		`, accountID, p.ProductCode)
 		if err != nil {
 			return n, err

@@ -18,7 +18,7 @@ type SiteCDKRow struct {
 }
 
 // CreatePendingSiteCDK 插入 pending 本站码（尚未双发完成，不可复制给代理）。
-func CreatePendingSiteCDK(code, plan string, dualEligible bool, feeMinor int64) (SiteCDKRow, error) {
+func CreatePendingSiteCDK(code, plan string, dualEligible bool, feeMinor int64, country ...string) (SiteCDKRow, error) {
 	if DB == nil {
 		return SiteCDKRow{}, fmt.Errorf("db not ready")
 	}
@@ -35,11 +35,15 @@ func CreatePendingSiteCDK(code, plan string, dualEligible bool, feeMinor int64) 
 	if dualEligible {
 		dual = 1
 	}
+	var region any
+	if len(country) > 0 {
+		region = strings.ToUpper(strings.TrimSpace(country[0]))
+	}
 	res, err := DB.Exec(`
 		INSERT INTO cardplatform_cdk_codes
-		(upstream_id, code, code_prefix, plan, fee_amount_minor, status, code_kind, issue_status, dual_eligible, created_at)
-		VALUES (0, ?, ?, ?, ?, 'unused', 'site', ?, ?, CURRENT_TIMESTAMP)
-	`, code, prefix, plan, feeMinor, IssueStatusPending, dual)
+		(upstream_id, code, code_prefix, plan, fee_amount_minor, status, code_kind, issue_status, dual_eligible, payment_country, created_at)
+		VALUES (0, ?, ?, ?, ?, 'unused', 'site', ?, ?, ?, CURRENT_TIMESTAMP)
+	`, code, prefix, plan, feeMinor, IssueStatusPending, dual, region)
 	if err != nil {
 		return SiteCDKRow{}, err
 	}

@@ -4,6 +4,7 @@ import { ref, computed } from 'vue'
 export type ThemeMode = 'light' | 'dark' | 'auto'
 export type SkinId =
   | 'danew'
+  | 'zovo'
   | 'terracotta'
   | 'ember'
   | 'ocean'
@@ -44,7 +45,14 @@ export interface SkinMeta {
   /** 暗色下的主色覆盖。只有需要明暗分别取值的皮肤才填，未填则沿用 primary/primaryOn。 */
   primaryDark?: string
   primaryOnDark?: string
+  /** 亮色模式下另用一套主色（同一皮肤明暗两套配色时，如卡台新版 曜夜/流金） */
+  primaryLight?: string
+  primaryOnLight?: string
+  /** 该皮肤用到的 Google 字体（css2 family 参数），切换皮肤时按需加载 */
+  fonts?: string[]
 }
+
+const MONO_FONT = 'JetBrains+Mono:wght@400;500;600'
 
 export const SKINS: SkinMeta[] = [
   {
@@ -62,6 +70,24 @@ export const SKINS: SkinMeta[] = [
     primaryOn: '#ffffff',
     primaryDark: '#8e86f5',
     primaryOnDark: '#16132e',
+    fonts: ['Plus+Jakarta+Sans:wght@600;700;800', 'Inter:wght@400;500;600;700'],
+  },
+  {
+    id: 'zovo',
+    label: '卡台新版',
+    labelEn: 'Mist Gold',
+    swatch: '#cbb079',
+    swatch2: '#0c0c11',
+    blurb: '曜夜雾金 · 日间流金 · 玻璃面板',
+    heading: 'display',
+    density: 'comfy',
+    nav: 'pill',
+    layout: 'top',
+    primary: '#cbb079',
+    primaryOn: '#07070a',
+    primaryLight: '#9c7c3c',
+    primaryOnLight: '#fffdf7',
+    fonts: ['Manrope:wght@400;500;600;700', 'Sora:wght@500;600;700', 'Cormorant+Garamond:wght@500;600;700', 'Noto+Serif+SC:wght@500;600;700'],
   },
   {
     id: 'terracotta',
@@ -262,16 +288,17 @@ function mixHex(hex: string, toward: 'white' | 'black', t: number): string {
   return `#${[r, g, b].map((x) => x.toString(16).padStart(2, '0')).join('')}`
 }
 
-function syncElementPlus(primary: string, primaryOn: string) {
+function syncElementPlus(primary: string, primaryOn: string, dark: boolean) {
   const root = document.documentElement
   const set = (k: string, v: string) => root.style.setProperty(k, v)
+  const toward = dark ? 'black' : 'white'
   set('--el-color-primary', primary)
-  set('--el-color-primary-light-3', mixHex(primary, 'white', 0.3))
-  set('--el-color-primary-light-5', mixHex(primary, 'white', 0.5))
-  set('--el-color-primary-light-7', mixHex(primary, 'white', 0.7))
-  set('--el-color-primary-light-8', mixHex(primary, 'white', 0.8))
-  set('--el-color-primary-light-9', mixHex(primary, 'white', 0.9))
-  set('--el-color-primary-dark-2', mixHex(primary, 'black', 0.2))
+  set('--el-color-primary-light-3', mixHex(primary, toward, 0.3))
+  set('--el-color-primary-light-5', mixHex(primary, toward, 0.5))
+  set('--el-color-primary-light-7', mixHex(primary, toward, 0.7))
+  set('--el-color-primary-light-8', mixHex(primary, toward, 0.8))
+  set('--el-color-primary-light-9', mixHex(primary, toward, 0.9))
+  set('--el-color-primary-dark-2', mixHex(primary, dark ? 'white' : 'black', 0.2))
   // 按钮跟主色，禁止写死赤陶
   set('--el-button-bg-color', primary)
   set('--el-button-border-color', primary)
@@ -286,7 +313,7 @@ function syncElementPlus(primary: string, primaryOn: string) {
   // 同步语义色给 EP
   set('--el-bg-color', 'var(--surface)')
   set('--el-bg-color-page', 'var(--bg)')
-  set('--el-bg-color-overlay', 'var(--surface)')
+  set('--el-bg-color-overlay', 'var(--surface-solid, var(--surface))')
   set('--el-fill-color-blank', 'var(--surface)')
   set('--el-text-color-primary', 'var(--ink)')
   set('--el-text-color-regular', 'var(--ink-2)')
@@ -314,14 +341,33 @@ function applySkin() {
   if (meta.preferDark && themeMode.value === 'light') {
     // 允许 light，但皮肤 CSS 本身已是暗色 token；不强制改 mode
   }
-  const dark = isDark()
-  // 亮/暗主色不同的皮肤（danew）要让 EP 跟着换，否则暗色下按钮仍是亮色主色 + 白字
-  syncElementPlus(
-    (dark && meta.primaryDark) || meta.primary,
-    (dark && meta.primaryOnDark) || meta.primaryOn || '#ffffff',
-  )
-  // 强制重绘部分 EP 组件缓存
-  root.style.colorScheme = dark || meta.preferDark ? 'dark' : 'light'
+  const dark = isDark() || !!meta.preferDark
+  const primary = dark && meta.primaryDark
+    ? meta.primaryDark
+    : !dark && meta.primaryLight
+      ? meta.primaryLight
+      : meta.primary
+  const primaryOn = dark && meta.primaryOnDark
+    ? meta.primaryOnDark
+    : !dark && meta.primaryOnLight
+      ? meta.primaryOnLight
+      : (meta.primaryOn || '#ffffff')
+  syncElementPlus(primary, primaryOn, dark)
+  root.style.colorScheme = dark ? 'dark' : 'light'
+  ensureSkinFonts(meta)
+}
+
+const loadedFontHref = new Set<string>()
+function ensureSkinFonts(meta: SkinMeta) {
+  const families = [...(meta.fonts || []), MONO_FONT].map((f) => `family=${f}`).join('&')
+  const href = `https://fonts.googleapis.com/css2?${families}&display=swap`
+  if (loadedFontHref.has(href)) return
+  loadedFontHref.add(href)
+  const link = document.createElement('link')
+  link.rel = 'stylesheet'
+  link.href = href
+  link.dataset.skinFonts = meta.id
+  document.head.appendChild(link)
 }
 
 /** 统一入口：皮肤 + 明暗 一次刷完 */

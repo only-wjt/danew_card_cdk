@@ -88,7 +88,7 @@ func DualIssueOne(ctx context.Context, plan string, allowDegradedSingleBind bool
 	if err != nil {
 		return nil, err
 	}
-	row, err := db.CreatePendingSiteCDK(code, plan, dual && len(targets) > 1, 0)
+	row, err := db.CreatePendingSiteCDK(code, plan, dual && len(targets) > 1, 0, payCountry)
 	if err != nil {
 		return nil, err
 	}
