@@ -1,9 +1,44 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
 import { useAgentAuthStore } from '../stores/agentAuth'
+import { AGENT_ENABLED } from '../lib/features'
 
 // 管理端入口故意不用 /admin，降低扫路径风险。API 仍为 /api/v1/admin/*（服务端鉴权）。
 const OPS_BASE = '/ops'
+
+const agentRoutes: RouteRecordRaw[] = [
+  // 代理隐藏换码页（不进导航；管理员设密码后使用）
+  {
+    path: '/partner/swap',
+    name: 'AgentCDKSwap',
+    component: () => import('../views/user/AgentSwapView.vue'),
+  },
+  {
+    path: '/a/swap',
+    redirect: '/partner/swap',
+  },
+  {
+    path: '/partner/login',
+    name: 'PartnerLogin',
+    component: () => import('../views/partner/LoginView.vue'),
+    meta: { partnerGuest: true },
+  },
+  {
+    path: '/partner',
+    component: () => import('../layouts/PartnerLayout.vue'),
+    meta: { requiresAgent: true },
+    children: [
+      { path: '', name: 'PartnerHome', component: () => import('../views/partner/PartnerHome.vue') },
+      { path: 'batch', name: 'PartnerBatch', component: () => import('../views/partner/BatchView.vue') },
+      { path: 'orders', name: 'PartnerOrders', component: () => import('../views/partner/PartnerOrdersView.vue') },
+      { path: 'cdks', name: 'PartnerCdks', component: () => import('../views/partner/CdkInventoryView.vue') },
+      { path: 'records', name: 'PartnerRecords', component: () => import('../views/partner/RecordsView.vue') },
+      { path: 'api-keys', name: 'PartnerApiKeys', component: () => import('../views/partner/ApiKeysView.vue') },
+      { path: 'api-docs', name: 'PartnerApiDocs', component: () => import('../views/partner/ApiDocsView.vue') },
+      { path: 'settings', name: 'PartnerSettings', component: () => import('../views/partner/SettingsView.vue') },
+    ],
+  },
+]
 
 const routes: RouteRecordRaw[] = [
   {
@@ -79,37 +114,8 @@ const routes: RouteRecordRaw[] = [
     path: '/lookup',
     redirect: '/history',
   },
-  // 代理隐藏换码页（不进导航；管理员设密码后使用）
-  {
-    path: '/partner/swap',
-    name: 'AgentCDKSwap',
-    component: () => import('../views/user/AgentSwapView.vue'),
-  },
-  {
-    path: '/a/swap',
-    redirect: '/partner/swap',
-  },
-  {
-    path: '/partner/login',
-    name: 'PartnerLogin',
-    component: () => import('../views/partner/LoginView.vue'),
-    meta: { partnerGuest: true },
-  },
-  {
-    path: '/partner',
-    component: () => import('../layouts/PartnerLayout.vue'),
-    meta: { requiresAgent: true },
-    children: [
-      { path: '', name: 'PartnerHome', component: () => import('../views/partner/PartnerHome.vue') },
-      { path: 'batch', name: 'PartnerBatch', component: () => import('../views/partner/BatchView.vue') },
-      { path: 'orders', name: 'PartnerOrders', component: () => import('../views/partner/PartnerOrdersView.vue') },
-      { path: 'cdks', name: 'PartnerCdks', component: () => import('../views/partner/CdkInventoryView.vue') },
-      { path: 'records', name: 'PartnerRecords', component: () => import('../views/partner/RecordsView.vue') },
-      { path: 'api-keys', name: 'PartnerApiKeys', component: () => import('../views/partner/ApiKeysView.vue') },
-      { path: 'api-docs', name: 'PartnerApiDocs', component: () => import('../views/partner/ApiDocsView.vue') },
-      { path: 'settings', name: 'PartnerSettings', component: () => import('../views/partner/SettingsView.vue') },
-    ],
-  },
+  // 代理端（已停用）：AGENT_ENABLED 关闭时不注册，访问落到 404。代码保留，开关见 lib/features.ts
+  ...(AGENT_ENABLED ? agentRoutes : []),
   {
     path: OPS_BASE,
     component: () => import('../layouts/AdminLayout.vue'),

@@ -150,7 +150,7 @@
     <div class="card !p-0 overflow-hidden">
       <div class="px-4 py-3 border-b bd flex flex-wrap items-center gap-3">
         <span class="text-sm font-semibold text-ink">{{ t('batchRecharge.listTitle') }}</span>
-        <div class="toolbar-filters ml-auto">
+        <div v-if="AGENT_ENABLED" class="toolbar-filters ml-auto">
           <span class="text-xs text-muted">{{ t('batchRecharge.filterSource') }}</span>
           <el-select v-model="filterSource" size="small" style="width: 130px" @change="onFilterChange">
             <el-option :label="t('batchRecharge.sourceAll')" value="" />
@@ -359,6 +359,7 @@ import { useI18n } from 'vue-i18n'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { planLabel } from '../../lib/plan'
+import { AGENT_ENABLED } from '../../lib/features'
 import {
   parseMailboxLines,
   parseMailboxesFromSheet,
@@ -905,7 +906,7 @@ async function exportExcel() {
 onUnmounted(stopPoll)
 void loadPlans()
 void loadBatches()
-void loadAgentOptions()
+if (AGENT_ENABLED) void loadAgentOptions()
 </script>
 
 <style scoped>

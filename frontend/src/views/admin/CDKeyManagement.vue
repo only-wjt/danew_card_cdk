@@ -16,7 +16,7 @@
         </div>
       </div>
       <div class="flex flex-wrap gap-2">
-        <el-popover placement="bottom-end" :width="420" trigger="click">
+        <el-popover v-if="AGENT_ENABLED" placement="bottom-end" :width="420" trigger="click">
           <template #reference>
             <el-button size="small">代理换码</el-button>
           </template>
@@ -429,6 +429,7 @@ import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 import { useMaxWidth } from '../../lib/media'
 import { isCardAttachPlan } from '../../lib/plan'
+import { AGENT_ENABLED } from '../../lib/features'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */

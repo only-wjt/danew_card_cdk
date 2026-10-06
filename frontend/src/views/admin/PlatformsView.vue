@@ -65,7 +65,7 @@
         <button type="button" class="side-item" :class="{ on: sel === 'orphan' }" @click="sel = 'orphan'">
           <span class="text-sm">未归属回调</span>
         </button>
-        <button type="button" class="side-item" :class="{ on: sel === 'swap' }" @click="sel = 'swap'">
+        <button v-if="AGENT_ENABLED" type="button" class="side-item" :class="{ on: sel === 'swap' }" @click="sel = 'swap'">
           <span class="text-sm">代理换码</span>
         </button>
       </aside>
@@ -334,6 +334,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import WebhookEvents from './WebhookEvents.vue'
+import { AGENT_ENABLED } from '../../lib/features'
 
 interface Acc {
   id: number
@@ -959,7 +960,7 @@ onMounted(async () => {
   const qTab = String(route.query.tab || '')
   const panel = String(route.query.panel || '')
   if (panel === 'orphan') sel.value = 'orphan'
-  else if (panel === 'swap') sel.value = 'swap'
+  else if (panel === 'swap' && AGENT_ENABLED) sel.value = 'swap'
   else if (panel === 'policy') sel.value = 'policy'
   else if (qAccount && accounts.value.some((a) => String(a.id) === qAccount)) {
     sel.value = qAccount
