@@ -3,13 +3,13 @@
     <div class="flex flex-wrap items-center justify-between gap-2">
       <div>
         <h2 class="text-xl font-bold text-ink">X 会员</h2>
-        <p class="text-sm text-muted mt-1">这里只管卖什么、每单最多花多少。卡台、凭证和付款卡在「卡台」页改。</p>
+        <p class="text-sm text-muted mt-1">每个套餐只从一家卡台出码，在「供货设置」里二选一。卡台凭证在「卡台」页改。</p>
       </div>
       <el-button @click="load">刷新</el-button>
     </div>
 
     <div class="grid gap-3 md:grid-cols-2">
-      <div v-for="ch in strips" :key="ch.channel" class="card space-y-2">
+      <div v-for="ch in visibleStrips" :key="ch.channel" class="card space-y-2">
         <div class="flex items-center gap-2">
           <span class="dot" :class="ch.alert || !ch.enabled ? 'off' : 'ok'" />
           <span class="font-semibold">{{ channelName(ch.channel) }}</span>
@@ -34,28 +34,35 @@
     <el-radio-group v-model="tab">
       <el-radio-button value="issue">发码</el-radio-button>
       <el-radio-button value="records">兑换记录</el-radio-button>
-      <el-radio-button value="settings">通道设置</el-radio-button>
+      <el-radio-button value="supply">供货设置</el-radio-button>
+      <el-radio-button value="settings">上限与告警</el-radio-button>
     </el-radio-group>
 
     <div v-if="tab === 'issue'" class="card space-y-4">
+      <p v-if="!sellable.length" class="text-sm text-muted">还没有在售的套餐，先去「供货设置」选卡台。</p>
       <div class="grid gap-2 sm:grid-cols-3">
-        <button v-for="p in planKeys" :key="p" type="button" class="rounded-lg border px-3 py-2 text-left" :class="issue.plan === p ? 'border-current' : ''" @click="issue.plan = p">
-          <div class="font-medium">{{ planName(p) }}</div>
-          <div class="text-xs text-muted mt-1">{{ planCardLine(p) }}</div>
+        <button v-for="p in sellable" :key="p.key" type="button" class="rounded-lg border px-3 py-2 text-left" :class="issue.plan === p.key ? 'border-current' : ''" @click="issue.plan = p.key">
+          <div class="flex items-center justify-between gap-2">
+            <span class="font-medium">{{ p.label }}</span>
+            <span class="src-tag" :class="p.source">{{ sourceName(p.source) }}</span>
+          </div>
+          <div class="text-xs text-muted mt-1">{{ p.source === 'avan' ? planCardLine(p.avan_plan) : '兑换时客户填 X Cookie' }}</div>
         </button>
       </div>
-      <div class="flex flex-wrap gap-2">
-        <el-button :type="issue.channel === 'x_cdk' ? 'primary' : 'default'" @click="issue.channel = 'x_cdk'">X CDK</el-button>
-        <el-button :type="issue.channel === 'x_direct' ? 'primary' : 'default'" @click="issue.channel = 'x_direct'">X 直充</el-button>
+      <p class="text-sm text-muted">{{ currentSupply?.source === 'spacex' ? 'SpaceX：发码时锁定付款地区，客户兑换时要填 X 的 Cookie（auth_token / ct0）。' : 'Avanfinity：发码不扣钱，兑换时从钱包出，客户只填 X 用户名。上限在发码时锁死。' }}</p>
+      <div v-if="currentSupply?.source === 'spacex'" class="flex flex-wrap items-center gap-2">
+        <span class="text-sm">付款地区</span>
+        <el-radio-group v-model="issue.payment_country" size="small">
+          <el-radio-button v-for="r in regions" :key="r" :value="r">{{ r }}</el-radio-button>
+        </el-radio-group>
       </div>
-      <p class="text-sm text-muted">{{ issue.channel === 'x_cdk' ? 'CDK：发码不扣钱，兑换时从发行者钱包出。上限在发码时锁死。' : '直充：发码不调用上游。报价超过这里的上限会自动取消。' }}</p>
       <div class="flex flex-wrap gap-2">
         <el-button v-for="n in [1, 10, 50, 100]" :key="n" size="small" @click="issue.quantity = n">{{ n }}</el-button>
         <el-input-number v-model="issue.quantity" :min="1" :max="200" />
         <el-input v-model="issue.note" class="!max-w-xs" placeholder="备注，客服可搜" />
-        <el-button type="primary" :loading="issuing" @click="doIssue">生成</el-button>
+        <el-button type="primary" :loading="issuing" :disabled="!currentSupply" @click="doIssue">生成</el-button>
       </div>
-      <p class="text-sm">{{ issue.quantity }} 张 {{ planName(issue.plan) }} · {{ channelName(issue.channel) }} · {{ planCardLine(issue.plan) }}</p>
+      <p v-if="currentSupply" class="text-sm">{{ issue.quantity }} 张 {{ currentSupply.label }} · 来自 {{ sourceName(currentSupply.source) }}<template v-if="currentSupply.source === 'spacex'"> · {{ issue.payment_country }} 付款</template></p>
       <div v-if="links.length" class="space-y-1">
         <div class="flex gap-2">
           <el-button @click="copy(links.join('\n'))">复制兑换链接</el-button>
@@ -119,9 +126,40 @@
       </div>
     </div>
 
+    <div v-else-if="tab === 'supply'" class="card space-y-3">
+      <div>
+        <div class="font-semibold">每个套餐从哪家卡台出码</div>
+        <p class="text-xs text-muted mt-1">一个套餐同时只用一家。切换只影响之后发的码，已发出的码仍按原卡台兑换。每次切换都会写审计。</p>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>套餐</th>
+              <th>出码卡台</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="p in supply" :key="p.key">
+              <td class="font-medium">{{ p.label }}</td>
+              <td>
+                <el-radio-group :model-value="p.source" size="small" :disabled="savingSupply === p.key" @change="(v: any) => switchSupply(p, String(v))">
+                  <el-radio-button value="spacex" :disabled="!p.options.includes('spacex')">SpaceX</el-radio-button>
+                  <el-radio-button value="avan" :disabled="!p.options.includes('avan')">Avanfinity</el-radio-button>
+                  <el-radio-button value="off">停售</el-radio-button>
+                </el-radio-group>
+              </td>
+              <td class="text-xs text-muted">{{ supplyHint(p) }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
     <div v-else class="space-y-4">
       <div class="grid gap-3 md:grid-cols-2">
-        <div v-for="ch in channels" :key="'sw-' + ch.channel" class="card space-y-2">
+        <div v-for="ch in visibleChannels" :key="'sw-' + ch.channel" class="card space-y-2">
           <div class="flex items-center justify-between">
             <span class="font-semibold">{{ channelName(ch.channel) }}</span>
             <el-switch :model-value="ch.enabled" @change="onToggle(ch, $event)" />
@@ -150,11 +188,11 @@
                 <th>官方金额上限</th>
                 <th>CDK 钱包上限</th>
                 <th>CDK 注资</th>
-                <th>直充服务费上限</th>
+                <th v-if="X_DIRECT_UI">直充服务费上限</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in limits" :key="row.channel + row.plan">
+              <tr v-for="row in visibleLimits" :key="row.channel + row.plan">
                 <td>{{ planName(row.plan) }}</td>
                 <td>{{ row.channel === 'x_cdk' ? 'CDK' : '直充' }}</td>
                 <td><el-switch v-model="row.enabled" /></td>
@@ -163,7 +201,7 @@
                 <td><el-input v-model.number="row.max_official_amount_minor" class="!w-28" /></td>
                 <td><el-input v-model="row.max_wallet_debit_usd" class="!w-24" :disabled="row.channel !== 'x_cdk'" /></td>
                 <td><el-input v-model="row.funding_amount_usd" class="!w-24" :disabled="row.channel !== 'x_cdk'" /></td>
-                <td><el-input v-model="row.max_service_fee_usd" class="!w-24" :disabled="row.channel !== 'x_direct'" /></td>
+                <td v-if="X_DIRECT_UI"><el-input v-model="row.max_service_fee_usd" class="!w-24" :disabled="row.channel !== 'x_direct'" /></td>
               </tr>
             </tbody>
           </table>
@@ -172,7 +210,7 @@
           <el-form-item label="钱包低于（美元）告警" class="!mb-0">
             <el-input v-model="alerts.wallet_usd" />
           </el-form-item>
-          <el-form-item label="付款卡低于（美元）告警" class="!mb-0">
+          <el-form-item v-if="X_DIRECT_UI" label="付款卡低于（美元）告警" class="!mb-0">
             <el-input v-model="alerts.card_usd" />
           </el-form-item>
           <el-form-item label="单子卡住超过（分钟）" class="!mb-0">
@@ -186,10 +224,21 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { dialog } from '../../lib/dialog'
 import { authFetch } from '../../lib/api'
+import { X_DIRECT_UI } from '../../lib/features'
+
+interface SupplyRow {
+  key: string
+  label: string
+  source: string
+  options: string[]
+  enabled: boolean
+  spacex_plan: string
+  avan_plan: string
+}
 
 interface Sample {
   channel: string
@@ -226,7 +275,17 @@ interface RecordRow {
 }
 
 const router = useRouter()
-const tab = ref('records')
+const route = useRoute()
+const tab = ref(String(route.query.tab || 'records'))
+watch(() => route.query.tab, (v) => { if (v) tab.value = String(v) })
+const supply = ref<SupplyRow[]>([])
+const savingSupply = ref('')
+const regions = ['JP', 'US', 'PH', 'NG', 'TR', 'EG']
+const sellable = computed(() => supply.value.filter((p) => p.source !== 'off'))
+const currentSupply = computed(() => sellable.value.find((p) => p.key === issue.plan))
+const visibleStrips = computed(() => strips.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
+const visibleChannels = computed(() => channels.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
+const visibleLimits = computed(() => limits.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
 const channels = ref<any[]>([])
 const limits = ref<any[]>([])
 const samples = ref<Sample[]>([])
@@ -236,8 +295,7 @@ const saving = ref(false)
 const issuing = ref(false)
 const alerts = reactive({ wallet_usd: '', card_usd: '', stuck_minutes: '' })
 const overview = ref<any>(null)
-const planKeys = ['premium_3m', 'premium_6m', 'premium_12m', 'premium_plus_3m', 'premium_plus_6m', 'premium_plus_12m']
-const issue = reactive({ plan: 'premium_3m', channel: 'x_cdk', quantity: 1, note: '' })
+const issue = reactive({ plan: 'premium_3m', channel: 'x_cdk', quantity: 1, note: '', payment_country: 'JP' })
 const links = ref<string[]>([])
 const issuedCodes = ref<string[]>([])
 const batches = ref<any[]>([])
@@ -260,6 +318,12 @@ const names: Record<string, string> = {
   premium_plus_3m: 'Premium+ · 3 个月',
   premium_plus_6m: 'Premium+ · 6 个月',
   premium_plus_12m: 'Premium+ · 12 个月',
+  x_basic_monthly: 'Basic · 月付',
+  x_basic_yearly: 'Basic · 年付',
+  x_premium_monthly: 'Premium · 月付',
+  x_premium_yearly: 'Premium · 12 个月',
+  x_premium_plus_monthly: 'Premium+ · 月付',
+  x_premium_plus_yearly: 'Premium+ · 12 个月',
 }
 const statusNames: Record<string, string> = {
   unused: '未使用',
@@ -323,7 +387,33 @@ function eventsOf(row: RecordRow) {
   }
 }
 function goPlatform(id: number) {
-  router.push({ path: '/ops/platforms', query: { account: String(id || ''), tab: 'cards' } })
+  router.push({ path: '/ops/platforms', query: { account: String(id || ''), tab: 'overview' } })
+}
+function sourceName(s: string) { return s === 'spacex' ? 'SpaceX' : s === 'avan' ? 'Avanfinity' : '停售' }
+function supplyHint(p: SupplyRow) {
+  if (p.source === 'off') return '不在发码页显示'
+  if (p.source === 'spacex') return '客户兑换时填 X Cookie，按付款地区扣费'
+  return '客户只填 X 用户名，从 Avanfinity 钱包扣费'
+}
+async function loadSupply() {
+  const r = await authFetch('/api/v1/admin/x/supply')
+  const d = await r.json().catch(() => ({}))
+  if (!r.ok) return
+  supply.value = d.plans || []
+  if (!sellable.value.some((p) => p.key === issue.plan) && sellable.value.length) issue.plan = sellable.value[0].key
+}
+async function switchSupply(p: SupplyRow, source: string) {
+  if (source === p.source) return
+  const ok = await dialog.confirm(`把「${p.label}」改为 ${sourceName(source)}？之后发的码都走这里，已发出的码不受影响。`, { title: '切换出码卡台', okText: '切换' })
+  if (!ok) return
+  savingSupply.value = p.key
+  try {
+    const r = await authFetch('/api/v1/admin/x/supply', { method: 'PUT', body: JSON.stringify({ key: p.key, source }) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { dialog.toast(d.error || '切换失败', 'err'); return }
+    supply.value = d.plans || supply.value
+    dialog.toast('已切换', 'ok')
+  } finally { savingSupply.value = '' }
 }
 function locationOrigin() {
   return typeof window === 'undefined' ? '' : window.location.origin
@@ -334,9 +424,11 @@ async function copy(text: string) {
 async function doIssue() {
   issuing.value = true
   try {
-    const r = await authFetch('/api/v1/admin/x/issue', { method: 'POST', body: JSON.stringify(issue) })
+    const body = { plan: issue.plan, quantity: issue.quantity, note: issue.note, payment_country: issue.payment_country }
+    const r = await authFetch('/api/v1/admin/x/supply/issue', { method: 'POST', body: JSON.stringify(body) })
     const d = await r.json().catch(() => ({}))
     if (!r.ok) { dialog.toast(d.error || '发码失败', 'err'); return }
+    if (d.partial_error) dialog.toast('部分失败：' + d.partial_error, 'warn')
     links.value = d.links || []
     issuedCodes.value = d.codes || []
     dialog.toast(`已生成 ${issuedCodes.value.length} 张`, 'ok')
@@ -506,6 +598,7 @@ async function saveLimits() {
 
 onMounted(() => {
   void load()
+  void loadSupply()
   void loadBatches()
   void loadRecords()
   timer = setInterval(() => void loadOverview(), 30000)
@@ -519,4 +612,7 @@ onUnmounted(() => {
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 999px; background: #16a34a; }
 .dot.off { background: #d97706; }
 .dot.ok { background: #16a34a; }
+.src-tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; opacity: .8; }
+.src-tag.spacex { color: #2563eb; }
+.src-tag.avan { color: #7c3aed; }
 </style>
