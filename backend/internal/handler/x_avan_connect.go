@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -49,4 +50,27 @@ func AdminXConnectAvan(c *gin.Context) {
 	}
 	auditAdmin(c, "x_connect_avan", src.Name)
 	c.JSON(http.StatusOK, gin.H{"id": id, "created": true})
+}
+
+// AdminDeleteCardPlatform POST /api/v1/admin/card-platforms/delete
+// 有在途码、开着的 X 通道或是 GPT 主台时拒绝，提示先停用。
+func AdminDeleteCardPlatform(c *gin.Context) {
+	var req struct {
+		ID int64 `json:"id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.ID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
+		return
+	}
+	acc, err := db.GetCardPlatformAccount(req.ID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "卡台不存在"})
+		return
+	}
+	if err := db.DeleteCardPlatformAccount(req.ID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	auditAdmin(c, "delete_card_platform", fmt.Sprintf("id=%d name=%s protocol=%s", acc.ID, acc.Name, acc.Protocol))
+	AdminListCardPlatforms(c)
 }

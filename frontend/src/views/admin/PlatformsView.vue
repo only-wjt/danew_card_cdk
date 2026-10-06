@@ -29,23 +29,23 @@
         <template v-for="g in vendorGroups" :key="g.key">
           <div class="px-2 pt-3 text-xs tracking-wide text-muted first:pt-1">{{ g.label }}</div>
           <button
-            v-for="a in g.accounts"
-            :key="a.id"
+            v-for="item in g.items"
+            :key="item.key"
             type="button"
             class="side-item"
-            :class="{ on: sel === String(a.id) }"
-            @click="openAccount(a.id, 'overview')"
+            :class="{ on: item.parts.some((p) => sel === String(p.id)) }"
+            @click="openItem(item)"
           >
-            <span class="dot" :class="healthOf(a)" />
+            <span class="dot" :class="itemHealth(item)" />
             <span class="min-w-0 flex-1 text-left">
-              <span class="block truncate text-sm">{{ a.name }}</span>
-              <span class="block text-xs text-muted">{{ brief(a) }}</span>
+              <span class="block truncate text-sm">{{ item.parts[0].name }}</span>
+              <span class="block text-xs text-muted">{{ itemBrief(item) }}</span>
             </span>
             <span class="flex shrink-0 flex-col items-end gap-0.5">
-              <span v-for="r in rolesOf(a)" :key="r" class="role-tag">{{ r }}</span>
+              <span v-for="r in item.parts.flatMap(rolesOf)" :key="r" class="role-tag">{{ r }}</span>
             </span>
           </button>
-          <p v-if="!g.accounts.length" class="px-2 text-xs text-muted">还没有接入</p>
+          <p v-if="!g.items.length" class="px-2 text-xs text-muted">还没有接入</p>
         </template>
 
         <div class="px-2 pt-3 text-xs tracking-wide text-muted">规则</div>
@@ -82,7 +82,16 @@
               <el-button :type="current.status === 'active' ? 'danger' : 'success'" plain @click="toggleStatus">
                 {{ current.status === 'active' ? '停用' : '启用' }}
               </el-button>
+              <el-button type="danger" link :loading="deleting" @click="deleteAccount">删除</el-button>
             </div>
+          </div>
+          <div v-if="sibling" class="flex flex-wrap items-center gap-2">
+            <span class="text-xs text-muted">同一套凭证，GPT 和 X 分开启停：</span>
+            <el-radio-group :model-value="sel" size="small" @change="(v: any) => openAccount(Number(v), 'overview')">
+              <el-radio-button v-for="p in partsOf(current)" :key="p.id" :value="String(p.id)">
+                {{ p.serves_openai ? 'GPT' : 'X 会员' }} · {{ brief(p) }}
+              </el-radio-button>
+            </el-radio-group>
           </div>
           <el-alert v-if="current.last_error" :type="current.serves_openai ? 'warning' : 'error'" :closable="false" :title="current.last_error" />
 
@@ -433,13 +442,53 @@ const openaiAccounts = computed(() => accounts.value.filter((a) => a.serves_open
 const xAccounts = computed(() => accounts.value.filter((a) => !a.serves_openai))
 const current = computed(() => accounts.value.find((a) => String(a.id) === sel.value) || null)
 const supplyCounts = ref<Record<string, number>>({})
+interface SideItem {
+  key: string
+  parts: Acc[]
+}
+// Avan 的 GPT 行和 X 行在后台是两条记录；App ID 相同时在左侧合成一项，GPT 在前。
+function groupItems(list: Acc[], mergeByAppId: boolean): SideItem[] {
+  const out: SideItem[] = []
+  const byApp = new Map<string, SideItem>()
+  for (const a of list) {
+    const appKey = (a.app_id || '').trim()
+    const hit = mergeByAppId && appKey ? byApp.get(appKey) : undefined
+    if (hit && !hit.parts.some((p) => p.serves_openai === a.serves_openai)) {
+      hit.parts.push(a)
+      hit.parts.sort((x, y) => Number(y.serves_openai) - Number(x.serves_openai))
+      continue
+    }
+    const item = { key: String(a.id), parts: [a] }
+    out.push(item)
+    if (mergeByAppId && appKey && !byApp.has(appKey)) byApp.set(appKey, item)
+  }
+  return out
+}
 const vendorGroups = computed(() => {
   const byPriority = [...accounts.value].sort((a, b) => a.priority - b.priority || a.id - b.id)
   return [
-    { key: 'spacex', label: 'SPACEX', accounts: byPriority.filter((a) => vendorOf(a.protocol) === 'spacex') },
-    { key: 'avan', label: 'AVANFINITY', accounts: byPriority.filter((a) => vendorOf(a.protocol) === 'avan') },
+    { key: 'spacex', label: 'SPACEX', items: groupItems(byPriority.filter((a) => vendorOf(a.protocol) === 'spacex'), false) },
+    { key: 'avan', label: 'AVANFINITY', items: groupItems(byPriority.filter((a) => vendorOf(a.protocol) === 'avan'), true) },
   ]
 })
+const allItems = computed(() => vendorGroups.value.flatMap((g) => g.items))
+function partsOf(a: Acc | null): Acc[] {
+  if (!a) return []
+  return allItems.value.find((i) => i.parts.some((p) => p.id === a.id))?.parts || [a]
+}
+const sibling = computed(() => partsOf(current.value).length > 1)
+const healthRank: Record<string, number> = { ok: 0, off: 1, warn: 2, bad: 3 }
+function itemHealth(item: SideItem) {
+  return item.parts.map(healthOf).reduce((w, h) => (healthRank[h] > healthRank[w] ? h : w), 'ok')
+}
+function itemBrief(item: SideItem) {
+  if (item.parts.length === 1) return brief(item.parts[0])
+  return item.parts.map((p) => `${p.serves_openai ? 'GPT' : 'X'} ${brief(p)}`).join(' · ')
+}
+function openItem(item: SideItem) {
+  if (item.parts.some((p) => sel.value === String(p.id))) return
+  openAccount(item.parts[0].id, 'overview')
+}
 
 function rolesOf(a: Acc) {
   const out: string[] = []
@@ -713,6 +762,31 @@ async function toggleStatus() {
     return
   }
   await load()
+}
+
+const deleting = ref(false)
+async function deleteAccount() {
+  const a = current.value
+  if (!a) return
+  const what = sibling.value ? `「${a.name}」的 ${a.serves_openai ? 'GPT' : 'X 会员'} 部分` : `卡台「${a.name}」`
+  const ok = await dialog.confirm(`确定删除${what}吗？删除后凭证一起清掉，不能恢复。`)
+  if (!ok) return
+  deleting.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms/delete', { method: 'POST', body: JSON.stringify({ id: a.id }) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '删除失败', 'err')
+      return
+    }
+    const rest = partsOf(a).find((p) => p.id !== a.id)
+    await load()
+    if (rest && accounts.value.some((x) => x.id === rest.id)) openAccount(rest.id, 'overview')
+    else sel.value = 'policy'
+    dialog.toast('已删除', 'ok')
+  } finally {
+    deleting.value = false
+  }
 }
 
 async function pingOpenAI() {

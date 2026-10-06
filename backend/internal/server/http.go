@@ -311,6 +311,7 @@ func setupRoutes(r *gin.Engine) {
 			admin.POST("/card-platforms/webhook-secret", handler.AdminSetCardPlatformWebhookSecret)
 			admin.POST("/card-platforms/webhook-url", handler.AdminSetCardPlatformWebhookURL)
 			admin.POST("/card-platforms/status", handler.AdminSetCardPlatformStatus)
+			admin.POST("/card-platforms/delete", handler.AdminDeleteCardPlatform)
 			admin.POST("/card-platforms/reset-circuit", handler.AdminResetCardPlatformCircuit)
 			admin.POST("/card-platforms/ping", handler.AdminPingCardPlatform)
 			admin.POST("/card-platforms/probe-x", handler.AdminProbeXAccount)
