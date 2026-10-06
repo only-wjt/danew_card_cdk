@@ -99,11 +99,16 @@
               <div class="card">
                 <div class="text-xs text-muted">可消费余额</div>
                 <div class="mt-1 text-lg font-semibold">{{ openaiSpendable ? '$' + openaiSpendable : '—' }}</div>
-                <div class="text-xs text-muted">{{ openaiReserve ? '含保证金 $' + openaiReserve : '总余额里的保证金单独列出' }}</div>
+                <div v-if="balanceErr" class="text-xs text-amber-600">
+                  {{ balanceErr }}
+                  <button type="button" class="ml-1 underline" @click="tab = 'credentials'">去改凭证</button>
+                </div>
+                <div v-else class="text-xs text-muted">{{ openaiReserve ? '含保证金 $' + openaiReserve : '总余额里的保证金单独列出' }}</div>
               </div>
               <div class="card">
                 <div class="text-xs text-muted">服务费</div>
-                <div class="mt-1 text-sm">{{ feeLine || '点一键检测读取' }}</div>
+                <div class="mt-1 text-sm">{{ feeLine || (plansErr ? '读不到' : '点一键检测读取') }}</div>
+                <div v-if="plansErr && plansErr !== balanceErr" class="text-xs text-amber-600">{{ plansErr }}</div>
               </div>
               <div class="card">
                 <div class="text-xs text-muted">连通</div>
@@ -399,6 +404,8 @@ const pingMsg = ref('')
 const pingSpendable = ref('')
 const openaiSpendable = ref('')
 const openaiReserve = ref('')
+const balanceErr = ref('')
+const plansErr = ref('')
 const planFees = ref<{ key: string; label: string; fee_usd: number }[]>([])
 const probeSteps = ref<{ key: string; title: string; state: string; detail: string }[]>([])
 const xCards = ref<any[]>([])
@@ -558,6 +565,8 @@ function openAccount(id: number, nextTab: string) {
   openaiSpendable.value = ''
   openaiReserve.value = ''
   planFees.value = []
+  balanceErr.value = ''
+  plansErr.value = ''
 }
 
 async function loadOpenAIOverview() {
@@ -569,10 +578,16 @@ async function loadOpenAIOverview() {
     pingMsg.value = d.error || '读不到余额'
     return
   }
+  applyPing(d)
+}
+
+function applyPing(d: any) {
   openaiSpendable.value = d.spendable_usd || ''
   openaiReserve.value = d.reserve_usd || ''
   planFees.value = d.plan_fees || []
   pingSpendable.value = d.spendable_usd || ''
+  balanceErr.value = d.balance_error || ''
+  plansErr.value = d.plans_error || ''
   if (d.egress_ip) egressIp.value = d.egress_ip
 }
 
@@ -708,9 +723,9 @@ async function pingOpenAI() {
     const r = await authFetch('/api/v1/admin/card-platforms/ping', { method: 'POST', body: JSON.stringify({ id: a.id }) })
     const d = await r.json().catch(() => ({}))
     pingMsg.value = d.message || d.error || ''
-    pingSpendable.value = d.spendable_usd || ''
-    if (d.egress_ip) egressIp.value = d.egress_ip
-    dialog.toast(r.ok ? pingMsg.value || '已探测' : d.error || '探测失败', r.ok ? 'ok' : 'err')
+    if (r.ok) applyPing(d)
+    const good = r.ok && d.ok !== false
+    dialog.toast(good ? pingMsg.value || '已探测' : d.balance_error || d.error || '探测失败', good ? 'ok' : 'err')
     await load()
   } finally {
     pinging.value = false

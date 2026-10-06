@@ -131,9 +131,9 @@ const nav = computed(() => currentSkinMeta.value.nav)
 const navItems = [
   { path: '/ops', label: '总览', icon: 'Odometer' },
   { path: '/ops/cdkeys', label: 'CDK卡密', icon: 'Key' },
+  { path: '/ops/x', label: 'X 会员', icon: 'Star' },
   { path: '/ops/batch-recharge', label: '批量充值', icon: 'Upload' },
   { path: '/ops/orders', label: '兑换对账', icon: 'Document' },
-  { path: '/ops/x', label: 'X 会员', icon: 'Star' },
   { path: '/ops/platforms', label: '卡台', icon: 'Link' },
   { path: '/ops/appearance', label: '外观', icon: 'Brush' },
   { path: '/ops/audit', label: '审计', icon: 'List' },
