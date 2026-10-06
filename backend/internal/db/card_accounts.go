@@ -723,7 +723,7 @@ func MarkCardPlatformAccountOK(id int64) error {
 	}
 	_, err := DB.Exec(`
 		UPDATE card_platform_accounts
-		SET last_ok_at = CURRENT_TIMESTAMP, circuit_state = 'closed', circuit_fail_count = 0,
+		SET last_ok_at = CURRENT_TIMESTAMP, last_error = '', circuit_state = 'closed', circuit_fail_count = 0,
 		    circuit_opened_at = NULL, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, id)
