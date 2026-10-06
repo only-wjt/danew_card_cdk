@@ -22,44 +22,41 @@
       </div>
     </el-alert>
 
+    <PlatformMatrix :accounts="accounts" :supply-counts="supplyCounts" @open="(id: number) => openAccount(id, 'overview')" />
+
     <div class="grid gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
       <aside class="space-y-1">
-        <div class="px-2 pt-1 text-xs tracking-wide text-muted">OPENAI 发码</div>
-        <button
-          v-for="a in openaiAccounts"
-          :key="a.id"
-          type="button"
-          class="side-item"
-          :class="{ on: sel === String(a.id) }"
-          @click="openAccount(a.id, 'overview')"
-        >
-          <span class="dot" :class="healthOf(a)" />
-          <span class="min-w-0 flex-1 text-left">
-            <span class="block truncate text-sm">{{ a.name }}</span>
-            <span class="block text-xs text-muted">{{ a.is_primary_default ? '主台' : '备台' }} · {{ brief(a) }}</span>
-          </span>
-        </button>
-        <button type="button" class="side-item" :class="{ on: sel === 'policy' }" @click="sel = 'policy'">
-          <span class="text-sm">发码策略</span>
-          <span class="ml-auto text-xs text-muted">双绑 · 顺序</span>
-        </button>
+        <template v-for="g in vendorGroups" :key="g.key">
+          <div class="px-2 pt-3 text-xs tracking-wide text-muted first:pt-1">{{ g.label }}</div>
+          <button
+            v-for="a in g.accounts"
+            :key="a.id"
+            type="button"
+            class="side-item"
+            :class="{ on: sel === String(a.id) }"
+            @click="openAccount(a.id, 'overview')"
+          >
+            <span class="dot" :class="healthOf(a)" />
+            <span class="min-w-0 flex-1 text-left">
+              <span class="block truncate text-sm">{{ a.name }}</span>
+              <span class="block text-xs text-muted">{{ brief(a) }}</span>
+            </span>
+            <span class="flex shrink-0 flex-col items-end gap-0.5">
+              <span v-for="r in rolesOf(a)" :key="r" class="role-tag">{{ r }}</span>
+            </span>
+          </button>
+          <p v-if="!g.accounts.length" class="px-2 text-xs text-muted">还没有接入</p>
+        </template>
 
-        <div class="px-2 pt-3 text-xs tracking-wide text-muted">X 会员</div>
-        <button
-          v-for="a in xAccounts"
-          :key="a.id"
-          type="button"
-          class="side-item"
-          :class="{ on: sel === String(a.id) }"
-          @click="openAccount(a.id, 'overview')"
-        >
-          <span class="dot" :class="healthOf(a)" />
-          <span class="min-w-0 flex-1 text-left">
-            <span class="block truncate text-sm">{{ a.name }}</span>
-            <span class="block text-xs text-muted">{{ capLabel(a) }} · {{ brief(a) }}</span>
-          </span>
+        <div class="px-2 pt-3 text-xs tracking-wide text-muted">规则</div>
+        <button type="button" class="side-item" :class="{ on: sel === 'policy' }" @click="sel = 'policy'">
+          <span class="text-sm">GPT 发码策略</span>
+          <span class="ml-auto text-xs text-muted">主备 · 顺序</span>
         </button>
-        <p v-if="!xAccounts.length" class="px-2 text-xs text-muted">还没有 X 会员卡台</p>
+        <button type="button" class="side-item" @click="router.push({ path: '/ops/x', query: { tab: 'supply' } })">
+          <span class="text-sm">X 供货设置</span>
+          <span class="ml-auto text-xs text-muted">→</span>
+        </button>
 
         <div class="px-2 pt-3 text-xs tracking-wide text-muted">其他</div>
         <button type="button" class="side-item" :class="{ on: sel === 'orphan' }" @click="sel = 'orphan'">
@@ -77,8 +74,7 @@
             <el-tag :type="healthOf(current) === 'ok' ? 'success' : healthOf(current) === 'bad' ? 'danger' : 'warning'" effect="plain">
               {{ healthText(current) }}
             </el-tag>
-            <el-tag v-if="current.serves_openai" effect="plain">{{ current.is_primary_default ? '主台' : '备台' }}</el-tag>
-            <el-tag v-else type="warning" effect="plain">{{ capLabel(current) }}</el-tag>
+            <el-tag v-for="r in rolesOf(current)" :key="r" effect="plain">{{ r }}</el-tag>
             <span class="text-xs text-muted">{{ protocolLabel(current.protocol) }}</span>
             <div class="ml-auto flex gap-2">
               <el-button v-if="current.serves_openai" :loading="pinging" @click="pingOpenAI">测连通</el-button>
@@ -92,7 +88,7 @@
 
           <el-radio-group v-model="tab" size="small">
             <el-radio-button value="overview">概览</el-radio-button>
-            <el-radio-button value="cards">{{ current.serves_openai ? '选卡' : '付款卡' }}</el-radio-button>
+            <el-radio-button v-if="current.serves_openai || X_DIRECT_UI" value="cards">{{ current.serves_openai ? '选卡' : '付款卡' }}</el-radio-button>
             <el-radio-button v-if="current.serves_openai" value="webhook">回调</el-radio-button>
             <el-radio-button v-if="!current.serves_openai" value="calls">调用记录</el-radio-button>
             <el-radio-button value="credentials">凭证</el-radio-button>
@@ -241,7 +237,7 @@
                 <el-form-item label="App Secret"><el-input v-model="edit.cred_secret" type="password" show-password placeholder="留空不修改" /></el-form-item>
                 <template v-if="!current.serves_openai">
                   <el-checkbox v-model="edit.xCdk">X CDK</el-checkbox>
-                  <el-checkbox v-model="edit.xDirect" class="ml-4">X 直充</el-checkbox>
+                  <el-checkbox v-if="X_DIRECT_UI" v-model="edit.xDirect" class="ml-4">X 直充</el-checkbox>
                 </template>
                 <p v-else class="text-xs text-muted">Avanfinity 用 App ID 和 App Secret，请求走 /api/v1。</p>
               </template>
@@ -297,9 +293,9 @@
       <el-form label-position="top">
         <el-form-item label="这个卡台用来做什么">
           <el-select v-model="create.kind" class="w-full">
-            <el-option label="OpenAI · SpaceX 旧 OpenAPI" value="legacy" />
-            <el-option label="OpenAI · Avanfinity" value="avan_openai" />
-            <el-option label="X 会员 · Avanfinity" value="x" />
+            <el-option label="SpaceX · GPT + X CDK（OpenAPI Key）" value="legacy" />
+            <el-option label="Avanfinity · X CDK" value="x" />
+            <el-option label="Avanfinity · GPT 备台（默认关闭）" value="avan_openai" />
           </el-select>
         </el-form-item>
         <el-form-item label="名称"><el-input v-model="create.name" /></el-form-item>
@@ -308,12 +304,12 @@
           <el-form-item label="App ID"><el-input v-model="create.app_id" /></el-form-item>
           <el-form-item label="App Secret"><el-input v-model="create.secret" type="password" show-password /></el-form-item>
           <el-checkbox v-model="create.xCdk">X CDK</el-checkbox>
-          <el-checkbox v-model="create.xDirect" class="ml-4">X 直充</el-checkbox>
+          <el-checkbox v-if="X_DIRECT_UI" v-model="create.xDirect" class="ml-4">X 直充</el-checkbox>
         </template>
         <template v-else-if="create.kind === 'avan_openai'">
           <el-form-item label="App ID"><el-input v-model="create.app_id" /></el-form-item>
           <el-form-item label="App Secret"><el-input v-model="create.secret" type="password" show-password /></el-form-item>
-          <p class="text-xs text-muted">按文档走 /api/v1。新卡台默认排在最后，不设为主台。</p>
+          <p class="text-xs text-muted">按文档走 /api/v1。保存后默认是停用状态，排在最后，只做备台；需要时再手动启用。</p>
         </template>
         <template v-else>
           <el-form-item label="Open API Key"><el-input v-model="create.secret" type="password" show-password /></el-form-item>
@@ -334,7 +330,9 @@ import { useRoute, useRouter } from 'vue-router'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import WebhookEvents from './WebhookEvents.vue'
-import { AGENT_ENABLED } from '../../lib/features'
+import { AGENT_ENABLED, X_DIRECT_UI } from '../../lib/features'
+import PlatformMatrix from './PlatformMatrix.vue'
+import { vendorOf, gptRoleOf } from '../../lib/platformVendor'
 
 interface Acc {
   id: number
@@ -420,6 +418,36 @@ const create = reactive({
 const openaiAccounts = computed(() => accounts.value.filter((a) => a.serves_openai).sort((a, b) => a.priority - b.priority || a.id - b.id))
 const xAccounts = computed(() => accounts.value.filter((a) => !a.serves_openai))
 const current = computed(() => accounts.value.find((a) => String(a.id) === sel.value) || null)
+const supplyCounts = ref<Record<string, number>>({})
+const vendorGroups = computed(() => {
+  const byPriority = [...accounts.value].sort((a, b) => a.priority - b.priority || a.id - b.id)
+  return [
+    { key: 'spacex', label: 'SPACEX', accounts: byPriority.filter((a) => vendorOf(a.protocol) === 'spacex') },
+    { key: 'avan', label: 'AVANFINITY', accounts: byPriority.filter((a) => vendorOf(a.protocol) === 'avan') },
+  ]
+})
+
+function rolesOf(a: Acc) {
+  const out: string[] = []
+  if (a.serves_openai) {
+    const r = gptRoleOf(a, openaiAccounts.value)
+    out.push(r === 'primary' ? 'GPT 主台' : r === 'backup' ? 'GPT 备台' : 'GPT 停用')
+  }
+  if (vendorOf(a.protocol) === 'spacex' || hasCap(a, 'x_cdk')) out.push('X CDK')
+  if (X_DIRECT_UI && hasCap(a, 'x_direct')) out.push('X 直充')
+  return out
+}
+
+async function loadSupply() {
+  const r = await authFetch('/api/v1/admin/x/supply')
+  if (!r.ok) return
+  const d = await r.json().catch(() => ({}))
+  const counts: Record<string, number> = {}
+  for (const row of d.plans || []) {
+    if (row.source && row.enabled !== false) counts[row.source] = (counts[row.source] || 0) + 1
+  }
+  supplyCounts.value = counts
+}
 const webhookUrl = computed(() => current.value?.webhook_url || '')
 const swapUrl = computed(() => (typeof window === 'undefined' ? '/partner/swap' : `${window.location.origin}/partner/swap`))
 
@@ -579,7 +607,8 @@ async function createAccount() {
       site_base: create.site_base.trim(),
       cred_secret: create.secret.trim(),
       protocol: x ? 'avanfinity-api-v1' : create.kind === 'avan_openai' ? 'avanfinity-2026-08' : 'spacexcard-legacy',
-      status: 'active',
+      // Avan 的 GPT 只做备台，新建默认关闭，避免误参与发码
+      status: create.kind === 'avan_openai' ? 'disabled' : 'active',
       priority: 100,
       is_primary_default: false,
     }
@@ -648,6 +677,10 @@ async function toggleStatus() {
   const a = current.value
   if (!a) return
   const status = a.status === 'active' ? 'disabled' : 'active'
+  if (status === 'disabled' && a.serves_openai && gptRoleOf(a, openaiAccounts.value) === 'primary') {
+    dialog.toast('这是 GPT 主台，不能直接停用。先到「GPT 发码策略」把别的卡台调到第一位。', 'err')
+    return
+  }
   const r = await authFetch('/api/v1/admin/card-platforms/status', { method: 'POST', body: JSON.stringify({ id: a.id, status }) })
   const d = await r.json().catch(() => ({}))
   if (!r.ok) {
@@ -955,7 +988,7 @@ async function unblock(cardId: number) {
 }
 
 onMounted(async () => {
-  await Promise.all([load(), loadEgress(), loadSwap()])
+  await Promise.all([load(), loadEgress(), loadSwap(), loadSupply()])
   const qAccount = String(route.query.account || route.query.account_id || '')
   const qTab = String(route.query.tab || '')
   const panel = String(route.query.panel || '')
@@ -1009,4 +1042,13 @@ watch([sel, tab], () => {
 .dot.warn { background: #ca8a04; }
 .dot.bad { background: #dc2626; }
 .dot.off { background: #a3a3a3; }
+.role-tag {
+  font-size: 11px;
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.12));
+  color: var(--muted, #6b7280);
+  white-space: nowrap;
+}
 </style>
