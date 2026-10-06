@@ -53,9 +53,9 @@
           <span class="text-sm">GPT 发码策略</span>
           <span class="ml-auto text-xs text-muted">主备 · 顺序</span>
         </button>
-        <button type="button" class="side-item" @click="router.push({ path: '/ops/x', query: { tab: 'supply' } })">
+        <button type="button" class="side-item" :class="{ on: sel === 'supply' }" @click="sel = 'supply'">
           <span class="text-sm">X 供货设置</span>
-          <span class="ml-auto text-xs text-muted">→</span>
+          <span class="ml-auto text-xs text-muted">套餐 · 卡台</span>
         </button>
 
         <div class="px-2 pt-3 text-xs tracking-wide text-muted">其他</div>
@@ -270,6 +270,12 @@
           </div>
         </div>
 
+        <div v-else-if="sel === 'supply'" class="space-y-2">
+          <h3 class="text-lg font-semibold text-ink">X 供货设置</h3>
+          <p class="text-sm text-muted">和「X 会员 → 供货设置」是同一份配置，改哪边都行。</p>
+          <XSupplyTable @change="applySupply" />
+        </div>
+
         <div v-else-if="sel === 'orphan'" class="space-y-2">
           <h3 class="text-lg font-semibold text-ink">未归属回调</h3>
           <p class="text-sm text-muted">路径没对上任何卡台。通常是开发者页填错了地址。</p>
@@ -332,6 +338,7 @@ import { dialog } from '../../lib/dialog'
 import WebhookEvents from './WebhookEvents.vue'
 import { AGENT_ENABLED, X_DIRECT_UI } from '../../lib/features'
 import PlatformMatrix from './PlatformMatrix.vue'
+import XSupplyTable from '../../components/XSupplyTable.vue'
 import { vendorOf, gptRoleOf } from '../../lib/platformVendor'
 
 interface Acc {
@@ -442,9 +449,12 @@ async function loadSupply() {
   const r = await authFetch('/api/v1/admin/x/supply')
   if (!r.ok) return
   const d = await r.json().catch(() => ({}))
+  applySupply(d.plans || [])
+}
+function applySupply(plans: { source: string }[]) {
   const counts: Record<string, number> = {}
-  for (const row of d.plans || []) {
-    if (row.source && row.enabled !== false) counts[row.source] = (counts[row.source] || 0) + 1
+  for (const row of plans) {
+    if (row.source && row.source !== 'off') counts[row.source] = (counts[row.source] || 0) + 1
   }
   supplyCounts.value = counts
 }
@@ -995,6 +1005,7 @@ onMounted(async () => {
   if (panel === 'orphan') sel.value = 'orphan'
   else if (panel === 'swap' && AGENT_ENABLED) sel.value = 'swap'
   else if (panel === 'policy') sel.value = 'policy'
+  else if (panel === 'supply') sel.value = 'supply'
   else if (qAccount && accounts.value.some((a) => String(a.id) === qAccount)) {
     sel.value = qAccount
     tab.value = qTab || 'overview'
@@ -1012,7 +1023,7 @@ onMounted(async () => {
 
 watch([sel, tab], () => {
   if (tab.value === 'overview' && current.value?.serves_openai) void loadOpenAIOverview()
-  if (sel.value === 'policy' || sel.value === 'orphan' || sel.value === 'swap') {
+  if (['policy', 'supply', 'orphan', 'swap'].includes(sel.value)) {
     router.replace({ query: { panel: sel.value } })
     return
   }

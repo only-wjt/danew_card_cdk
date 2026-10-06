@@ -126,36 +126,7 @@
       </div>
     </div>
 
-    <div v-else-if="tab === 'supply'" class="card space-y-3">
-      <div>
-        <div class="font-semibold">每个套餐从哪家卡台出码</div>
-        <p class="text-xs text-muted mt-1">一个套餐同时只用一家。切换只影响之后发的码，已发出的码仍按原卡台兑换。每次切换都会写审计。</p>
-      </div>
-      <div class="overflow-x-auto">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>套餐</th>
-              <th>出码卡台</th>
-              <th>说明</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="p in supply" :key="p.key">
-              <td class="font-medium">{{ p.label }}</td>
-              <td>
-                <el-radio-group :model-value="p.source" size="small" :disabled="savingSupply === p.key" @change="(v: any) => switchSupply(p, String(v))">
-                  <el-radio-button value="spacex" :disabled="!p.options.includes('spacex')">SpaceX</el-radio-button>
-                  <el-radio-button value="avan" :disabled="!p.options.includes('avan')">Avanfinity</el-radio-button>
-                  <el-radio-button value="off">停售</el-radio-button>
-                </el-radio-group>
-              </td>
-              <td class="text-xs text-muted">{{ supplyHint(p) }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
+    <XSupplyTable v-else-if="tab === 'supply'" @change="onSupplyChange" />
 
     <div v-else class="space-y-4">
       <div class="grid gap-3 md:grid-cols-2">
@@ -229,6 +200,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { dialog } from '../../lib/dialog'
 import { authFetch } from '../../lib/api'
 import { X_DIRECT_UI } from '../../lib/features'
+import XSupplyTable from '../../components/XSupplyTable.vue'
 
 interface SupplyRow {
   key: string
@@ -279,7 +251,6 @@ const route = useRoute()
 const tab = ref(String(route.query.tab || 'records'))
 watch(() => route.query.tab, (v) => { if (v) tab.value = String(v) })
 const supply = ref<SupplyRow[]>([])
-const savingSupply = ref('')
 const regions = ['JP', 'US', 'PH', 'NG', 'TR', 'EG']
 const sellable = computed(() => supply.value.filter((p) => p.source !== 'off'))
 const currentSupply = computed(() => sellable.value.find((p) => p.key === issue.plan))
@@ -390,30 +361,15 @@ function goPlatform(id: number) {
   router.push({ path: '/ops/platforms', query: { account: String(id || ''), tab: 'overview' } })
 }
 function sourceName(s: string) { return s === 'spacex' ? 'SpaceX' : s === 'avan' ? 'Avanfinity' : '停售' }
-function supplyHint(p: SupplyRow) {
-  if (p.source === 'off') return '不在发码页显示'
-  if (p.source === 'spacex') return '客户兑换时填 X Cookie，按付款地区扣费'
-  return '客户只填 X 用户名，从 Avanfinity 钱包扣费'
+function onSupplyChange(plans: unknown[]) {
+  supply.value = plans as SupplyRow[]
+  if (!sellable.value.some((p) => p.key === issue.plan) && sellable.value.length) issue.plan = sellable.value[0].key
 }
 async function loadSupply() {
   const r = await authFetch('/api/v1/admin/x/supply')
   const d = await r.json().catch(() => ({}))
   if (!r.ok) return
-  supply.value = d.plans || []
-  if (!sellable.value.some((p) => p.key === issue.plan) && sellable.value.length) issue.plan = sellable.value[0].key
-}
-async function switchSupply(p: SupplyRow, source: string) {
-  if (source === p.source) return
-  const ok = await dialog.confirm(`把「${p.label}」改为 ${sourceName(source)}？之后发的码都走这里，已发出的码不受影响。`, { title: '切换出码卡台', okText: '切换' })
-  if (!ok) return
-  savingSupply.value = p.key
-  try {
-    const r = await authFetch('/api/v1/admin/x/supply', { method: 'PUT', body: JSON.stringify({ key: p.key, source }) })
-    const d = await r.json().catch(() => ({}))
-    if (!r.ok) { dialog.toast(d.error || '切换失败', 'err'); return }
-    supply.value = d.plans || supply.value
-    dialog.toast('已切换', 'ok')
-  } finally { savingSupply.value = '' }
+  onSupplyChange(d.plans || [])
 }
 function locationOrigin() {
   return typeof window === 'undefined' ? '' : window.location.origin
