@@ -318,6 +318,7 @@ func setupRoutes(r *gin.Engine) {
 			admin.GET("/card-platforms/x-calls", handler.AdminXCalls)
 			admin.POST("/card-platforms/reorder", handler.AdminReorderCardPlatforms)
 			admin.GET("/x/config", handler.AdminGetXConfig)
+			admin.POST("/x/connect-avan", handler.AdminXConnectAvan)
 			admin.GET("/x/overview", handler.AdminXOverview)
 			admin.POST("/x/issue", handler.AdminXIssue)
 			admin.GET("/x/batches", handler.AdminXBatches)
