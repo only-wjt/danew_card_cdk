@@ -540,7 +540,7 @@ export default {
     steps: ['Code', 'X account', 'Confirm', 'Activate'],
     codeLabel: 'Code',
     codePlaceholder: 'DNX-XXXXXXXX-XXXXXXXX-XXXXXXXX',
-    codeHint: 'A ChatGPT code (DN- or ZC-) jumps to the ChatGPT page.',
+    codeRequired: 'Please enter a code',
     next: 'Next',
     back: 'Back',
     valid: 'Code is valid',

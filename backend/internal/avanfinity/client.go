@@ -142,7 +142,8 @@ func (c *Client) do(ctx context.Context, method, path, idem string, body any, ou
 	if err := json.Unmarshal(raw, &env); err != nil {
 		return fmt.Errorf("avanfinity: 响应不是 JSON")
 	}
-	if env.Code != 200 {
+	// /api/v1 成功码有 0 也有 200，两种都算成功
+	if env.Code != 0 && env.Code != 200 {
 		return fmt.Errorf("avanfinity: code=%d", env.Code)
 	}
 	if len(env.Data) == 0 || string(env.Data) == "null" {

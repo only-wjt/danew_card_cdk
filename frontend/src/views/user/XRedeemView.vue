@@ -11,84 +11,88 @@
       <h1 v-if="!embedded" class="text-2xl font-bold text-ink">{{ t('xRedeem.title') }}</h1>
       <p v-if="!embedded" class="mt-1 text-sm text-muted">{{ t('xRedeem.subtitle') }}</p>
 
-      <div class="flex items-center text-sm" :class="embedded ? '' : 'mt-6'">
-        <template v-for="(label, i) in steps" :key="label">
-          <span :class="i <= stepIndex ? 'text-ink font-medium' : 'text-muted'">{{ i + 1 }}. {{ label }}</span>
-          <span v-if="i < steps.length - 1" class="mx-2 h-px flex-1 bg-current opacity-20" />
-        </template>
+      <!-- 步骤条与卡片样式和 ChatGPT 兑换页保持一致 -->
+      <div class="card mb-6" :class="embedded ? '' : 'mt-6'">
+        <div class="flex gap-2 text-sm flex-wrap">
+          <span v-for="(label, i) in steps" :key="label" class="pill" :class="i === stepIndex ? 'pill-info' : ''">{{ i + 1 }}. {{ label }}</span>
+        </div>
       </div>
 
-      <div class="card mt-6 space-y-4">
-        <div v-if="error" class="rounded-lg bg-soft p-3 text-sm" style="color: var(--err)">{{ error }}</div>
-
+      <div class="card space-y-4">
         <template v-if="phase === 'code'">
-          <label class="text-sm font-medium">{{ t('xRedeem.codeLabel') }}</label>
+          <div class="flex items-baseline justify-between gap-3">
+            <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.codeLabel') }}</h2>
+            <a :href="CARD_SHOP_URL" target="_blank" rel="noopener noreferrer" class="text-sm app-link shrink-0">{{ t('recharge.shopHint') }}</a>
+          </div>
           <input v-model="code" class="input mono" :placeholder="t('xRedeem.codePlaceholder')" @keyup.enter="preview" />
-          <p class="text-xs text-muted">{{ t('xRedeem.codeHint') }}</p>
-          <button class="btn-primary" :disabled="busy" @click="preview">{{ t('xRedeem.next') }}</button>
+          <div v-if="error" class="alert alert-error">{{ error }}</div>
+          <button class="btn-primary w-full" :disabled="busy" @click="preview">{{ t('xRedeem.next') }}</button>
         </template>
 
         <template v-else-if="phase === 'user' || phase === 'ineligible'">
+          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.handleLabel') }}</h2>
           <div v-if="phase === 'ineligible'" class="rounded-lg p-3 text-sm" style="background: var(--warn-soft, #fff7ed)">
             {{ t('xRedeem.ineligible') }}
           </div>
-          <div class="rounded-lg bg-soft p-3">
-            <div class="text-xs text-muted">{{ t('xRedeem.valid') }}</div>
+          <div class="rounded-xl bg-soft p-4 text-sm space-y-1">
+            <div class="text-muted">{{ t('xRedeem.valid') }}</div>
             <div class="font-semibold">{{ state?.plan_label }}</div>
           </div>
-          <label class="text-sm font-medium">{{ t('xRedeem.handleLabel') }}</label>
           <input v-model="handle" class="input" :placeholder="t('xRedeem.handlePlaceholder')" />
           <p v-if="normalized" class="text-sm">{{ t('xRedeem.willOpen') }} <strong>@{{ normalized }}</strong></p>
           <p v-else-if="handle.trim()" class="text-sm" style="color: var(--err)">{{ t('xRedeem.handleInvalid') }}</p>
-          <div class="flex gap-2">
-            <button class="btn-secondary" @click="phase = 'code'">{{ t('xRedeem.back') }}</button>
-            <button class="btn-primary" :disabled="!normalized || busy" @click="quote">{{ t('xRedeem.next') }}</button>
+          <div v-if="error" class="alert alert-error">{{ error }}</div>
+          <div class="flex gap-3">
+            <button class="btn-secondary flex-1" @click="phase = 'code'">{{ t('xRedeem.back') }}</button>
+            <button class="btn-primary flex-1" :disabled="!normalized || busy" @click="quote">{{ t('xRedeem.next') }}</button>
           </div>
         </template>
 
         <template v-else-if="phase === 'confirm'">
-          <div class="space-y-2 text-sm">
+          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.confirm') }}</h2>
+          <div class="rounded-xl bg-soft p-4 space-y-2 text-sm">
             <div class="flex justify-between"><span class="text-muted">{{ t('xRedeem.plan') }}</span><strong>{{ state?.plan_label }}</strong></div>
             <div class="flex justify-between"><span class="text-muted">{{ t('xRedeem.recipient') }}</span><strong>@{{ state?.recipient }}</strong></div>
           </div>
           <p v-if="state?.detail" class="text-sm">{{ state.detail }}</p>
           <a class="app-link text-sm" :href="`https://x.com/${state?.recipient}`" target="_blank" rel="noopener">{{ t('xRedeem.checkOnX') }}</a>
-          <p class="text-sm">{{ t('xRedeem.confirmHint') }}</p>
-          <div class="flex gap-2">
-            <button class="btn-secondary" @click="phase = 'user'">{{ t('xRedeem.backEdit') }}</button>
-            <button class="btn-primary" :disabled="busy" @click="confirm">{{ t('xRedeem.confirm') }}</button>
+          <p class="text-sm text-muted">{{ t('xRedeem.confirmHint') }}</p>
+          <div v-if="error" class="alert alert-error">{{ error }}</div>
+          <div class="flex gap-3">
+            <button class="btn-secondary flex-1" @click="phase = 'user'">{{ t('xRedeem.backEdit') }}</button>
+            <button class="btn-primary flex-1" :disabled="busy" @click="confirm">{{ t('xRedeem.confirm') }}</button>
           </div>
         </template>
 
         <template v-else-if="phase === 'queued'">
-          <h2 class="font-semibold">{{ t('xRedeem.queuedTitle') }}</h2>
+          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.queuedTitle') }}</h2>
           <p class="text-sm text-muted">{{ t('xRedeem.queuedBody', { n: state?.queue_ahead || 0 }) }}</p>
         </template>
 
         <template v-else-if="phase === 'progress'">
-          <h2 class="font-semibold">{{ state?.headline || t('xRedeem.title') }}</h2>
+          <h2 class="text-xl font-bold text-ink">{{ state?.headline || t('xRedeem.title') }}</h2>
           <p class="text-sm text-muted">{{ t('xRedeem.progressBody', { name: state?.recipient || '' }) }}</p>
           <p class="text-sm">{{ t('xRedeem.progressKeep') }}</p>
         </template>
 
         <template v-else-if="phase === 'done'">
-          <h2 class="font-semibold">{{ t('xRedeem.doneTitle') }}</h2>
+          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.doneTitle') }}</h2>
           <p class="text-sm">{{ t('xRedeem.doneBody', { name: state?.recipient || '', plan: state?.plan_label || '' }) }}</p>
-          <div class="flex gap-2">
-            <a class="btn-primary" :href="`https://x.com/${state?.recipient}`" target="_blank" rel="noopener">{{ t('xRedeem.openX') }}</a>
-            <button class="btn-secondary" @click="reset">{{ t('xRedeem.again') }}</button>
+          <div class="flex gap-3">
+            <a class="btn-primary flex-1 text-center" :href="`https://x.com/${state?.recipient}`" target="_blank" rel="noopener">{{ t('xRedeem.openX') }}</a>
+            <button class="btn-secondary flex-1" @click="reset">{{ t('xRedeem.again') }}</button>
           </div>
         </template>
 
         <template v-else-if="phase === 'locked'">
-          <h2 class="font-semibold">{{ t('xRedeem.lockedTitle') }}</h2>
+          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.lockedTitle') }}</h2>
           <p class="text-sm">{{ t('xRedeem.lockedBody') }}</p>
           <p class="mono text-sm">{{ code }}</p>
           <button class="btn-secondary" @click="copyCode">{{ t('xRedeem.copyCode') }}</button>
         </template>
 
         <template v-else>
-          <h2 class="font-semibold">{{ t('xRedeem.deadTitle') }}</h2>
+          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.deadTitle') }}</h2>
           <p class="text-sm text-muted">{{ t('xRedeem.deadBody') }}</p>
         </template>
       </div>
@@ -102,6 +106,8 @@ import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
+
+const CARD_SHOP_URL = 'https://card.danew.cc'
 
 interface State {
   plan_label: string
@@ -164,8 +170,12 @@ async function post(path: string, body: Record<string, string>) {
 
 async function preview() {
   const raw = code.value.trim()
-  // DNX- 才是用户名开通。DN- 本站码和 ZC- 卡台码都走 ChatGPT 兑换页。
-  if ((/^DN-/i.test(raw) && !/^DNX-/i.test(raw)) || /^ZC-/i.test(raw)) {
+  if (!raw) {
+    error.value = t('xRedeem.codeRequired')
+    return
+  }
+  // 只有本站 DNX- 码走用户名开通；其余码（含卡台 X 订阅码）交给 ChatGPT 兑换页识别，和那边只认 DNX- 的逻辑对称。
+  if (!/^DNX-/i.test(raw)) {
     if (props.embedded) emit('switch-gpt', raw)
     else router.replace({ path: '/recharge', query: { code: raw } })
     return
