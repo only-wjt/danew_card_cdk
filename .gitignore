@@ -77,3 +77,4 @@ backend/cdk-recharge
 cdk-bundle*.tgz
 cdk-bundle*.sha256
 dist/
+.openbitfun/

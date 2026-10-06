@@ -164,7 +164,8 @@ async function post(path: string, body: Record<string, string>) {
 
 async function preview() {
   const raw = code.value.trim()
-  if (/^DN-/i.test(raw) && !/^DNX-/i.test(raw)) {
+  // DNX- 才是用户名开通。DN- 本站码和 ZC- 卡台码都走 ChatGPT 兑换页。
+  if ((/^DN-/i.test(raw) && !/^DNX-/i.test(raw)) || /^ZC-/i.test(raw)) {
     if (props.embedded) emit('switch-gpt', raw)
     else router.replace({ path: '/recharge', query: { code: raw } })
     return

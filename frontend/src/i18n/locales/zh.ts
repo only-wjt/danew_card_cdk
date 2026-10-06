@@ -536,7 +536,7 @@ export default {
     steps: ['卡密', 'X 账号', '确认', '开通'],
     codeLabel: '卡密',
     codePlaceholder: 'DNX-XXXXXXXX-XXXXXXXX-XXXXXXXX',
-    codeHint: 'ChatGPT 卡密（DN- 开头）会自动跳到 ChatGPT 兑换页。',
+    codeHint: 'ChatGPT 卡密（DN-、ZC- 开头）会自动跳到 ChatGPT 兑换页。',
     next: '下一步',
     back: '上一步',
     valid: '卡密有效',
