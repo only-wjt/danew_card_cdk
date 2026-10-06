@@ -97,6 +97,7 @@
             {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${planLabel(form.plan)} · $${estimatedTotal}` }}
           </el-button>
         </div>
+        <p v-if="isRenewPlan" class="text-xs font-semibold" style="color: var(--err)">⚠️ 续费完成后请联系客户取消自动续费，不取消次月可能会连续扣款</p>
         <p v-if="!configured" class="text-xs" style="color: var(--err)">请先在「卡台配置」填写 Base 与 sk_</p>
         <p v-else-if="!form.funding_confirmed" class="text-xs text-muted">勾选「确认承担兑换资金」后再购买。实付由本账户承担，服务费从卡台余额扣除。</p>
         <div v-if="issueError" class="alert alert-error">{{ issueError }}</div>
@@ -331,6 +332,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
+import { isCardAttachPlan } from '../../lib/plan'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
@@ -445,6 +447,9 @@ const planCards = computed(() =>
     requiresActiveSubscription: !!meta.requires_active_subscription,
   })),
 )
+
+// 绑卡档(Pro 20x 续费):生成这种 CDK 要提醒代理，续费后让客户取消自动续费。
+const isRenewPlan = computed(() => isCardAttachPlan(form.plan, planMeta(form.plan)?.flow))
 
 const canIssue = computed(() =>
   configured.value && form.funding_confirmed && form.count >= 1 && form.count <= ISSUE_MAX && !issuing.value &&
