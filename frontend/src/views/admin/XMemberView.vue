@@ -26,8 +26,15 @@
           <span class="font-semibold">Avanfinity X</span>
           <el-tag size="small" type="info" effect="plain">未接入 · 可选</el-tag>
         </div>
-        <p class="text-sm text-muted">现在所有 X 套餐都能走 SpaceX，不接也能发码。要用 Avanfinity 出码，先在卡台页添加一台「Avanfinity · X CDK」。</p>
-        <el-button size="small" @click="router.push('/ops/platforms')">去卡台添加</el-button>
+        <template v-if="avanGptAcc">
+          <p class="text-sm">{{ avanGptAcc.name }}（GPT 备台）已配好凭证，X 可以直接用同一套。</p>
+          <p class="text-sm text-muted">点下面开通后，再去卡台选一下付款方式（自动开卡或固定卡）并启用，Avanfinity 套餐就能发码。</p>
+          <el-button size="small" type="primary" :loading="connecting" @click="connectAvan">用 {{ avanGptAcc.name }} 的凭证开通 X</el-button>
+        </template>
+        <template v-else>
+          <p class="text-sm text-muted">现在所有 X 套餐都能走 SpaceX，不接也能发码。要用 Avanfinity 出码，先在卡台页添加一台「Avanfinity · X CDK」。</p>
+          <el-button size="small" @click="router.push('/ops/platforms')">去卡台添加</el-button>
+        </template>
       </div>
       <div v-for="ch in avanStrips" :key="ch.channel" class="card space-y-2">
         <div class="flex items-center gap-2">
@@ -44,7 +51,9 @@
         </p>
         <p v-if="ch.payments_enabled === false" class="text-sm" style="color: var(--err)">上游已关闭付款</p>
         <p v-if="ch.alert" class="text-sm" style="color: var(--warn, #b45309)">{{ ch.alert }}</p>
-        <el-button size="small" @click="goPlatform(ch.account_id)">在卡台查看</el-button>
+        <p v-if="ch.channel === 'x_cdk' && !ch.enabled" class="text-sm" style="color: var(--warn, #b45309)">通道还没启用：去卡台「选卡」里选付款方式并启用，Avanfinity 套餐才能发码。</p>
+        <el-button v-if="ch.channel === 'x_cdk' && !ch.enabled" size="small" type="primary" @click="goPlatform(ch.account_id || avanXAcc?.id || 0, 'cards')">去选付款方式</el-button>
+        <el-button v-else size="small" @click="goPlatform(ch.account_id)">在卡台查看</el-button>
       </div>
     </div>
 
@@ -62,13 +71,19 @@
     <div v-if="tab === 'issue'" class="card space-y-4">
       <p v-if="!sellable.length" class="text-sm text-muted">还没有在售的套餐，先去「供货设置」选卡台。</p>
       <div class="grid gap-2 sm:grid-cols-3">
-        <button v-for="p in sellable" :key="p.key" type="button" class="rounded-lg border px-3 py-2 text-left" :class="issue.plan === p.key ? 'border-current' : ''" @click="issue.plan = p.key">
+        <div v-for="p in sellable" :key="p.key" role="button" tabindex="0" class="rounded-lg border px-3 py-2 text-left cursor-pointer" :class="[issue.plan === p.key ? 'border-current' : '', planBlocked(p) ? 'opacity-60' : '']" @click="issue.plan = p.key" @keydown.enter="issue.plan = p.key">
           <div class="flex items-center justify-between gap-2">
             <span class="font-medium">{{ p.label }}</span>
             <span class="src-tag" :class="p.source">{{ sourceName(p.source) }}</span>
           </div>
-          <div class="text-xs text-muted mt-1">{{ p.source === 'avan' ? planCardLine(p.avan_plan) : '兑换时客户填 X Cookie' }}</div>
-        </button>
+          <div class="text-xs text-muted mt-1">
+            <template v-if="p.source !== 'avan'">兑换时客户填 X Cookie</template>
+            <span v-else-if="!avanXAcc" style="color: var(--warn, #b45309)">Avanfinity X 未接入</span>
+            <span v-else-if="!avanEnabled" style="color: var(--warn, #b45309)">X CDK 通道未启用</span>
+            <button v-else-if="!limitFilled(p.avan_plan)" type="button" class="app-link" @click.stop="tab = 'settings'">还没填上限，去填</button>
+            <template v-else>{{ planCardLine(p.avan_plan) }}</template>
+          </div>
+        </div>
       </div>
       <p class="text-sm text-muted">{{ currentSupply?.source === 'spacex' ? 'SpaceX：发码时锁定付款地区，客户兑换时要填 X 的 Cookie（auth_token / ct0）。' : 'Avanfinity：发码不扣钱，兑换时从钱包出，客户只填 X 用户名。上限在发码时锁死。' }}</p>
       <div v-if="currentSupply?.source === 'spacex'" class="flex flex-wrap items-center gap-2">
@@ -81,8 +96,11 @@
         <el-button v-for="n in [1, 10, 50, 100]" :key="n" size="small" @click="issue.quantity = n">{{ n }}</el-button>
         <el-input-number v-model="issue.quantity" :min="1" :max="200" />
         <el-input v-model="issue.note" class="!max-w-xs" placeholder="备注，客服可搜" />
-        <el-button type="primary" :loading="issuing" :disabled="!currentSupply" @click="doIssue">生成</el-button>
+        <el-button type="primary" :loading="issuing" :disabled="!currentSupply || planBlocked(currentSupply)" @click="doIssue">生成</el-button>
       </div>
+      <p v-if="currentSupply && planBlocked(currentSupply)" class="text-sm" style="color: var(--warn, #b45309)">
+        {{ !avanXAcc ? '这个套餐走 Avanfinity，但 Avanfinity X 还没接入，先在上方开通；或在「供货设置」里改成 SpaceX。' : 'X CDK 通道还没启用，先去卡台选付款方式并启用。' }}
+      </p>
       <p v-if="currentSupply" class="text-sm">{{ issue.quantity }} 张 {{ currentSupply.label }} · 来自 {{ sourceName(currentSupply.source) }}<template v-if="currentSupply.source === 'spacex'"> · {{ issue.payment_country }} 付款</template></p>
       <div v-if="links.length" class="space-y-1">
         <div class="flex gap-2">
@@ -282,6 +300,10 @@ const spacexAcc = computed(() => {
   return sx.find((a) => a.is_primary_default) || sx.find((a) => a.status === 'active') || sx[0]
 })
 const avanXAcc = computed(() => accounts.value.find((a) => a.protocol === 'avanfinity-api-v1'))
+// GPT 备台和 X 账户用同一套 Avanfinity 凭证；有备台时可以一键开通 X。
+const avanGptAcc = computed(() => accounts.value.find((a) => a.protocol === 'avanfinity-2026-08' && a.app_id && a.has_credential))
+const avanEnabled = computed(() => !!channels.value.find((c) => c.channel === 'x_cdk')?.enabled)
+const connecting = ref(false)
 const spacexCount = computed(() => supply.value.filter((p) => p.source === 'spacex').length)
 const avanCount = computed(() => supply.value.filter((p) => p.source === 'avan').length)
 const avanStrips = computed(() => (avanXAcc.value ? visibleStrips.value : visibleStrips.value.filter((s) => s.channel !== 'x_cdk')))
@@ -379,6 +401,25 @@ function planCardLine(plan: string) {
   if (row?.max_official_amount_minor) return `上限 ${row.max_official_amount_minor} ${row.currency || ''}`
   return '还没填上限'
 }
+// 和后端 limitsReady 对齐：钱包上限、币种、官方金额上限都要有。
+function limitFilled(plan: string) {
+  const row = limits.value.find((r) => r.channel === 'x_cdk' && r.plan === plan)
+  return !!(row?.max_wallet_debit_usd && row?.currency && row?.max_official_amount_minor)
+}
+function planBlocked(p: SupplyRow) {
+  return p.source === 'avan' && (!avanXAcc.value || !avanEnabled.value)
+}
+async function connectAvan() {
+  connecting.value = true
+  try {
+    const r = await authFetch('/api/v1/admin/x/connect-avan', { method: 'POST' })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) { dialog.toast(d.error || '开通失败', 'err'); return }
+    dialog.toast('已开通，去选付款方式并启用通道', 'ok')
+    await load()
+    goPlatform(d.id, 'cards')
+  } finally { connecting.value = false }
+}
 function eventsOf(row: RecordRow) {
   try {
     const parsed = JSON.parse(row.events || '[]')
@@ -387,8 +428,8 @@ function eventsOf(row: RecordRow) {
     return []
   }
 }
-function goPlatform(id: number) {
-  router.push({ path: '/ops/platforms', query: { account: String(id || ''), tab: 'overview' } })
+function goPlatform(id: number, tab = 'overview') {
+  router.push({ path: '/ops/platforms', query: { account: String(id || ''), tab } })
 }
 function sourceName(s: string) { return s === 'spacex' ? 'SpaceX' : s === 'avan' ? 'Avanfinity' : '停售' }
 function onSupplyChange(plans: unknown[]) {
