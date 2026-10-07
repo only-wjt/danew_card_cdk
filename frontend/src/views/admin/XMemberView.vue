@@ -51,7 +51,7 @@
         </p>
         <p v-if="ch.payments_enabled === false" class="text-sm" style="color: var(--err)">上游已关闭付款</p>
         <p v-if="ch.alert" class="text-sm" style="color: var(--warn, #b45309)">{{ ch.alert }}</p>
-        <p v-if="ch.channel === 'x_cdk' && !ch.enabled" class="text-sm" style="color: var(--warn, #b45309)">通道还没启用：去卡台「选卡」里选付款方式并启用，Avanfinity 套餐才能发码。</p>
+        <p v-if="ch.channel === 'x_cdk' && !ch.enabled" class="text-sm" style="color: var(--warn, #b45309)">通道还没启用：点下面按钮去卡台「付款卡」，选好后点「保存并启用通道」，再回来填「上限与告警」。</p>
         <el-button v-if="ch.channel === 'x_cdk' && !ch.enabled" size="small" type="primary" @click="goPlatform(ch.account_id || avanXAcc?.id || 0, 'cards')">去选付款方式</el-button>
         <el-button v-else size="small" @click="goPlatform(ch.account_id)">在卡台查看</el-button>
       </div>
@@ -99,7 +99,7 @@
         <el-button type="primary" :loading="issuing" :disabled="!currentSupply || planBlocked(currentSupply)" @click="doIssue">生成</el-button>
       </div>
       <p v-if="currentSupply && planBlocked(currentSupply)" class="text-sm" style="color: var(--warn, #b45309)">
-        {{ !avanXAcc ? '这个套餐走 Avanfinity，但 Avanfinity X 还没接入，先在上方开通；或在「供货设置」里改成 SpaceX。' : 'X CDK 通道还没启用，先去卡台选付款方式并启用。' }}
+        {{ !avanXAcc ? '这个套餐走 Avanfinity，但 Avanfinity X 还没接入，先在上方开通；或在「供货设置」里改成 SpaceX。' : 'X CDK 通道还没启用：先去卡台「付款卡」点「保存并启用通道」。' }}
       </p>
       <p v-if="currentSupply" class="text-sm">{{ issue.quantity }} 张 {{ currentSupply.label }} · 来自 {{ sourceName(currentSupply.source) }}<template v-if="currentSupply.source === 'spacex'"> · {{ issue.payment_country }} 付款</template></p>
       <div v-if="links.length" class="space-y-1">

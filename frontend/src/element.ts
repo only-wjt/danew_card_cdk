@@ -22,7 +22,7 @@ import { ElInputNumber } from 'element-plus/es/components/input-number/index.mjs
 import { ElOption, ElSelect } from 'element-plus/es/components/select/index.mjs'
 import { ElPagination } from 'element-plus/es/components/pagination/index.mjs'
 import { ElPopover } from 'element-plus/es/components/popover/index.mjs'
-import { ElRadioButton, ElRadioGroup } from 'element-plus/es/components/radio/index.mjs'
+import { ElRadio, ElRadioButton, ElRadioGroup } from 'element-plus/es/components/radio/index.mjs'
 import { ElResult } from 'element-plus/es/components/result/index.mjs'
 import { ElSwitch } from 'element-plus/es/components/switch/index.mjs'
 import { ElTable, ElTableColumn } from 'element-plus/es/components/table/index.mjs'
@@ -59,6 +59,7 @@ import 'element-plus/theme-chalk/el-overlay.css'
 import 'element-plus/theme-chalk/el-pagination.css'
 import 'element-plus/theme-chalk/el-popover.css'
 import 'element-plus/theme-chalk/el-popper.css'
+import 'element-plus/theme-chalk/el-radio.css'
 import 'element-plus/theme-chalk/el-radio-button.css'
 import 'element-plus/theme-chalk/el-radio-group.css'
 import 'element-plus/theme-chalk/el-result.css'
@@ -75,7 +76,7 @@ import 'element-plus/theme-chalk/dark/css-vars.css'
 const components = [
   ElAlert, ElButton, ElButtonGroup, ElCard, ElCheckbox, ElDescriptions, ElDescriptionsItem,
   ElDialog, ElDrawer, ElDropdown, ElDropdownItem, ElDropdownMenu, ElEmpty, ElForm, ElFormItem,
-  ElIcon, ElInput, ElInputNumber, ElOption, ElPagination, ElPopover, ElRadioButton, ElRadioGroup,
+  ElIcon, ElInput, ElInputNumber, ElOption, ElPagination, ElPopover, ElRadio, ElRadioButton, ElRadioGroup,
   ElResult, ElSelect, ElSwitch, ElTable, ElTableColumn, ElTag, ElTooltip,
 ]
 

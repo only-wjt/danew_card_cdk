@@ -22,7 +22,8 @@ func TestDeleteCardPlatformAccountGuards(t *testing.T) {
 		t.Fatal("primary should not be deletable")
 	}
 
-	if err := SaveXChannel(XChannel{Channel: XChannelCDK, AccountID: xID, Enabled: true, AutoCard: true}); err != nil {
+	if err := SaveXChannel(XChannel{Channel: XChannelCDK, AccountID: xID, Enabled: true, AutoCard: true,
+		AutoCardProduct: "P1", AutoCardFirstName: "San", AutoCardLastName: "Zhang"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := DeleteCardPlatformAccount(xID); err == nil {

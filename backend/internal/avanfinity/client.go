@@ -68,6 +68,28 @@ type Card struct {
 	Balance          string `json:"balance"`
 }
 
+// Product 是 /api/v1/products 里给自动开卡选卡头用的字段。
+type Product struct {
+	ProductCode string `json:"productCode"`
+	Issuer      string `json:"issuer"`
+	Network     string `json:"network"`
+	IssuingArea string `json:"issuingArea"`
+	OpenFee     string `json:"openFee"`
+	RechargeRate string `json:"rechargeRate"`
+	MinAmount   string `json:"minAmount"`
+	MaxAmount   string `json:"maxAmount"`
+	DisplayBin  string `json:"displayBin"`
+	Description string `json:"description"`
+}
+
+func (c *Client) ListProducts(ctx context.Context) ([]Product, error) {
+	var list []Product
+	if err := c.do(ctx, http.MethodGet, "/api/v1/products", "", nil, &list, true); err != nil {
+		return nil, err
+	}
+	return list, nil
+}
+
 func (c *Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
