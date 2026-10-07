@@ -1244,14 +1244,22 @@ func maybeEscalate(code *db.XCode, red *db.XRedemption) {
 	notify.SendText("X 会员兑换超时：" + code.Code + " 状态 " + red.UpstreamStatus)
 }
 
-// DisableCode 作废未使用或锁定中的码。CDK 只在还没动钱时撤销上游码。
+// DisableCode 只作废还没开始兑换的码。付款结果未确认的码可能已经动过钱，
+// 不能从列表里一键作废，要在兑换记录里人工处理。
 func DisableCode(ctx context.Context, id int64) error {
+	return disableCode(ctx, id, false)
+}
+
+func disableCode(ctx context.Context, id int64, manual bool) error {
 	code, err := db.GetXCode(id)
 	if err != nil {
 		return err
 	}
 	if code.Status == "completed" {
 		return fmt.Errorf("已经开通的码不能作废")
+	}
+	if !manual && code.Status != "unused" {
+		return fmt.Errorf("只有未使用的码可以作废")
 	}
 	if code.Channel == db.XChannelCDK && code.UpstreamCDKID != "" && code.Status == "unused" {
 		acc, err := accountForCode(code)
@@ -1315,7 +1323,7 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 		code.Status = "unused"
 		appendEvent(&red, "人工放回未使用："+note)
 	case "disable":
-		if err := DisableCode(ctx, code.ID); err != nil {
+		if err := disableCode(ctx, code.ID, true); err != nil {
 			return err
 		}
 		code.Status = "disabled"

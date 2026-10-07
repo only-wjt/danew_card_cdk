@@ -155,12 +155,12 @@ func AdminXBatches(c *gin.Context) {
 }
 
 func AdminXRecords(c *gin.Context) {
-	rows, err := db.ListXRecords(c.Query("group"), c.Query("q"), 100)
+	rows, total, err := db.ListXRecords(c.Query("group"), c.Query("q"), c.Query("plan"), 100)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"records": rows})
+	c.JSON(http.StatusOK, gin.H{"records": rows, "total": total, "limit": 100})
 }
 
 func AdminXRequery(c *gin.Context) {

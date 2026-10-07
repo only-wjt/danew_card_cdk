@@ -91,9 +91,10 @@ func (c *Client) RevokeCDK(ctx context.Context, id, idem string) error {
 	return c.Call(ctx, http.MethodPost, "/api/v1/x-direct/cdks/"+id+"/revoke", idem, nil, nil, true)
 }
 
+// 公共兑换接口实测在 /api/public/x-cdk/*（不带 /v1），带 /v1 会返回 404；鉴权接口仍在 /api/v1。
 func (c *Client) PreviewCDK(ctx context.Context, code, deviceToken string) (*PublicCDK, error) {
 	var out PublicCDK
-	err := c.Call(ctx, http.MethodPost, "/api/v1/public/x-cdk/preview", "", map[string]string{
+	err := c.Call(ctx, http.MethodPost, "/api/public/x-cdk/preview", "", map[string]string{
 		"code": code, "deviceToken": deviceToken,
 	}, &out, false)
 	return &out, err
@@ -101,7 +102,7 @@ func (c *Client) PreviewCDK(ctx context.Context, code, deviceToken string) (*Pub
 
 func (c *Client) PreflightCDK(ctx context.Context, code, deviceToken, recipient, clientRequestID string) (*PublicCDK, error) {
 	var out PublicCDK
-	err := c.Call(ctx, http.MethodPost, "/api/v1/public/x-cdk/preflight", "", map[string]string{
+	err := c.Call(ctx, http.MethodPost, "/api/public/x-cdk/preflight", "", map[string]string{
 		"code": code, "deviceToken": deviceToken, "recipient": recipient, "clientRequestId": clientRequestID,
 	}, &out, false)
 	return &out, err
@@ -115,13 +116,13 @@ func (c *Client) RedeemCDK(ctx context.Context, code, deviceToken, clientRequest
 		"currency":            strings.ToLower(strings.TrimSpace(currency)),
 	}
 	var out PublicCDK
-	err := c.Call(ctx, http.MethodPost, "/api/v1/public/x-cdk/redeem", "", body, &out, false)
+	err := c.Call(ctx, http.MethodPost, "/api/public/x-cdk/redeem", "", body, &out, false)
 	return &out, err
 }
 
 func (c *Client) ResultCDK(ctx context.Context, code, deviceToken, clientRequestID string) (*PublicCDK, error) {
 	var out PublicCDK
-	err := c.Call(ctx, http.MethodPost, "/api/v1/public/x-cdk/result", "", map[string]string{
+	err := c.Call(ctx, http.MethodPost, "/api/public/x-cdk/result", "", map[string]string{
 		"code": code, "deviceToken": deviceToken, "clientRequestId": clientRequestID,
 	}, &out, false)
 	return &out, err

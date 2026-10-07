@@ -452,7 +452,55 @@ func ListXCodesByBatch(batchID int64) ([]XCode, error) {
 	return out, rows.Err()
 }
 
-func ListXRecords(group, q string, limit int) ([]map[string]any, error) {
+// xRecordGroupSQL 与 recordGroup 同一套分组，放进 WHERE，避免先 LIMIT 再筛选把旧码搜丢。
+func xRecordGroupSQL() string {
+	return `CASE
+		WHEN COALESCE(r.resolved_at,'') != '' AND c.status != 'completed' THEN 'done'
+		WHEN c.status = 'unused' THEN 'unused'
+		WHEN c.status = 'completed' THEN 'done'
+		WHEN c.status = 'disabled' THEN 'failed'
+		WHEN c.status IN ('uncertain','review_required','requires_action') THEN 'todo'
+		WHEN COALESCE(r.error_code,'') = 'SPENDABLE_BALANCE_INSUFFICIENT' THEN 'todo'
+		ELSE 'running'
+	END`
+}
+
+func xRecordFilter(group, q, plan string) (string, []any) {
+	var conds []string
+	var args []any
+	if g := strings.TrimSpace(group); g != "" && g != "all" {
+		conds = append(conds, xRecordGroupSQL()+" = ?")
+		args = append(args, g)
+	}
+	if p := strings.TrimSpace(plan); p != "" {
+		conds = append(conds, "c.plan = ?")
+		args = append(args, p)
+	}
+	if q = strings.TrimSpace(q); q != "" {
+		like := "%" + q + "%"
+		conds = append(conds, `(c.code LIKE ? COLLATE NOCASE OR COALESCE(r.recipient,'') LIKE ? COLLATE NOCASE OR COALESCE(c.note,'') LIKE ? COLLATE NOCASE)`)
+		args = append(args, like, like, like)
+	}
+	if len(conds) == 0 {
+		return "", nil
+	}
+	return " WHERE " + strings.Join(conds, " AND "), args
+}
+
+const xRecordFrom = `
+	FROM x_codes c
+	LEFT JOIN x_redemptions r ON r.id = (SELECT id FROM x_redemptions WHERE x_code_id = c.id ORDER BY id DESC LIMIT 1)`
+
+func ListXRecords(group, q, plan string, limit int) ([]map[string]any, int, error) {
+	where, args := xRecordFilter(group, q, plan)
+	var total int
+	if err := DB.QueryRow(`SELECT COUNT(*) `+xRecordFrom+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	listArgs := append(append([]any{}, args...), limit)
 	rows, err := DB.Query(`
 		SELECT c.id, c.code, c.plan, c.channel, c.account_id, c.status, c.note, COALESCE(c.created_at,''),
 		       COALESCE(r.id,0), COALESCE(r.recipient,''), COALESCE(r.message,''), COALESCE(r.upstream_status,''),
@@ -460,30 +508,22 @@ func ListXRecords(group, q string, limit int) ([]map[string]any, error) {
 		       COALESCE(r.amount_minor,0), COALESCE(r.currency,''), COALESCE(r.estimated_usd_e4,0), COALESCE(r.service_fee_e4,0),
 		       COALESCE(r.poll_count,0), COALESCE(r.payment_attempted,0), COALESCE(r.funding_dispatched,0), COALESCE(r.payment_dispatched,0),
 		       COALESCE(r.upstream_order_id,''), COALESCE(r.client_request_id,''), COALESCE(r.resolved_note,'')
-		FROM x_codes c
-		LEFT JOIN x_redemptions r ON r.id = (SELECT id FROM x_redemptions WHERE x_code_id = c.id ORDER BY id DESC LIMIT 1)
+	`+xRecordFrom+where+`
 		ORDER BY c.id DESC LIMIT ?
-	`, limit)
+	`, listArgs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
-	q = strings.ToLower(strings.TrimSpace(q))
 	var out []map[string]any
 	for rows.Next() {
 		var id, accountID, rid, amount, est, fee int64
 		var poll, pay, fund, dispatched int
 		var code, plan, channel, status, note, created, recipient, message, upstream, errCode, events, resolved, currency, orderID, clientReq, resolvedNote string
 		if err := rows.Scan(&id, &code, &plan, &channel, &accountID, &status, &note, &created, &rid, &recipient, &message, &upstream, &errCode, &events, &resolved, &amount, &currency, &est, &fee, &poll, &pay, &fund, &dispatched, &orderID, &clientReq, &resolvedNote); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		g := recordGroup(status, errCode, resolved)
-		if group != "" && group != "all" && g != group {
-			continue
-		}
-		if q != "" && !strings.Contains(strings.ToLower(code+" "+recipient+" "+note), q) {
-			continue
-		}
 		out = append(out, map[string]any{
 			"code_id": id, "account_id": accountID, "redemption_id": rid, "code": code, "plan": plan, "channel": channel,
 			"status": status, "group": g, "note": note, "created_at": created, "recipient": recipient,
@@ -493,7 +533,7 @@ func ListXRecords(group, q string, limit int) ([]map[string]any, error) {
 			"upstream_order_id": orderID, "client_request_id": clientReq, "resolved_note": resolvedNote,
 		})
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func recordGroup(status, errCode, resolved string) string {

@@ -70,16 +70,16 @@ type Card struct {
 
 // Product 是 /api/v1/products 里给自动开卡选卡头用的字段。
 type Product struct {
-	ProductCode string `json:"productCode"`
-	Issuer      string `json:"issuer"`
-	Network     string `json:"network"`
-	IssuingArea string `json:"issuingArea"`
-	OpenFee     string `json:"openFee"`
+	ProductCode  string `json:"productCode"`
+	Issuer       string `json:"issuer"`
+	Network      string `json:"network"`
+	IssuingArea  string `json:"issuingArea"`
+	OpenFee      string `json:"openFee"`
 	RechargeRate string `json:"rechargeRate"`
-	MinAmount   string `json:"minAmount"`
-	MaxAmount   string `json:"maxAmount"`
-	DisplayBin  string `json:"displayBin"`
-	Description string `json:"description"`
+	MinAmount    string `json:"minAmount"`
+	MaxAmount    string `json:"maxAmount"`
+	DisplayBin   string `json:"displayBin"`
+	Description  string `json:"description"`
 }
 
 func (c *Client) ListProducts(ctx context.Context) ([]Product, error) {
@@ -158,21 +158,32 @@ func (c *Client) do(ctx context.Context, method, path, idem string, body any, ou
 	if out == nil {
 		return nil
 	}
-	var env struct {
-		Code int             `json:"code"`
-		Data json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(raw, &env); err != nil {
+	return decodePayload(raw, out)
+}
+
+// decodePayload 同时接受两种成功体：
+// 鉴权接口是 {"code":0|200,"data":{...}}；公开兑换接口有时把 plan/status 直接放在顶层。
+// 顶层没有 code 时不能把缺省的 0 当成「成功但 data 为空」，否则报价和兑换会按空快照继续。
+func decodePayload(raw []byte, out any) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
 		return fmt.Errorf("avanfinity: 响应不是 JSON")
 	}
-	// /api/v1 成功码有 0 也有 200，两种都算成功
-	if env.Code != 0 && env.Code != 200 {
-		return fmt.Errorf("avanfinity: code=%d", env.Code)
+	if codeRaw, ok := probe["code"]; ok {
+		var code int
+		if err := json.Unmarshal(codeRaw, &code); err != nil {
+			return fmt.Errorf("avanfinity: 响应不是 JSON")
+		}
+		if code != 0 && code != 200 {
+			return fmt.Errorf("avanfinity: code=%d", code)
+		}
+		data := probe["data"]
+		if len(data) == 0 || string(data) == "null" {
+			return nil
+		}
+		return json.Unmarshal(data, out)
 	}
-	if len(env.Data) == 0 || string(env.Data) == "null" {
-		return nil
-	}
-	return json.Unmarshal(env.Data, out)
+	return json.Unmarshal(raw, out)
 }
 
 func (c *Client) GetBalance(ctx context.Context) (*Balance, error) {

@@ -7,6 +7,25 @@ import (
 	"testing"
 )
 
+func TestPublicCDKAcceptsWrappedAndFlatBodies(t *testing.T) {
+	for _, body := range []string{
+		`{"code":0,"data":{"plan":"premium_3m","status":"quoted","amountMinor":1200,"currency":"usd"}}`,
+		`{"plan":"premium_3m","status":"quoted","amountMinor":1200,"currency":"usd"}`,
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/api/public/x-cdk/preflight" {
+				t.Errorf("path %s", r.URL.Path)
+			}
+			_, _ = w.Write([]byte(body))
+		}))
+		pub, err := (&Client{Base: srv.URL, HTTP: srv.Client()}).PreflightCDK(context.Background(), "code", "dev", "name", "req")
+		srv.Close()
+		if err != nil || pub.Plan != "premium_3m" || pub.Status != "quoted" || pub.AmountMinor != 1200 {
+			t.Fatalf("%s: err=%v pub=%+v", body, err, pub)
+		}
+	}
+}
+
 func TestBalanceAcceptsCodeZeroAndRejectsOthers(t *testing.T) {
 	for _, tc := range []struct {
 		body string

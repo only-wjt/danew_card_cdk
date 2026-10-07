@@ -68,7 +68,8 @@
       <el-radio-button value="settings">上限与告警</el-radio-button>
     </el-radio-group>
 
-    <div v-if="tab === 'issue'" class="card space-y-4">
+    <template v-if="tab === 'issue'">
+    <div class="card space-y-4">
       <p v-if="!sellable.length" class="text-sm text-muted">还没有在售的套餐，先去「供货设置」选卡台。</p>
       <div class="grid gap-2 sm:grid-cols-3">
         <div v-for="p in sellable" :key="p.key" role="button" tabindex="0" class="rounded-lg border px-3 py-2 text-left cursor-pointer" :class="[issue.plan === p.key ? 'border-current' : '', planBlocked(p) ? 'opacity-60' : '']" @click="issue.plan = p.key" @keydown.enter="issue.plan = p.key">
@@ -86,38 +87,198 @@
         </div>
       </div>
       <p class="text-sm text-muted">{{ currentSupply?.source === 'spacex' ? 'SpaceX：发码时锁定付款地区，客户兑换时要填 X 的 Cookie（auth_token / ct0）。' : 'Avanfinity：发码不扣钱，兑换时从钱包出，客户只填 X 用户名。上限在发码时锁死。' }}</p>
-      <div v-if="currentSupply?.source === 'spacex'" class="flex flex-wrap items-center gap-2">
-        <span class="text-sm">付款地区</span>
-        <el-radio-group v-model="issue.payment_country" size="small">
-          <el-radio-button v-for="r in regions" :key="r" :value="r">{{ r }}</el-radio-button>
-        </el-radio-group>
+      <div class="flex flex-wrap items-center gap-3">
+        <span class="text-sm text-muted">数量</span>
+        <el-button size="small" :disabled="issue.quantity <= 1" @click="issue.quantity = Math.max(1, issue.quantity - 1)">−</el-button>
+        <input v-model.number="issue.quantity" type="number" min="1" max="200" class="input !w-16 text-center mono" />
+        <el-button size="small" :disabled="issue.quantity >= 200" @click="issue.quantity = Math.min(200, issue.quantity + 1)">+</el-button>
+        <el-button-group>
+          <el-button v-for="n in [1, 10, 50, 100, 200]" :key="n" size="small" @click="issue.quantity = n">{{ n }}</el-button>
+        </el-button-group>
+        <template v-if="currentSupply?.source === 'spacex'">
+          <span class="text-sm text-muted">付款地区</span>
+          <el-select v-model="issue.payment_country" size="small" style="width: 120px">
+            <el-option v-for="r in regions" :key="r" :label="r" :value="r" />
+          </el-select>
+        </template>
+        <el-input v-model="issue.note" size="small" class="!w-48" placeholder="备注，客服可搜" />
+        <el-button type="primary" :loading="issuing" :disabled="!currentSupply || planBlocked(currentSupply)" @click="doIssue">
+          {{ issuing ? '生成中…' : `生成 ${issue.quantity} 张 ${currentSupply?.label || ''}` }}
+        </el-button>
       </div>
-      <div class="flex flex-wrap gap-2">
-        <el-button v-for="n in [1, 10, 50, 100]" :key="n" size="small" @click="issue.quantity = n">{{ n }}</el-button>
-        <el-input-number v-model="issue.quantity" :min="1" :max="200" />
-        <el-input v-model="issue.note" class="!max-w-xs" placeholder="备注，客服可搜" />
-        <el-button type="primary" :loading="issuing" :disabled="!currentSupply || planBlocked(currentSupply)" @click="doIssue">生成</el-button>
-      </div>
-      <p v-if="currentSupply && planBlocked(currentSupply)" class="text-sm" style="color: var(--warn, #b45309)">
+      <p v-if="currentSupply && planBlocked(currentSupply)" class="text-xs" style="color: var(--warn, #b45309)">
         {{ !avanXAcc ? '这个套餐走 Avanfinity，但 Avanfinity X 还没接入，先在上方开通；或在「供货设置」里改成 SpaceX。' : 'X CDK 通道还没启用：先去卡台「付款卡」点「保存并启用通道」。' }}
       </p>
-      <p v-if="currentSupply" class="text-sm">{{ issue.quantity }} 张 {{ currentSupply.label }} · 来自 {{ sourceName(currentSupply.source) }}<template v-if="currentSupply.source === 'spacex'"> · {{ issue.payment_country }} 付款</template></p>
-      <div v-if="links.length" class="space-y-1">
-        <div class="flex gap-2">
-          <el-button @click="copy(links.join('\n'))">复制兑换链接</el-button>
-          <el-button @click="copy(issuedCodes.join('\n'))">复制卡密</el-button>
+      <div v-if="issuedCodes.length" class="rounded-xl bg-soft p-3 space-y-2 border" style="border-color: var(--good)">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="text-sm font-medium" style="color: var(--good)">
+            本批 {{ issuedCodes.length }} 张
+            <span v-if="issuedMeta" class="text-xs text-muted font-normal">
+              · {{ issuedMeta.plan }} · {{ issuedMeta.source }}<template v-if="issuedMeta.region"> · {{ issuedMeta.region }} 付款</template> · {{ issuedMeta.at }}
+            </span>
+          </div>
+          <div class="flex gap-1">
+            <el-button size="small" type="success" @click="copy(issuedCodes.join('\n'))">复制</el-button>
+            <el-button size="small" @click="copy(links.join('\n'))">复制链接</el-button>
+            <el-button size="small" @click="downloadText(issuedCodes, 'x-cdk')">导出</el-button>
+            <el-button size="small" text type="danger" @click="clearIssued">清除</el-button>
+          </div>
         </div>
-        <div v-for="link in links" :key="link" class="mono text-xs">{{ link }}</div>
-      </div>
-      <div class="text-sm font-medium">最近批次</div>
-      <div v-for="b in batches" :key="b.id" class="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <span>{{ b.created_at }} · {{ planName(b.plan) }} · {{ channelName(b.channel) }} · {{ b.used }}/{{ b.quantity }} · {{ batchStatus(b.status) }} · {{ b.note }}</span>
-        <span class="flex gap-2">
-          <button v-if="b.status === 'pending'" class="app-link" type="button" @click="retryBatch(b.id)">重试这一批</button>
-          <button class="app-link" type="button" @click="exportBatch(b.id)">导出</button>
-        </span>
+        <textarea
+          class="input mono text-sm !min-h-[88px] w-full"
+          readonly
+          :value="issuedCodes.join('\n')"
+          @focus="($event.target as HTMLTextAreaElement).select()"
+        />
       </div>
     </div>
+
+    <section class="card space-y-3">
+      <div>
+        <h2 class="text-lg font-semibold text-ink">CDK 列表</h2>
+        <p class="text-xs text-muted mt-0.5">共 {{ listTotal }} 条 · 只列 Avanfinity 出的码（DNX-），SpaceX 出的码在「CDK 卡密」页</p>
+      </div>
+      <div class="toolbar-filters">
+        <el-input v-model="listQ" clearable class="!w-[260px]" placeholder="搜索卡密 / 用户名 / 备注" @keyup.enter="loadList" @clear="loadList" />
+        <el-select v-model="listGroup" placeholder="状态" class="!w-[130px]" @change="loadList">
+          <el-option v-for="g in groups" :key="g.key" :label="g.label" :value="g.key" />
+        </el-select>
+        <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[160px]" @change="loadList">
+          <el-option v-for="k in listPlans" :key="k" :label="planName(k)" :value="k" />
+        </el-select>
+        <el-button type="primary" :loading="loadingList" @click="loadList">查询</el-button>
+        <el-button :loading="loadingList" @click="loadList(); loadBatches()">刷新</el-button>
+        <span class="flex-1"></span>
+        <el-dropdown trigger="click" @command="onCopyCommand">
+          <el-button size="small">复制 / 导出<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="copySelected" :disabled="!listSelected.length">复制选中 ({{ listSelected.length }})</el-dropdown-item>
+              <el-dropdown-item command="exportSelected" :disabled="!listSelected.length">导出选中 .txt</el-dropdown-item>
+              <el-dropdown-item command="copyPage" :disabled="!pagedList.length">复制本页 ({{ pagedList.length }})</el-dropdown-item>
+              <el-dropdown-item divided command="exportAll" :disabled="!filteredList.length">导出当前列表 ({{ filteredList.length }})</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-dropdown trigger="click" @command="onBatchCommand">
+          <el-button size="small">批量操作<el-icon class="el-icon--right"><ArrowDown /></el-icon></el-button>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="copyLinks" :disabled="!listSelected.length">复制兑换链接 ({{ listSelected.length }})</el-dropdown-item>
+              <el-dropdown-item divided command="disable" :disabled="!selectedDisableable.length">批量作废 ({{ selectedDisableable.length }})</el-dropdown-item>
+              <el-dropdown-item command="clearSel" :disabled="!listSelected.length">清空选择</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </div>
+      <div class="overflow-x-auto">
+        <el-table
+          :data="pagedList"
+          v-loading="loadingList"
+          size="small"
+          stripe
+          empty-text="暂无数据"
+          row-key="code_id"
+          @selection-change="(rows: RecordRow[]) => (listSelected = rows)"
+        >
+          <el-table-column type="selection" width="44" reserve-selection />
+          <el-table-column label="ID" width="72">
+            <template #default="{ row }">{{ row.code_id }}</template>
+          </el-table-column>
+          <el-table-column label="卡密" min-width="240">
+            <template #default="{ row }">
+              <button type="button" class="code-cell" title="点击复制完整码" @click="copy(row.code)">
+                <span class="mono break-all code-cell__text is-full">{{ row.code }}</span>
+                <span class="code-cell__meta">
+                  <el-tag size="small" type="success" effect="plain">完整</el-tag>
+                  <span class="text-subtle">{{ row.code.length }}字 · 点复制</span>
+                </span>
+              </button>
+            </template>
+          </el-table-column>
+          <el-table-column label="套餐" min-width="130">
+            <template #default="{ row }">{{ planName(row.plan) }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" :type="groupTagType(row.group)" :title="row.message || ''">{{ statusName(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="开通给" min-width="130">
+            <template #default="{ row }">
+              <span v-if="row.recipient" class="mono">{{ '@' + row.recipient }}</span>
+              <span v-else class="text-subtle">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="参考金额" width="96">
+            <template #default="{ row }"><span class="mono">{{ usd(row.estimated_usd_e4) }}</span></template>
+          </el-table-column>
+          <el-table-column label="服务费" width="88">
+            <template #default="{ row }"><span class="mono">{{ usd(row.service_fee_e4) }}</span></template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="140">
+            <template #default="{ row }">
+              <span v-if="row.note" class="note-cell__text">{{ row.note }}</span>
+              <span v-else class="note-cell__empty">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column prop="created_at" label="时间" min-width="148" />
+          <el-table-column label="" width="72" fixed="right" align="right">
+            <template #default="{ row }">
+              <el-dropdown trigger="click" @command="(cmd: string) => onRowCommand(cmd, row)">
+                <el-button size="small" link>操作</el-button>
+                <template #dropdown>
+                  <el-dropdown-menu>
+                    <el-dropdown-item command="copy">复制卡密</el-dropdown-item>
+                    <el-dropdown-item command="link">复制兑换链接</el-dropdown-item>
+                    <el-dropdown-item command="detail">看兑换记录</el-dropdown-item>
+                    <el-dropdown-item v-if="row.redemption_id" command="requery">重新查询</el-dropdown-item>
+                    <el-dropdown-item v-if="canDisable(row)" command="disable" divided>作废</el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+        <span>第 {{ listPage }} 页 · 共 {{ listTotal }} 条<template v-if="listTotal > listRows.length"> · 这里列出最新 {{ listRows.length }} 张，搜索卡密可以找到更早的</template></span>
+        <el-pagination
+          background
+          layout="prev, pager, next, sizes"
+          :total="filteredList.length"
+          :page-size="listPageSize"
+          :current-page="listPage"
+          :page-sizes="[20, 50, 100]"
+          @current-change="(p: number) => (listPage = p)"
+          @size-change="(s: number) => { listPageSize = s; listPage = 1 }"
+        />
+      </div>
+      <details v-if="batches.length" class="text-sm">
+        <summary class="cursor-pointer text-muted">最近批次（{{ batches.length }}）</summary>
+        <el-table :data="batches" size="small" stripe class="mt-2">
+          <el-table-column label="批次" width="72" prop="id" />
+          <el-table-column label="套餐" min-width="130">
+            <template #default="{ row }">{{ planName(row.plan) }}</template>
+          </el-table-column>
+          <el-table-column label="已用 / 张数" width="110">
+            <template #default="{ row }">{{ row.used }} / {{ row.quantity }}</template>
+          </el-table-column>
+          <el-table-column label="状态" width="90">
+            <template #default="{ row }">{{ batchStatus(row.status) }}</template>
+          </el-table-column>
+          <el-table-column label="备注" min-width="120" prop="note" />
+          <el-table-column label="时间" min-width="148" prop="created_at" />
+          <el-table-column label="" width="140" align="right">
+            <template #default="{ row }">
+              <el-button v-if="row.status === 'pending'" size="small" link @click="retryBatch(row.id)">重试</el-button>
+              <el-button size="small" link @click="exportBatch(row.id)">导出</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </details>
+    </section>
+    </template>
 
     <div v-else-if="tab === 'records'" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <div class="space-y-3">
@@ -149,7 +310,7 @@
         <div class="flex flex-wrap gap-2">
           <el-button v-if="selected.redemption_id" size="small" @click="requery(selected.redemption_id)">重新查询</el-button>
           <el-button v-if="selected.group === 'todo' && selected.redemption_id" size="small" @click="resolve(selected)">人工处理</el-button>
-          <el-button v-if="selected.status === 'unused' || selected.status === 'uncertain'" size="small" @click="disableCode(selected)">作废</el-button>
+          <el-button v-if="selected.status === 'unused'" size="small" @click="disableCode(selected)">作废</el-button>
           <el-button size="small" @click="copy(locationOrigin() + '/x?code=' + selected.code)">复制兑换链接</el-button>
         </div>
         <details class="text-xs text-muted">
@@ -240,6 +401,7 @@ import { dialog } from '../../lib/dialog'
 import { authFetch } from '../../lib/api'
 import { X_DIRECT_UI } from '../../lib/features'
 import XSupplyTable from '../../components/XSupplyTable.vue'
+import { ArrowDown } from '@element-plus/icons-vue'
 
 interface SupplyRow {
   key: string
@@ -363,6 +525,93 @@ const statusNames: Record<string, string> = {
 }
 let timer: ReturnType<typeof setInterval> | null = null
 
+// 发码页下方的 CDK 列表（布局和「CDK 卡密」页一致）
+const issuedMeta = ref<{ plan: string; source: string; region: string; at: string } | null>(null)
+const listQ = ref('')
+const listGroup = ref('all')
+const listPlan = ref('')
+const listPage = ref(1)
+const listPageSize = ref(50)
+const listRows = ref<RecordRow[]>([])
+const loadingList = ref(false)
+const listSelected = ref<RecordRow[]>([])
+const listTotal = ref(0)
+const filteredList = computed(() => listRows.value)
+const listPlans = computed(() => Array.from(new Set([...Object.keys(names), ...listRows.value.map((r) => r.plan)])))
+const pagedList = computed(() => {
+  const start = (listPage.value - 1) * listPageSize.value
+  return filteredList.value.slice(start, start + listPageSize.value)
+})
+const selectedDisableable = computed(() => listSelected.value.filter(canDisable))
+function canDisable(row: RecordRow) { return row.status === 'unused' }
+function groupTagType(g: string) {
+  if (g === 'done') return 'success'
+  if (g === 'todo') return 'danger'
+  if (g === 'running') return 'warning'
+  return 'info'
+}
+function redeemLink(code: string) { return locationOrigin() + '/x?code=' + code }
+async function loadList() {
+  loadingList.value = true
+  try {
+    const params = new URLSearchParams({ group: listGroup.value, q: listQ.value.trim() })
+    if (listPlan.value) params.set('plan', listPlan.value)
+    const r = await authFetch(`/api/v1/admin/x/records?${params}`)
+    const d = await r.json().catch(() => ({}))
+    listRows.value = d.records || []
+    listTotal.value = Number(d.total ?? listRows.value.length)
+    listPage.value = 1
+  } finally { loadingList.value = false }
+}
+function downloadText(lines: string[], prefix: string) {
+  const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${prefix}-${Date.now()}.txt`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+function clearIssued() {
+  issuedCodes.value = []
+  links.value = []
+  issuedMeta.value = null
+}
+function onCopyCommand(cmd: string) {
+  if (cmd === 'copySelected') void copy(listSelected.value.map((r) => r.code).join('\n'))
+  else if (cmd === 'exportSelected') downloadText(listSelected.value.map((r) => r.code), 'x-cdk')
+  else if (cmd === 'copyPage') void copy(pagedList.value.map((r) => r.code).join('\n'))
+  else if (cmd === 'exportAll') downloadText(filteredList.value.map((r) => r.code), 'x-cdk')
+}
+async function onBatchCommand(cmd: string) {
+  if (cmd === 'copyLinks') { void copy(listSelected.value.map((r) => redeemLink(r.code)).join('\n')); return }
+  if (cmd === 'clearSel') { listSelected.value = []; return }
+  if (cmd !== 'disable') return
+  const rows = selectedDisableable.value
+  const ok = await dialog.confirm(`作废选中的 ${rows.length} 张未使用卡密？CDK 通道会同时撤销还没动钱的上游码。付款未确认的码请到兑换记录里人工处理。`, { title: '批量作废', danger: true, okText: '作废' })
+  if (!ok) return
+  let fail = 0
+  for (const row of rows) {
+    const r = await authFetch(`/api/v1/admin/x/codes/${row.code_id}/disable`, { method: 'POST' })
+    if (!r.ok) fail++
+  }
+  dialog.toast(fail ? `${rows.length - fail} 张已作废，${fail} 张失败` : `已作废 ${rows.length} 张`, fail ? 'warn' : 'ok')
+  await loadList()
+  await loadRecords()
+}
+function onRowCommand(cmd: string, row: RecordRow) {
+  if (cmd === 'copy') void copy(row.code)
+  else if (cmd === 'link') void copy(redeemLink(row.code))
+  else if (cmd === 'requery') void requery(row.redemption_id)
+  else if (cmd === 'disable') void disableCode(row)
+  else if (cmd === 'detail') {
+    recGroup.value = 'all'
+    recQ.value = row.code
+    tab.value = 'records'
+    void loadRecords().then(() => { selected.value = records.value.find((r) => r.code_id === row.code_id) || row })
+  }
+}
+
 function planName(k: string) { return names[k] || k }
 function statusName(k: string) { return statusNames[k] || k }
 function channelName(k: string) { return k === 'x_cdk' ? 'X CDK' : k === 'x_direct' ? 'X 直充' : k }
@@ -458,9 +707,16 @@ async function doIssue() {
     if (d.partial_error) dialog.toast('部分失败：' + d.partial_error, 'warn')
     links.value = d.links || []
     issuedCodes.value = d.codes || []
+    issuedMeta.value = {
+      plan: currentSupply.value?.label || planName(issue.plan),
+      source: sourceName(d.source || currentSupply.value?.source || ''),
+      region: (d.source || currentSupply.value?.source) === 'spacex' ? issue.payment_country : '',
+      at: new Date().toLocaleString(),
+    }
     dialog.toast(`已生成 ${issuedCodes.value.length} 张`, 'ok')
     await loadBatches()
     await loadOverview()
+    await loadList()
   } finally { issuing.value = false }
 }
 async function retryBatch(id: number) {
@@ -502,6 +758,7 @@ async function requery(id: number) {
   if (!r.ok) { dialog.toast(d.error || '查询失败', 'err'); return }
   dialog.toast('已重新查询', 'ok')
   await loadRecords()
+  await loadList()
 }
 async function resolve(row: RecordRow) {
   const outcome = await dialog.select('处理完成后，客户页会按这个结果变化。', [
@@ -520,6 +777,7 @@ async function resolve(row: RecordRow) {
   if (!r.ok) { dialog.toast(d.error || '保存失败', 'err'); return }
   dialog.toast('已处理', 'ok')
   await loadRecords()
+  await loadList()
   await loadOverview()
 }
 async function disableCode(row: RecordRow) {
@@ -530,6 +788,7 @@ async function disableCode(row: RecordRow) {
   if (!r.ok) { dialog.toast(d.error || '作废失败', 'err'); return }
   dialog.toast('已作废', 'ok')
   await loadRecords()
+  await loadList()
 }
 async function testQuote(channel: string) {
   const recipient = await dialog.prompt('用一个测试 X 用户名报价。直充会马上取消，CDK 会发一张测试码再撤销，不会留给客户。', {
@@ -641,6 +900,7 @@ onMounted(() => {
   void loadSupply()
   void loadBatches()
   void loadRecords()
+  void loadList()
   timer = setInterval(() => void loadOverview(), 30000)
 })
 onUnmounted(() => {
@@ -656,4 +916,30 @@ onUnmounted(() => {
 .src-tag { font-size: 11px; padding: 1px 6px; border-radius: 4px; border: 1px solid currentColor; opacity: .8; }
 .src-tag.spacex { color: #2563eb; }
 .src-tag.avan { color: #7c3aed; }
+.mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.code-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+}
+.code-cell:hover .code-cell__text { text-decoration: underline; text-underline-offset: 2px; }
+.code-cell__text { font-size: 12px; line-height: 1.4; word-break: break-all; color: var(--good); }
+.code-cell__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 11px; }
+.note-cell__text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.note-cell__empty { font-size: 12px; color: var(--el-text-color-placeholder, #a8abb2); }
 </style>
