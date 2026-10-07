@@ -605,6 +605,19 @@ async function toggleChannel(ch: any, enabled: boolean) {
   dialog.toast(enabled ? '通道已启用' : '通道已停用', 'ok')
 }
 async function saveLimits() {
+  // 后端这一列是整数：清空的格子当 0，非整数直接提示，不发请求。
+  for (const row of limits.value) {
+    const raw = String(row.max_official_amount_minor ?? '').trim()
+    if (raw === '') {
+      row.max_official_amount_minor = 0
+      continue
+    }
+    if (!/^\d+$/.test(raw)) {
+      dialog.toast(`${planName(row.plan)}的「官方金额上限」要填整数（最小单位，比如 BDT 300.00 填 30000）`, 'warn')
+      return
+    }
+    row.max_official_amount_minor = Number(raw)
+  }
   saving.value = true
   try {
     const r = await authFetch('/api/v1/admin/x/plan-limits', {
