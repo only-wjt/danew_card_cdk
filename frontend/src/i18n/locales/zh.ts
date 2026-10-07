@@ -551,6 +551,8 @@ export default {
     confirmHint: '开通后不能更换账号，也不能退回卡密。请确认用户名无误。',
     backEdit: '返回修改',
     confirm: '确认开通',
+    polling: '正在查询进度',
+    progressSteps: ['已受理', '付款中', '等待到账', '开通完成'],
     queuedTitle: '排队中',
     queuedBody: '前面还有 {n} 位。轮到后会自动继续，不用刷新，也不要重复提交。',
     progressBody: "正在为 {'@'}{name} 开通，通常 1–3 分钟。",

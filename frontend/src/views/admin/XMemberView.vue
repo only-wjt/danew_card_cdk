@@ -280,50 +280,108 @@
     </section>
     </template>
 
-    <div v-else-if="tab === 'records'" class="grid gap-3 lg:grid-cols-[minmax(0,1fr)_22rem]">
-      <div class="space-y-3">
-        <div class="flex flex-wrap gap-2">
-          <el-button v-for="g in groups" :key="g.key" size="small" :type="recGroup === g.key ? 'primary' : 'default'" @click="recGroup = g.key; loadRecords()">{{ g.label }}</el-button>
-          <el-input v-model="recQ" class="!max-w-xs" placeholder="搜卡密 / 用户名 / 备注" @change="loadRecords" />
-        </div>
-        <button v-for="r in records" :key="r.code_id" type="button" class="card w-full space-y-1 text-left text-sm" :class="selected?.code_id === r.code_id ? 'ring-1 ring-current' : ''" @click="selected = r">
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="mono">{{ r.code }}</span>
-            <span>{{ planName(r.plan) }}</span>
-            <span>{{ r.recipient ? '@' + r.recipient : '—' }}</span>
-            <el-tag size="small" effect="plain">{{ statusName(r.status) }}</el-tag>
-          </div>
-          <p class="text-muted">{{ r.message || groupName(r.group) }} · {{ usd(r.estimated_usd_e4) }}</p>
-        </button>
-        <p v-if="!records.length" class="text-sm text-muted">这一组是空的。</p>
+    <div v-else-if="tab === 'records'" class="space-y-3">
+      <div class="card !py-3 toolbar-filters text-sm">
+        <span class="text-muted">共 <b class="mono text-ink">{{ recTotal }}</b> 笔</span>
+        <el-select v-model="recGroup" style="width: 140px" @change="loadRecords">
+          <el-option v-for="g in groups" :key="g.key" :label="g.label" :value="g.key" />
+        </el-select>
+        <el-input v-model="recQ" clearable class="!w-[240px]" placeholder="卡密 / 用户名 / 备注" @keyup.enter="loadRecords" @clear="loadRecords" />
+        <el-button type="primary" :loading="loadingRecords" @click="loadRecords">查询</el-button>
       </div>
-      <div v-if="selected" class="card space-y-3 text-sm">
-        <div class="font-semibold">{{ statusName(selected.status) }}</div>
-        <p v-if="selected.message" class="rounded-lg p-3" style="background: var(--warn-soft, #fff7ed)">{{ selected.message }}</p>
-        <div>套餐 {{ planName(selected.plan) }} · {{ channelName(selected.channel) }}</div>
-        <div>开通给 {{ selected.recipient ? '@' + selected.recipient : '—' }}</div>
-        <div v-if="selected.note">备注 {{ selected.note }}</div>
-        <div>官方金额 {{ selected.amount_minor || '—' }} {{ selected.currency }} · 参考 {{ usd(selected.estimated_usd_e4) }} · 服务费 {{ usd(selected.service_fee_e4) }}</div>
-        <div class="font-medium">处理过程</div>
-        <div v-for="(ev, i) in eventsOf(selected)" :key="i" class="text-muted">{{ ev.t }} · {{ ev.s }}</div>
-        <p v-if="!eventsOf(selected).length" class="text-muted">还没有过程记录。</p>
-        <div class="flex flex-wrap gap-2">
-          <el-button v-if="selected.redemption_id" size="small" @click="requery(selected.redemption_id)">重新查询</el-button>
-          <el-button v-if="selected.group === 'todo' && selected.redemption_id" size="small" @click="resolve(selected)">人工处理</el-button>
-          <el-button v-if="selected.status === 'unused'" size="small" @click="disableCode(selected)">作废</el-button>
-          <el-button size="small" @click="copy(locationOrigin() + '/x?code=' + selected.code)">复制兑换链接</el-button>
-        </div>
-        <details class="text-xs text-muted">
-          <summary>排障信息</summary>
-          <div class="mt-2 space-y-1">
-            <div>账户 {{ selected.account_id || '—' }}</div>
-            <div>上游订单 {{ selected.upstream_order_id || '—' }}</div>
-            <div>请求 {{ selected.client_request_id || '—' }}</div>
-            <div>上游状态 {{ selected.upstream_status || '—' }} · 已查 {{ selected.poll_count || 0 }} 次</div>
-            <div>注资 {{ selected.funding_dispatched ? '已发出' : '未发出' }} · 付款 {{ selected.payment_dispatched ? '已发出' : '未发出' }}</div>
-          </div>
-        </details>
+      <div class="card overflow-hidden !p-0">
+        <el-table :data="pagedRecords" v-loading="loadingRecords" size="small" stripe empty-text="暂无兑换记录">
+          <el-table-column label="记录" width="72">
+            <template #default="{ row }">#{{ row.code_id }}</template>
+          </el-table-column>
+          <el-table-column label="卡密" min-width="160">
+            <template #default="{ row }">
+              <div class="mono text-xs">{{ shortCode(row.code) }}</div>
+              <div class="text-xs text-subtle mt-1">{{ channelName(row.channel) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="套餐" min-width="140">
+            <template #default="{ row }">{{ planName(row.plan) }}</template>
+          </el-table-column>
+          <el-table-column label="开通给" min-width="120">
+            <template #default="{ row }">
+              <span class="mono text-sm">{{ row.recipient ? '@' + row.recipient : '—' }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="金额" width="130">
+            <template #default="{ row }">
+              <div class="mono text-sm">{{ officialAmount(row) }}</div>
+              <div v-if="row.service_fee_e4" class="text-xs text-subtle">费 {{ usd(row.service_fee_e4) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="120">
+            <template #default="{ row }">
+              <el-tag size="small" :type="groupTagType(row.group)">{{ statusName(row.status) }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="时间" min-width="148">
+            <template #default="{ row }">{{ row.created_at || '—' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="88" fixed="right">
+            <template #default="{ row }">
+              <el-button link type="primary" size="small" @click="openRecord(row)">详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
       </div>
+      <div class="flex flex-wrap items-center justify-between gap-3 text-sm text-muted">
+        <span>第 {{ recPage }} 页 · 本页 {{ pagedRecords.length }} 条<template v-if="recTotal > records.length"> · 最新 {{ records.length }} 条，搜索可以找到更早的</template></span>
+        <el-pagination
+          background
+          layout="prev, pager, next, sizes"
+          :total="records.length"
+          :page-size="recPageSize"
+          :current-page="recPage"
+          :page-sizes="[20, 50, 100]"
+          @current-change="(p: number) => (recPage = p)"
+          @size-change="(s: number) => { recPageSize = s; recPage = 1 }"
+        />
+      </div>
+      <el-drawer v-model="detailOpen" title="兑换详情" size="420px">
+        <div v-if="selected" class="space-y-4 text-sm">
+          <div class="flex items-center gap-2">
+            <el-tag :type="groupTagType(selected.group)">{{ statusName(selected.status) }}</el-tag>
+            <span class="text-muted">{{ channelName(selected.channel) }}</span>
+          </div>
+          <p v-if="selected.message" class="rounded-lg p-3" style="background: var(--warn-soft, #fff7ed)">{{ selected.message }}</p>
+          <el-descriptions :column="1" border size="small">
+            <el-descriptions-item label="卡密"><span class="mono text-xs break-all">{{ selected.code }}</span></el-descriptions-item>
+            <el-descriptions-item label="套餐">{{ planName(selected.plan) }}</el-descriptions-item>
+            <el-descriptions-item label="开通给">{{ selected.recipient ? '@' + selected.recipient : '—' }}</el-descriptions-item>
+            <el-descriptions-item label="官方金额">{{ officialAmount(selected) }}</el-descriptions-item>
+            <el-descriptions-item label="参考美元">{{ usd(selected.estimated_usd_e4) }}</el-descriptions-item>
+            <el-descriptions-item label="服务费">{{ usd(selected.service_fee_e4) }}</el-descriptions-item>
+            <el-descriptions-item v-if="selected.note" label="备注">{{ selected.note }}</el-descriptions-item>
+            <el-descriptions-item label="时间">{{ selected.created_at || '—' }}</el-descriptions-item>
+          </el-descriptions>
+          <div>
+            <div class="font-medium mb-2">处理过程</div>
+            <div v-for="(ev, i) in eventsOf(selected)" :key="i" class="text-muted">{{ ev.t }} · {{ ev.s }}</div>
+            <p v-if="!eventsOf(selected).length" class="text-muted">还没有过程记录。</p>
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <el-button v-if="selected.redemption_id" size="small" @click="requery(selected.redemption_id)">重新查询</el-button>
+            <el-button v-if="selected.group === 'todo' && selected.redemption_id" size="small" @click="resolve(selected)">人工处理</el-button>
+            <el-button v-if="selected.status === 'unused'" size="small" @click="disableCode(selected)">作废</el-button>
+            <el-button size="small" @click="copy(locationOrigin() + '/x?code=' + selected.code)">复制兑换链接</el-button>
+          </div>
+          <details class="text-xs text-muted">
+            <summary>排障信息</summary>
+            <div class="mt-2 space-y-1">
+              <div>账户 {{ selected.account_id || '—' }}</div>
+              <div class="break-all">上游订单 {{ selected.upstream_order_id || '—' }}</div>
+              <div class="break-all">请求 {{ selected.client_request_id || '—' }}</div>
+              <div>上游状态 {{ selected.upstream_status || '—' }} · 已查 {{ selected.poll_count || 0 }} 次</div>
+              <div>注资 {{ selected.funding_dispatched ? '已发出' : '未发出' }} · 付款 {{ selected.payment_dispatched ? '已发出' : '未发出' }}</div>
+            </div>
+          </details>
+        </div>
+      </el-drawer>
     </div>
 
     <XSupplyTable v-else-if="tab === 'supply'" @change="onSupplyChange" />
@@ -445,6 +503,7 @@ interface RecordRow {
   upstream_status: string
   client_request_id: string
   account_id: number
+  created_at: string
 }
 
 const router = useRouter()
@@ -486,8 +545,17 @@ const issuedCodes = ref<string[]>([])
 const batches = ref<any[]>([])
 const records = ref<RecordRow[]>([])
 const selected = ref<RecordRow | null>(null)
-const recGroup = ref('todo')
+const detailOpen = ref(false)
+const loadingRecords = ref(false)
+const recTotal = ref(0)
+const recPage = ref(1)
+const recPageSize = ref(20)
+const recGroup = ref('all')
 const recQ = ref('')
+const pagedRecords = computed(() => {
+  const start = (recPage.value - 1) * recPageSize.value
+  return records.value.slice(start, start + recPageSize.value)
+})
 const groups = [
   { key: 'todo', label: '待处理' },
   { key: 'running', label: '进行中' },
@@ -608,7 +676,7 @@ function onRowCommand(cmd: string, row: RecordRow) {
     recGroup.value = 'all'
     recQ.value = row.code
     tab.value = 'records'
-    void loadRecords().then(() => { selected.value = records.value.find((r) => r.code_id === row.code_id) || row })
+    void loadRecords().then(() => openRecord(records.value.find((r) => r.code_id === row.code_id) || row))
   }
 }
 
@@ -624,6 +692,20 @@ function batchStatus(k: string) {
 function usd(e4: number) {
   if (!e4) return '—'
   return '$' + (e4 / 10000).toFixed(2)
+}
+function shortCode(code: string) {
+  const s = String(code || '')
+  if (s.length <= 18) return s
+  return s.slice(0, 10) + '…' + s.slice(-6)
+}
+function officialAmount(row: RecordRow) {
+  if (!row.amount_minor) return '—'
+  const cur = String(row.currency || '').toUpperCase()
+  return `${Number(row.amount_minor).toLocaleString()} ${cur}`.trim()
+}
+function openRecord(row: RecordRow) {
+  selected.value = row
+  detailOpen.value = true
 }
 function accountName(id: number) {
   return accounts.value.find((a) => a.id === id)?.name || (id ? `账户 ${id}` : '未绑定卡台')
@@ -745,11 +827,19 @@ async function loadBatches() {
   batches.value = d.batches || []
 }
 async function loadRecords() {
-  const r = await authFetch(`/api/v1/admin/x/records?group=${recGroup.value}&q=${encodeURIComponent(recQ.value)}`)
-  const d = await r.json().catch(() => ({}))
-  records.value = d.records || []
-  if (selected.value) {
-    selected.value = records.value.find((row) => row.code_id === selected.value?.code_id) || selected.value
+  loadingRecords.value = true
+  try {
+    const params = new URLSearchParams({ group: recGroup.value, q: recQ.value.trim() })
+    const r = await authFetch(`/api/v1/admin/x/records?${params}`)
+    const d = await r.json().catch(() => ({}))
+    records.value = d.records || []
+    recTotal.value = Number(d.total ?? records.value.length)
+    recPage.value = 1
+    if (selected.value) {
+      selected.value = records.value.find((row) => row.code_id === selected.value?.code_id) || selected.value
+    }
+  } finally {
+    loadingRecords.value = false
   }
 }
 async function requery(id: number) {

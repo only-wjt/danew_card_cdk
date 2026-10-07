@@ -64,15 +64,26 @@
           </div>
         </template>
 
-        <template v-else-if="phase === 'queued'">
-          <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.queuedTitle') }}</h2>
-          <p class="text-sm text-muted">{{ t('xRedeem.queuedBody', { n: state?.queue_ahead || 0 }) }}</p>
-        </template>
-
-        <template v-else-if="phase === 'progress'">
-          <h2 class="text-xl font-bold text-ink">{{ state?.headline || t('xRedeem.title') }}</h2>
-          <p class="text-sm text-muted">{{ t('xRedeem.progressBody', { name: state?.recipient || '' }) }}</p>
-          <p class="text-sm">{{ t('xRedeem.progressKeep') }}</p>
+        <template v-else-if="phase === 'queued' || phase === 'progress'">
+          <h2 class="text-xl font-bold text-ink">{{ phase === 'queued' ? t('xRedeem.queuedTitle') : (state?.headline || t('xRedeem.title')) }}</h2>
+          <p v-if="polling" class="text-sm text-muted">
+            <span class="inline-block animate-pulse">●</span> {{ t('xRedeem.polling') }}
+          </p>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+            <div
+              v-for="p in openSteps"
+              :key="p.key"
+              class="rounded-lg border px-2 py-2"
+              :class="p.active ? 'font-semibold text-ink' : 'text-muted'"
+              :style="p.active ? { borderColor: 'var(--primary)', background: 'var(--primary-soft)' } : { borderColor: 'var(--brd)' }"
+            >{{ p.label }}</div>
+          </div>
+          <p v-if="phase === 'queued'" class="text-sm text-muted">{{ t('xRedeem.queuedBody', { n: state?.queue_ahead || 0 }) }}</p>
+          <template v-else>
+            <p class="text-sm text-muted">{{ t('xRedeem.progressBody', { name: state?.recipient || '' }) }}</p>
+            <p class="text-sm">{{ t('xRedeem.progressKeep') }}</p>
+          </template>
+          <p v-if="state?.detail" class="text-sm text-muted">{{ state.detail }}</p>
         </template>
 
         <template v-else-if="phase === 'done'">
@@ -86,6 +97,18 @@
 
         <template v-else-if="phase === 'locked'">
           <h2 class="text-xl font-bold text-ink">{{ t('xRedeem.lockedTitle') }}</h2>
+          <p v-if="polling" class="text-sm text-muted">
+            <span class="inline-block animate-pulse">●</span> {{ t('xRedeem.polling') }}
+          </p>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+            <div
+              v-for="p in openSteps"
+              :key="p.key"
+              class="rounded-lg border px-2 py-2"
+              :class="p.active ? 'font-semibold text-ink' : 'text-muted'"
+              :style="p.active ? { borderColor: 'var(--primary)', background: 'var(--primary-soft)' } : { borderColor: 'var(--brd)' }"
+            >{{ p.label }}</div>
+          </div>
           <p class="text-sm">{{ t('xRedeem.lockedBody') }}</p>
           <p class="mono text-sm">{{ code }}</p>
           <button class="btn-secondary" @click="copyCode">{{ t('xRedeem.copyCode') }}</button>
@@ -137,6 +160,7 @@ const phase = ref('code')
 const state = ref<State | null>(null)
 const error = ref('')
 const busy = ref(false)
+const polling = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 
 const normalized = computed(() => {
@@ -149,6 +173,18 @@ const stepIndex = computed(() => {
   if (phase.value === 'user' || phase.value === 'ineligible') return 1
   if (phase.value === 'confirm') return 2
   return 3
+})
+const openSteps = computed(() => {
+  const raw = tm('xRedeem.progressSteps') as unknown
+  const labels = Array.isArray(raw) ? raw.map((item) => String(item)) : []
+  const keys = ['accept', 'pay', 'wait', 'done']
+  const st = String(state.value?.status || '').toLowerCase()
+  let idx = 1
+  if (phase.value === 'queued') idx = 0
+  else if (phase.value === 'done' || st === 'completed') idx = 3
+  else if (st === 'paid_pending_delivery') idx = 2
+  else if (phase.value === 'locked') idx = 1
+  return keys.map((key, i) => ({ key, label: labels[i] || key, active: i <= idx }))
 })
 
 function apply(st: State) {
@@ -206,9 +242,15 @@ async function quote() {
 async function confirm() {
   busy.value = true
   error.value = ''
+  // 先进入开通进度，避免确认请求还在付款时页面停在确认按钮上。
+  phase.value = 'progress'
+  if (state.value) state.value = { ...state.value, status: 'paying' }
+  startPoll()
   try {
     apply(await post('/api/v1/public/x/confirm', { code: code.value.trim() }))
   } catch (e: unknown) {
+    phase.value = 'confirm'
+    stopPoll()
     error.value = e instanceof Error ? e.message : t('xRedeem.requestFailed')
   } finally {
     busy.value = false
@@ -221,10 +263,12 @@ async function poll() {
   if (r.ok && data) apply(data)
 }
 function startPoll() {
+  polling.value = true
   if (timer) return
   timer = setInterval(() => void poll(), 4000)
 }
 function stopPoll() {
+  polling.value = false
   if (timer) clearInterval(timer)
   timer = null
 }

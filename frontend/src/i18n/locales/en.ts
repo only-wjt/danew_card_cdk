@@ -555,6 +555,8 @@ export default {
     confirmHint: 'After activation the account cannot be changed and the code cannot be returned. Check the username.',
     backEdit: 'Edit username',
     confirm: 'Confirm',
+    polling: 'Checking progress',
+    progressSteps: ['Accepted', 'Paying', 'Waiting', 'Done'],
     queuedTitle: 'In queue',
     queuedBody: '{n} ahead of you. It continues automatically. Do not submit again.',
     progressBody: "Activating for {'@'}{name}. This usually takes 1–3 minutes.",
