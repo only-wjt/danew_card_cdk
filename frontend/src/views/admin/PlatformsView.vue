@@ -97,7 +97,7 @@
 
           <el-radio-group v-model="tab" size="small">
             <el-radio-button value="overview">概览</el-radio-button>
-            <el-radio-button v-if="(current.serves_openai && !isAvanGpt) || (!current.serves_openai && X_DIRECT_UI)" value="cards">{{ current.serves_openai ? '选卡' : '付款卡' }}</el-radio-button>
+            <el-radio-button v-if="(current.serves_openai && !isAvanGpt) || (!current.serves_openai && (X_DIRECT_UI || hasCap(current, 'x_cdk')))" value="cards">{{ current.serves_openai ? '选卡' : '付款卡' }}</el-radio-button>
             <el-radio-button v-if="current.serves_openai" value="webhook">回调</el-radio-button>
             <el-radio-button v-if="!current.serves_openai" value="calls">调用记录</el-radio-button>
             <el-radio-button value="credentials">凭证</el-radio-button>
@@ -206,21 +206,35 @@
             </div>
           </div>
 
-          <div v-else-if="tab === 'cards'" class="card space-y-3">
-            <p class="text-sm text-muted">{{ capLabel(current) }} 兑换时用哪张卡。通道开关和花费上限在「X 会员」。</p>
+          <div v-else-if="tab === 'cards'" class="card space-y-4">
+            <div class="space-y-1">
+              <div class="font-semibold">客户兑换 X CDK 时，钱从哪张卡付给 X</div>
+              <p class="text-sm text-muted">发码不扣钱。客户兑换时，Avanfinity 从钱包给这张卡充值，再用它付 X 官方的钱。选好后保存，X CDK 通道会一起启用。</p>
+            </div>
             <el-radio-group v-model="payMode" class="flex flex-col items-start gap-2">
-              <el-radio v-if="hasCap(current, 'x_cdk')" value="auto">每张码自动开一张新卡</el-radio>
+              <el-radio v-if="hasCap(current, 'x_cdk')" value="auto">每张码自动开一张新卡（推荐，卡之间互不影响）</el-radio>
               <el-radio v-for="card in xCards" :key="card.id" :value="String(card.id)" :disabled="!cardOk(card)">
-                {{ card.cardNumberMasked || ('卡 ' + card.id) }} · {{ card.status || '未知' }} · 余额 {{ card.balance || '—' }}
+                固定用 {{ card.cardNumberMasked || ('卡 ' + card.id) }} · {{ card.productCode || '—' }} · {{ card.status || '未知' }} · 余额 {{ card.balance || '—' }}
               </el-radio>
             </el-radio-group>
-            <p v-if="!xCards.length" class="text-sm text-muted">还没有拉到卡。点「测试连接」，或确认这个 App 能读到卡。</p>
-            <div v-if="payMode === 'auto'" class="grid gap-2 sm:grid-cols-3">
-              <el-input v-model="autoCard.product" placeholder="开卡产品编码" />
-              <el-input v-model="autoCard.first" placeholder="名" />
-              <el-input v-model="autoCard.last" placeholder="姓" />
+            <p v-if="!xCards.length" class="text-xs text-muted">账户里还没有卡，所以只能自动开卡。</p>
+            <div v-if="payMode === 'auto'" class="space-y-2">
+              <div class="text-sm">自动开卡用哪种卡，持卡人姓名填什么（拼音即可）</div>
+              <div class="grid gap-2 sm:grid-cols-3">
+                <el-select v-if="xProducts.length" v-model="autoCard.product" filterable allow-create placeholder="选卡种">
+                  <el-option v-for="p in xProducts" :key="p.productCode" :value="p.productCode" :label="productLabel(p)" />
+                </el-select>
+                <el-input v-else v-model="autoCard.product" placeholder="卡种编码（productCode）" />
+                <el-input v-model="autoCard.first" placeholder="名，例如 San" />
+                <el-input v-model="autoCard.last" placeholder="姓，例如 Zhang" />
+              </div>
+              <p class="text-xs text-muted">开卡费和充值费会从每张码的「CDK 钱包上限」里扣，选便宜的卡种能少花钱。</p>
             </div>
-            <el-button type="primary" :loading="savingChannel" @click="savePayCard">保存付款卡</el-button>
+            <div class="flex flex-wrap items-center gap-3">
+              <el-button type="primary" :loading="savingChannel" @click="savePayCard">保存并启用通道</el-button>
+              <span v-if="channelRow?.enabled && channelRow?.account_id === current.id" class="text-sm" style="color: var(--ok, #16a34a)">X CDK 通道已启用</span>
+              <button type="button" class="app-link text-sm" @click="router.push({ name: 'XMember', query: { tab: 'settings' } })">下一步：去填每个套餐的上限</button>
+            </div>
           </div>
 
           <div v-else-if="tab === 'webhook'" class="card space-y-3">
@@ -438,6 +452,11 @@ function offerText(o: AvanOffer) {
 }
 const probeSteps = ref<{ key: string; title: string; state: string; detail: string }[]>([])
 const xCards = ref<any[]>([])
+const xProducts = ref<any[]>([])
+function productLabel(p: any) {
+  const head = [p.issuer, p.network, p.issuingArea, p.displayBin].filter(Boolean).join(' · ')
+  return `${p.productCode}${head ? ' · ' + head : ''} · 开卡费 $${p.openFee || '0'}`
+}
 const calls = ref<any[]>([])
 const payMode = ref('auto')
 const autoCard = reactive({ product: '', first: '', last: '' })
@@ -556,12 +575,6 @@ const problems = computed(() => {
 
 function hasCap(a: Acc, cap: string) {
   return (a.capabilities || '').split(',').includes(cap)
-}
-function capLabel(a: Acc) {
-  const bits = []
-  if (hasCap(a, 'x_cdk')) bits.push('X CDK')
-  if (hasCap(a, 'x_direct')) bits.push('X 直充')
-  return bits.join(' · ') || 'X 会员'
 }
 function protocolLabel(p: string) {
   if (p === 'avanfinity-api-v1') return 'Avanfinity · X 会员'
@@ -913,7 +926,10 @@ async function loadXPay() {
   ])
   const cards = await cardsRes.json().catch(() => ({}))
   const cfg = await cfgRes.json().catch(() => ({}))
-  if (cardsRes.ok) xCards.value = cards.cards || []
+  if (cardsRes.ok) {
+    xCards.value = cards.cards || []
+    xProducts.value = cards.products || []
+  }
   const cap = hasCap(a, 'x_direct') && !hasCap(a, 'x_cdk') ? 'x_direct' : 'x_cdk'
   const row = (cfg.channels || []).find((c: any) => c.channel === cap && c.account_id === a.id)
     || (cfg.channels || []).find((c: any) => c.channel === cap)
@@ -936,6 +952,10 @@ async function savePayCard() {
     if (!ok) return
   }
   const auto = payMode.value === 'auto'
+  if (auto && (!autoCard.product.trim() || !autoCard.first.trim() || !autoCard.last.trim())) {
+    dialog.toast('自动开卡要选卡种，并填持卡人的名和姓', 'warn')
+    return
+  }
   savingChannel.value = true
   try {
     const r = await authFetch('/api/v1/admin/x/channels', {
@@ -943,7 +963,7 @@ async function savePayCard() {
       body: JSON.stringify({
         channel,
         account_id: a.id,
-        enabled: !!(channelRow.value && channelRow.value.enabled && channelRow.value.account_id === a.id),
+        enabled: true,
         card_id: auto ? 0 : Number(payMode.value),
         auto_card: auto,
         auto_card_product: autoCard.product,
@@ -956,7 +976,7 @@ async function savePayCard() {
       dialog.toast(d.error || '保存失败', 'err')
       return
     }
-    dialog.toast('付款卡已保存', 'ok')
+    dialog.toast('已保存，X CDK 通道已启用。下一步去填每个套餐的上限', 'ok')
     await loadXPay()
   } finally {
     savingChannel.value = false

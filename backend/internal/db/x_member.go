@@ -158,6 +158,11 @@ func SaveXChannel(ch XChannel) error {
 	if ch.Channel == XChannelCDK && ch.Enabled && !ch.AutoCard && ch.CardID <= 0 {
 		return fmt.Errorf("X CDK 要选自动开卡，或指定一张固定卡")
 	}
+	// Avanfinity 的 autoCard 三个字段都是必填。
+	if ch.Channel == XChannelCDK && ch.Enabled && ch.AutoCard &&
+		(strings.TrimSpace(ch.AutoCardProduct) == "" || strings.TrimSpace(ch.AutoCardFirstName) == "" || strings.TrimSpace(ch.AutoCardLastName) == "") {
+		return fmt.Errorf("自动开卡要选卡种，并填持卡人的名和姓")
+	}
 	_, err := DB.Exec(`
 		UPDATE x_channels
 		SET account_id = ?, enabled = ?, card_id = ?, auto_card = ?,

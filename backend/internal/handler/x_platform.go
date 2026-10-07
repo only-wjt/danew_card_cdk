@@ -90,7 +90,9 @@ func AdminXAccountCards(c *gin.Context) {
 	if bal != nil {
 		spendable = bal.Balance
 	}
-	c.JSON(http.StatusOK, gin.H{"cards": cards, "balance": spendable})
+	// 产品列表只给自动开卡下拉用，拉不到不影响选卡。
+	products, _ := client.ListProducts(c.Request.Context())
+	c.JSON(http.StatusOK, gin.H{"cards": cards, "balance": spendable, "products": products})
 }
 
 // AdminXCalls GET /api/v1/admin/card-platforms/x-calls?id=
