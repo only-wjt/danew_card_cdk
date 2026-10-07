@@ -1,6 +1,21 @@
 package xmember
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/danew/cdk-recharge-system/internal/db"
+)
+
+func TestLimitsReadyRejectsFundingAboveWallet(t *testing.T) {
+	lim := db.XPlanLimit{Plan: "premium_12m", Enabled: true, Currency: "usd", MaxOfficialAmountMinor: 9000, MaxWalletDebitUSD: "1", FundingAmountUSD: "222"}
+	if err := limitsReady(db.XChannelCDK, lim); err == nil {
+		t.Fatal("wallet 1 < funding 222 should be rejected")
+	}
+	lim.MaxWalletDebitUSD = "260"
+	if err := limitsReady(db.XChannelCDK, lim); err != nil {
+		t.Fatalf("unexpected %v", err)
+	}
+}
 
 func TestNormalizeHandle(t *testing.T) {
 	cases := map[string]string{
