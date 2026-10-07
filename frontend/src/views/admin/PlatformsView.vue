@@ -208,8 +208,8 @@
 
           <div v-else-if="tab === 'cards'" class="card space-y-4">
             <div class="space-y-1">
-              <div class="font-semibold">客户兑换 X CDK 时，钱从哪张卡付给 X</div>
-              <p class="text-sm text-muted">发码不扣钱。客户兑换时，Avanfinity 从钱包给这张卡充值，再用它付 X 官方的钱。选好后保存，X CDK 通道会一起启用。</p>
+              <div class="font-semibold">客户兑换 X 或 Telegram 时，钱从哪张卡付出去</div>
+              <p class="text-sm text-muted">X CDK 和 Telegram Premium 共用这个钱包、也共用下面选的卡。发码不扣钱。客户兑换时，Avanfinity 先给这张卡充值，再用它付给 X 或 Telegram。选好后保存，X CDK 通道会一起启用，TG 发码也走这里。</p>
             </div>
             <el-radio-group v-model="payMode" class="flex flex-col items-start gap-2">
               <el-radio v-if="hasCap(current, 'x_cdk')" value="auto">每张码自动开一张新卡（推荐，卡之间互不影响）</el-radio>
@@ -232,8 +232,9 @@
             </div>
             <div class="flex flex-wrap items-center gap-3">
               <el-button type="primary" :loading="savingChannel" @click="savePayCard">保存并启用通道</el-button>
-              <span v-if="channelRow?.enabled && channelRow?.account_id === current.id" class="text-sm" style="color: var(--ok, #16a34a)">X CDK 通道已启用</span>
-              <button type="button" class="app-link text-sm" @click="router.push({ name: 'XMember', query: { tab: 'settings' } })">下一步：去填每个套餐的上限</button>
+              <span v-if="channelRow?.enabled && channelRow?.account_id === current.id" class="text-sm" style="color: var(--ok, #16a34a)">通道已启用，X 和 TG 都走这张卡</span>
+              <button type="button" class="app-link text-sm" @click="router.push({ name: 'XMember', query: { tab: 'settings' } })">去填 X 套餐上限</button>
+              <button type="button" class="app-link text-sm" @click="router.push({ name: 'TGMember', query: { tab: 'limits' } })">去填 TG 套餐上限</button>
             </div>
           </div>
 
@@ -983,7 +984,7 @@ async function savePayCard() {
       dialog.toast(d.error || '保存失败', 'err')
       return
     }
-    dialog.toast('已保存，X CDK 通道已启用。下一步去填每个套餐的上限', 'ok')
+    dialog.toast('已保存。X 和 Telegram 都会用这张卡，下一步分别去填套餐上限', 'ok')
     await loadXPay()
   } finally {
     savingChannel.value = false
