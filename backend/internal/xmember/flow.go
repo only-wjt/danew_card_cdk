@@ -203,6 +203,10 @@ func limitsReady(channel string, limit db.XPlanLimit) error {
 		if wallet <= 0 {
 			return fmt.Errorf("先在通道设置里填好这个套餐的币种和花费上限")
 		}
+		// 钱包授权要覆盖充值本金加全部费用，比本金还小时上游一定 409，提前挡住。
+		if funding, _ := USDToE4(limit.FundingAmountUSD); funding > wallet {
+			return fmt.Errorf("钱包授权上限 $%s 小于充值本金 $%s，上游会拒绝。授权上限要不低于本金加全部手续费", E4ToUSD(wallet), E4ToUSD(funding))
+		}
 	}
 	return nil
 }

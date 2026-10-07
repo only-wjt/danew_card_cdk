@@ -74,7 +74,7 @@ func Probe(ctx context.Context, c *Client) ProbeResult {
 	detail, err := c.ProbeWriteAllowlist(ctx, card.ID)
 	if err != nil {
 		var api *APIError
-		if errors.As(err, &api) && api.Status == 422 {
+		if errors.As(err, &api) && businessReject(api.Status) {
 			out.Steps = append(out.Steps, ProbeStep{Key: "ip", Title: "写接口白名单", State: "ok", Detail: explainWrite(err)})
 			out.OK = true
 			return out
@@ -85,6 +85,12 @@ func Probe(ctx context.Context, c *Client) ProbeResult {
 	out.Steps = append(out.Steps, ProbeStep{Key: "ip", Title: "写接口白名单", State: "ok", Detail: detail})
 	out.OK = true
 	return out
+}
+
+// businessReject：409/422 说明请求已过鉴权和 IP 白名单，是被业务校验拒绝的。
+// 探测码的钱包授权只有 0.01 美元，Avan 一般会以 409「超过钱包授权上限」拒绝。
+func businessReject(status int) bool {
+	return status == 409 || status == 422
 }
 
 func failStep(key, title, detail string) ProbeStep {
@@ -118,7 +124,7 @@ func explainWrite(err error) string {
 	if errors.As(err, &api) && api.Status == 403 {
 		return "403：写接口被拒绝。前面的只读接口已经通过，通常是出口 IP 不在这个 App 的白名单。"
 	}
-	if errors.As(err, &api) && api.Status == 422 {
+	if errors.As(err, &api) && businessReject(api.Status) {
 		return "白名单已通过，但测试发码被业务规则拒绝（没有留下可用卡密）：" + api.Message
 	}
 	msg := err.Error()

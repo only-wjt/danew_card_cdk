@@ -57,6 +57,30 @@ func TestProbeWriteForbiddenIsAllowlist(t *testing.T) {
 	}
 }
 
+func TestProbeWriteConflictMeansAllowlistPassed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/balance":
+			_, _ = w.Write([]byte(`{"code":200,"data":{"balance":"5.00","totalBalance":"5.00"}}`))
+		case "/api/v1/x-direct/plans":
+			_, _ = w.Write([]byte(`{"code":200,"data":{"plans":[],"paymentsEnabled":true}}`))
+		case "/api/v1/cards":
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[{"id":3,"status":"active","balance":"1"}]}}`))
+		case "/api/v1/x-direct/cdks/generate":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"单个兑换码的充值本金和全部费用超过钱包授权上限"}`))
+		default:
+			t.Fatalf("unexpected %s", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+	res := Probe(context.Background(), &Client{Base: srv.URL, HTTP: srv.Client()})
+	last := res.Steps[len(res.Steps)-1]
+	if !res.OK || last.Key != "ip" || last.State != "ok" || !strings.Contains(last.Detail, "白名单已通过") {
+		t.Fatalf("ok=%v last=%+v", res.OK, last)
+	}
+}
+
 func TestProbeRevokesProbeCode(t *testing.T) {
 	var revoked bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
