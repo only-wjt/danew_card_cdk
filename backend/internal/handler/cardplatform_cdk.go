@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,6 +22,16 @@ import (
 )
 
 func writeCardErr(c *gin.Context, err error) {
+	// 备台错误经 DualIssueOne 用 %w 包装，按 errorCode 给出提示；上游 401/403 同样映射成 502。
+	var av *provider.AvanfinityAPIError
+	if errors.As(err, &av) {
+		status := av.Status
+		if status < 400 || status == http.StatusUnauthorized || status == http.StatusForbidden || status > 599 {
+			status = http.StatusBadGateway
+		}
+		c.JSON(status, gin.H{"error": av.Error(), "error_code": av.ErrorCode})
+		return
+	}
 	if ae, ok := err.(*cardplatform.APIError); ok {
 		status := ae.HTTPStatus
 		if status < 400 {

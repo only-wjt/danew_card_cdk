@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -120,8 +121,16 @@ type envelope struct {
 	Msg   string          `json:"msg"`
 	Data  json.RawMessage `json:"data"`
 	Error string          `json:"error_code"`
-	// /api/v1 失败时返回 {"error":"API 密钥无效"}，不是 envelope。
-	ErrText json.RawMessage `json:"error"`
+	// /api/v1 失败时返回 {"error":"API 密钥无效","errorCode":"..."}，不是 envelope。
+	ErrText   json.RawMessage `json:"error"`
+	ErrorCode string          `json:"errorCode"`
+}
+
+func (e envelope) errCode() string {
+	if e.Error != "" {
+		return e.Error
+	}
+	return e.ErrorCode
 }
 
 func (e envelope) message(fallback string) string {
@@ -202,17 +211,17 @@ func (c *Client) doOpenAPIWithClient(ctx context.Context, httpc *http.Client, me
 	}
 	// 旧 OpenAPI 成功是 code=0。文档里的 /api/v1 有的接口成功是 0，X 接口成功是 200。
 	if resp.StatusCode == 401 || env.Code == 401 {
-		return nil, &APIError{HTTPStatus: 401, Code: env.Code, Msg: env.message("unauthorized"), ErrorCode: env.Error}
+		return nil, &APIError{HTTPStatus: 401, Code: env.Code, Msg: env.message("unauthorized"), ErrorCode: env.errCode()}
 	}
 	if env.Code != 0 && env.Code != 200 {
 		st := resp.StatusCode
 		if st < 400 {
 			st = http.StatusBadRequest
 		}
-		return nil, &APIError{HTTPStatus: st, Code: env.Code, Msg: env.message("business error"), ErrorCode: env.Error}
+		return nil, &APIError{HTTPStatus: st, Code: env.Code, Msg: env.message("business error"), ErrorCode: env.errCode()}
 	}
 	if resp.StatusCode >= 400 {
-		return nil, &APIError{HTTPStatus: resp.StatusCode, Code: env.Code, Msg: env.message(resp.Status), ErrorCode: env.Error}
+		return nil, &APIError{HTTPStatus: resp.StatusCode, Code: env.Code, Msg: env.message(resp.Status), ErrorCode: env.errCode()}
 	}
 	return env.Data, nil
 }
@@ -484,12 +493,24 @@ func (c *Client) GetBalance(ctx context.Context) (*BalanceResponse, error) {
 			Spendable json.RawMessage `json:"spendableBalance"`
 			Total     json.RawMessage `json:"totalBalance"`
 			Reserve   json.RawMessage `json:"accountReserveAmount"`
+			// Avanfinity /balance：可用 = balance − riskLocked − retryReserved。
+			RiskLocked    json.RawMessage `json:"riskLockedBalance"`
+			RetryReserved json.RawMessage `json:"retryReservedBalance"`
 		}
 		_ = json.Unmarshal(data, &alt)
 		if n := rawNumber(alt.Spendable); n != "" {
 			out.SpendableBalance = n
 		} else if out.Balance != "" {
 			out.SpendableBalance = out.Balance
+			locked, _ := strconv.ParseFloat(string(rawNumber(alt.RiskLocked)), 64)
+			retry, _ := strconv.ParseFloat(string(rawNumber(alt.RetryReserved)), 64)
+			if held := locked + retry; held > 0 {
+				bal, _ := strconv.ParseFloat(string(out.Balance), 64)
+				out.SpendableBalance = json.Number(strconv.FormatFloat(math.Max(bal-held, 0), 'f', 2, 64))
+				if out.AccountReserveAmount == "" {
+					out.AccountReserveAmount = json.Number(strconv.FormatFloat(held, 'f', 2, 64))
+				}
+			}
 		}
 		if out.Balance == "" {
 			out.Balance = rawNumber(alt.Total)

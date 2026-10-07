@@ -2,6 +2,7 @@ package avanfinity
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,10 +66,13 @@ func TestProbeRevokesProbeCode(t *testing.T) {
 		case r.URL.Path == "/api/v1/x-direct/plans":
 			_, _ = w.Write([]byte(`{"code":200,"data":{"plans":[],"paymentsEnabled":false}}`))
 		case r.URL.Path == "/api/v1/cards":
+			if got := r.URL.Query().Get("page_size"); got != "100" {
+				t.Errorf("page_size = %q, want 100", got)
+			}
 			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[{"id":9,"status":"frozen","balance":"0"},{"id":3,"status":"active","balance":"1"}]}}`))
 		case r.URL.Path == "/api/v1/x-direct/cdks/generate":
-			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[{"id":42}],"replayed":false}}`))
-		case r.URL.Path == "/api/v1/x-direct/cdks/42/revoke":
+			_, _ = w.Write([]byte(`{"code":200,"data":{"list":[{"id":"7c9e6679-7425-40de-944b-e07fc1f90ae7","codePrefix":"AVX-7C9E"}],"replayed":false}}`))
+		case r.URL.Path == "/api/v1/x-direct/cdks/7c9e6679-7425-40de-944b-e07fc1f90ae7/revoke":
 			revoked = true
 			_, _ = w.Write([]byte(`{"code":200,"data":{}}`))
 		default:
@@ -79,5 +83,24 @@ func TestProbeRevokesProbeCode(t *testing.T) {
 	res := Probe(context.Background(), &Client{Base: srv.URL, HTTP: srv.Client()})
 	if !res.OK || !revoked {
 		t.Fatalf("ok=%v revoked=%v steps=%+v", res.OK, revoked, res.Steps)
+	}
+}
+
+func TestRedeemAlwaysSendsAmountAndLowerCurrency(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["expectedAmountMinor"] != float64(800) || body["currency"] != "usd" {
+			t.Errorf("body = %+v", body)
+		}
+		_, _ = w.Write([]byte(`{"code":200,"data":{"plan":"premium_3m","status":"paying"}}`))
+	}))
+	defer srv.Close()
+	c := &Client{Base: srv.URL, HTTP: srv.Client()}
+	out, err := c.RedeemCDK(context.Background(), "AVX-1", strings.Repeat("d", 32), "req", "USD", 800)
+	if err != nil || out.Status != "paying" {
+		t.Fatalf("out=%+v err=%v", out, err)
 	}
 }

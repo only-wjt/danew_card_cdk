@@ -97,7 +97,7 @@
 
           <el-radio-group v-model="tab" size="small">
             <el-radio-button value="overview">概览</el-radio-button>
-            <el-radio-button v-if="current.serves_openai || X_DIRECT_UI" value="cards">{{ current.serves_openai ? '选卡' : '付款卡' }}</el-radio-button>
+            <el-radio-button v-if="(current.serves_openai && !isAvanGpt) || (!current.serves_openai && X_DIRECT_UI)" value="cards">{{ current.serves_openai ? '选卡' : '付款卡' }}</el-radio-button>
             <el-radio-button v-if="current.serves_openai" value="webhook">回调</el-radio-button>
             <el-radio-button v-if="!current.serves_openai" value="calls">调用记录</el-radio-button>
             <el-radio-button value="credentials">凭证</el-radio-button>
@@ -112,11 +112,17 @@
                   {{ balanceErr }}
                   <button type="button" class="ml-1 underline" @click="tab = 'credentials'">去改凭证</button>
                 </div>
-                <div v-else class="text-xs text-muted">{{ openaiReserve ? '含保证金 $' + openaiReserve : '总余额里的保证金单独列出' }}</div>
+                <div v-else class="text-xs text-muted">{{ isAvanGpt ? '已扣除风控锁定和重试预留' : openaiReserve ? '含保证金 $' + openaiReserve : '总余额里的保证金单独列出' }}</div>
               </div>
               <div class="card">
-                <div class="text-xs text-muted">服务费</div>
-                <div class="mt-1 text-sm">{{ feeLine || (plansErr ? '读不到' : '点一键检测读取') }}</div>
+                <div class="text-xs text-muted">{{ isAvanGpt ? '套餐价格 · 库存' : '服务费' }}</div>
+                <template v-if="isAvanGpt && offers.length">
+                  <div v-for="o in offers" :key="o.plan" class="mt-1 flex justify-between gap-2 text-sm">
+                    <span>{{ o.plan }}</span>
+                    <span :class="offerOk(o) ? '' : 'text-amber-600'">{{ offerText(o) }}</span>
+                  </div>
+                </template>
+                <div v-else class="mt-1 text-sm">{{ feeLine || (plansErr ? '读不到' : '点一键检测读取') }}</div>
                 <div v-if="plansErr && plansErr !== balanceErr" class="text-xs text-amber-600">{{ plansErr }}</div>
               </div>
               <div class="card">
@@ -126,9 +132,12 @@
               </div>
             </div>
             <p v-if="pingMsg" class="text-sm text-muted">{{ pingMsg }}</p>
+            <p v-if="isAvanGpt" class="text-xs text-muted">
+              Avan 开放接口不提供选卡、作废和退款：选卡由 Avan 自动处理；回收时只在本站作废，上游码不会撤销。完整码只在发码时返回，之前发的码补不回来。
+            </p>
             <div class="flex flex-wrap gap-2">
               <el-button type="primary" :loading="pinging" @click="pingOpenAI">一键检测</el-button>
-              <el-button :loading="syncingCards" @click="syncOpenAICards">同步套餐</el-button>
+              <el-button v-if="!isAvanGpt" :loading="syncingCards" @click="syncOpenAICards">同步套餐</el-button>
               <el-button v-if="current.circuit_state === 'open'" type="warning" plain @click="resetCircuit">复位熔断</el-button>
             </div>
           </div>
@@ -416,6 +425,17 @@ const openaiReserve = ref('')
 const balanceErr = ref('')
 const plansErr = ref('')
 const planFees = ref<{ key: string; label: string; fee_usd: number }[]>([])
+type AvanOffer = { plan: string; enabled: boolean; sale_price: string; pricing_status: string; stock: number }
+const offers = ref<AvanOffer[]>([])
+const isAvanGpt = computed(() => !!current.value?.serves_openai && current.value?.protocol === 'avanfinity-2026-08')
+function offerOk(o: AvanOffer) {
+  return o.enabled && o.pricing_status !== 'WAITING_QUOTE' && o.stock > 0
+}
+function offerText(o: AvanOffer) {
+  if (!o.enabled) return '未开放'
+  if (o.pricing_status === 'WAITING_QUOTE' || !o.sale_price) return '等待报价'
+  return `$${o.sale_price} · 库存 ${o.stock}`
+}
 const probeSteps = ref<{ key: string; title: string; state: string; detail: string }[]>([])
 const xCards = ref<any[]>([])
 const calls = ref<any[]>([])
@@ -614,6 +634,7 @@ function openAccount(id: number, nextTab: string) {
   openaiSpendable.value = ''
   openaiReserve.value = ''
   planFees.value = []
+  offers.value = []
   balanceErr.value = ''
   plansErr.value = ''
 }
@@ -634,6 +655,7 @@ function applyPing(d: any) {
   openaiSpendable.value = d.spendable_usd || ''
   openaiReserve.value = d.reserve_usd || ''
   planFees.value = d.plan_fees || []
+  offers.value = d.offers || []
   pingSpendable.value = d.spendable_usd || ''
   balanceErr.value = d.balance_error || ''
   plansErr.value = d.plans_error || ''

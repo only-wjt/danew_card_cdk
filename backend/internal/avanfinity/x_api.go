@@ -3,6 +3,7 @@ package avanfinity
 import (
 	"context"
 	"net/http"
+	"strings"
 )
 
 // PublicCDK 是公开兑换返回的业务快照。HTTP 200 不代表付款完成。
@@ -35,6 +36,18 @@ type DirectOrder struct {
 	InvoiceURLs      []string `json:"invoiceUrls"`
 	ErrorCode        string   `json:"errorCode"`
 	Message          string   `json:"message"`
+
+	CardID              int64   `json:"cardId"`
+	ServiceFeeStatus    string  `json:"serviceFeeStatus"`
+	PaymentSubmitted    bool    `json:"paymentSubmitted"`
+	PaymentStatus       *string `json:"paymentStatus"`
+	PaymentIntentStatus *string `json:"paymentIntentStatus"`
+	CardLast4           string  `json:"cardLast4"`
+	FxRateDate          *string `json:"fxRateDate"`
+	EligibleBefore      bool    `json:"eligibleBefore"`
+	EligibleAfter       bool    `json:"eligibleAfter"`
+	Product             string  `json:"product"`
+	CreatedAt           string  `json:"createdAt"`
 }
 
 // IssuedCDK 是生成结果里的一张上游码。Code 只在内存里停留，调用方必须立刻加密。
@@ -49,6 +62,16 @@ type IssuedCDK struct {
 	FundingAmountUSD       string `json:"fundingAmountUsd"`
 	ServiceFee             string `json:"serviceFee"`
 	PricingVersion         int64  `json:"pricingVersion"`
+
+	Status              string  `json:"status"`
+	TotalWalletDebitUSD string  `json:"totalWalletDebitUsd"`
+	CardID              *int64  `json:"cardId"`
+	Recipient           *string `json:"recipient"`
+	FundingDispatched   bool    `json:"fundingDispatched"`
+	PaymentDispatched   bool    `json:"paymentDispatched"`
+	FundingFeeUSD       string  `json:"fundingFeeUsd"`
+	OpenFeeUSD          string  `json:"openFeeUsd"`
+	CreatedAt           string  `json:"createdAt"`
 }
 
 type GenerateResult struct {
@@ -85,12 +108,11 @@ func (c *Client) PreflightCDK(ctx context.Context, code, deviceToken, recipient,
 }
 
 func (c *Client) RedeemCDK(ctx context.Context, code, deviceToken, clientRequestID, currency string, amountMinor int64) (*PublicCDK, error) {
+	// 文档要求 expectedAmountMinor 和 currency（小写三位）必填，缺了上游直接 400。
 	body := map[string]any{
 		"code": code, "deviceToken": deviceToken, "clientRequestId": clientRequestID,
-	}
-	if amountMinor > 0 && currency != "" {
-		body["expectedAmountMinor"] = amountMinor
-		body["currency"] = currency
+		"expectedAmountMinor": amountMinor,
+		"currency":            strings.ToLower(strings.TrimSpace(currency)),
 	}
 	var out PublicCDK
 	err := c.Call(ctx, http.MethodPost, "/api/v1/public/x-cdk/redeem", "", body, &out, false)
