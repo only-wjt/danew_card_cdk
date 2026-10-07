@@ -258,9 +258,31 @@ func AdminPingCardPlatform(c *gin.Context) {
 		msg = "主机可达；可能 IP 不在白名单（403）"
 	}
 	var spendable, reserve, balanceErr, plansErr string
-	var planFees []gin.H
+	var planFees, offers []gin.H
 	v1 := acc.Protocol == db.AccountProtocolAvanfinity202608
-	if key != "" || strings.TrimSpace(acc.CredPublic) != "" {
+	if v1 && (key != "" || strings.TrimSpace(acc.CredPublic) != "") {
+		// 备台按 Avan OpenAPI：余额 /balance，价格和库存 /gpt-direct/cdk-offers。
+		av, _ := provider.NewAvanfinityV2026(acc).(provider.AvanfinityAccount)
+		if bal, berr := av.Balance(c.Request.Context()); berr != nil {
+			balanceErr = pingErrText(berr)
+		} else {
+			spendable = bal.Spendable
+		}
+		if list, oerr := av.Offers(c.Request.Context()); oerr != nil {
+			plansErr = pingErrText(oerr)
+		} else {
+			for _, o := range list {
+				price := ""
+				if o.SalePrice != nil {
+					price = *o.SalePrice
+				}
+				offers = append(offers, gin.H{
+					"plan": o.Plan, "enabled": o.Enabled, "sale_price": price,
+					"pricing_status": o.PricingStatus, "stock": o.Stock,
+				})
+			}
+		}
+	} else if key != "" || strings.TrimSpace(acc.CredPublic) != "" {
 		cli := cardplatform.New(cfg)
 		if v1 {
 			cli = cardplatform.NewFromAccount(acc)
@@ -299,13 +321,23 @@ func AdminPingCardPlatform(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok": healthy || !v1, "message": msg, "probed": probed, "status": status,
 		"account_id": req.ID, "name": acc.Name, "site_base": base,
-		"spendable_usd": spendable, "reserve_usd": reserve, "plan_fees": planFees, "egress_ip": egressIP,
+		"spendable_usd": spendable, "reserve_usd": reserve, "plan_fees": planFees, "offers": offers, "egress_ip": egressIP,
 		"balance_error": balanceErr, "plans_error": plansErr,
 	})
 }
 
 // pingErrText 把卡台错误翻成运营能看懂的一句话。
 func pingErrText(err error) string {
+	var avErr *provider.AvanfinityAPIError
+	if errors.As(err, &avErr) {
+		switch avErr.Status {
+		case http.StatusUnauthorized:
+			return "凭证被拒（401）：" + avErr.Error() + "。核对 App ID / App Secret"
+		case http.StatusForbidden:
+			return "被拒（403）：" + avErr.Error() + "。检查出口 IP 是否在白名单、App 是否有对应权限"
+		}
+		return avErr.Error()
+	}
 	var apiErr *cardplatform.APIError
 	if errors.As(err, &apiErr) {
 		switch apiErr.HTTPStatus {

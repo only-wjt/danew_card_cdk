@@ -192,7 +192,7 @@ func reclaimUpstream(ctx context.Context, p CardProvider, remoteID string) {
 	} else if err != ErrRefundUnsupported {
 		log.Printf("[dual-issue] delete+refund failed remote=%s: %v", remoteID, err)
 	}
-	if err := p.Disable(ctx, remoteID); err != nil {
+	if err := p.Disable(ctx, remoteID); err != nil && err != ErrRefundUnsupported {
 		log.Printf("[dual-issue] disable fallback failed remote=%s: %v", remoteID, err)
 	}
 }

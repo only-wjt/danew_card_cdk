@@ -31,7 +31,11 @@ func RetireSiblings(ctx context.Context, siteCodeID, consumedBindingID int64) {
 		} else if err != ErrRefundUnsupported {
 			log.Printf("[retire] delete+refund failed binding=%d remote=%s: %v", b.ID, b.RemoteID, err)
 		}
-		if err := p.Disable(ctx, b.RemoteID); err != nil {
+		if err := p.Disable(ctx, b.RemoteID); err == ErrRefundUnsupported {
+			// 上游没有作废接口（Avanfinity）：只在本站标作废，路由不会再选这张。
+			_ = db.UpdateBindingStatus(b.ID, db.BindingStatusRetired, "上游不支持作废，仅本站标记")
+			continue
+		} else if err != nil {
 			// 收不回来是钱的问题，兑换侧靠 binding 状态兜底，所以标 unknown 等人工。
 			_ = db.UpdateBindingStatus(b.ID, db.BindingStatusUnknown, err.Error())
 			log.Printf("[retire] disable failed binding=%d remote=%s: %v", b.ID, b.RemoteID, err)

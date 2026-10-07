@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -174,7 +175,7 @@ func (c *Client) ListCards(ctx context.Context) ([]Card, error) {
 	}
 	// 文档里 CardsResponse.data 可能直接是数组，也可能是 {list:[]}。两种都接。
 	var raw json.RawMessage
-	if err := c.do(ctx, http.MethodGet, "/api/v1/cards?page=1&pageSize=100", "", nil, &raw, true); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/api/v1/cards?page=1&page_size=100", "", nil, &raw, true); err != nil {
 		return nil, err
 	}
 	if len(raw) == 0 {
@@ -206,22 +207,24 @@ func (c *Client) ProbeWriteAllowlist(ctx context.Context, cardID int64) (detail 
 		"fundingAmountUsd":       "0",
 		"cardId":                 cardID,
 	}
+	// 文档里 X CDK 的 id 是 uuid 字符串，不是整数。
 	var created struct {
 		List []struct {
-			ID int64 `json:"id"`
+			ID         string `json:"id"`
+			CodePrefix string `json:"codePrefix"`
 		} `json:"list"`
 	}
 	if err := c.do(ctx, http.MethodPost, "/api/v1/x-direct/cdks/generate", idem, body, &created, true); err != nil {
 		return "", err
 	}
-	if len(created.List) == 0 || created.List[0].ID <= 0 {
+	if len(created.List) == 0 || strings.TrimSpace(created.List[0].ID) == "" {
 		return "", fmt.Errorf("测试发码没有返回可撤销的 id")
 	}
-	id := created.List[0].ID
+	id := strings.TrimSpace(created.List[0].ID)
 	revokeIdem := newIdempotencyKey()
-	path := fmt.Sprintf("/api/v1/x-direct/cdks/%d/revoke", id)
+	path := "/api/v1/x-direct/cdks/" + url.PathEscape(id) + "/revoke"
 	if err := c.do(ctx, http.MethodPost, path, revokeIdem, nil, nil, true); err != nil {
-		return "", fmt.Errorf("测试码 %d 已生成，但撤销失败，请到 Avanfinity 后台撤销: %w", id, err)
+		return "", fmt.Errorf("测试码 %s（%s）已生成，但撤销失败，请到 Avanfinity 后台撤销: %w", id, created.List[0].CodePrefix, err)
 	}
 	return "通过 · 测试码已撤销", nil
 }
