@@ -15,7 +15,7 @@
 
       <RedeemModeTabs />
 
-      <div class="grid sm:grid-cols-2 gap-3 mb-6">
+      <div class="grid sm:grid-cols-3 gap-3 mb-6">
         <button type="button" class="product-card" :class="{ on: product === 'gpt' }" @click="product = 'gpt'">
           <div class="font-semibold text-ink">{{ t('recharge.productGpt') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productGptHint') }}</p>
@@ -24,9 +24,14 @@
           <div class="font-semibold text-ink">{{ t('recharge.productX') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productXHint') }}</p>
         </button>
+        <button type="button" class="product-card" :class="{ on: product === 'tg' }" @click="product = 'tg'">
+          <div class="font-semibold text-ink">{{ t('recharge.productTg') }}</div>
+          <p class="mt-1 text-sm text-muted">{{ t('recharge.productTgHint') }}</p>
+        </button>
       </div>
 
       <XRedeemView v-if="product === 'x'" :key="xSeed || 'x'" embedded :initial-code="xSeed" @switch-gpt="onSwitchGpt" />
+      <TgRedeemView v-else-if="product === 'tg'" :key="tgSeed || 'tg'" embedded :initial-code="tgSeed" @switch-gpt="onSwitchGpt" />
 
       <template v-else>
       <!-- redeem-flow v2: no public fee reference -->
@@ -264,6 +269,7 @@ import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import XRedeemView from './XRedeemView.vue'
+import TgRedeemView from './TgRedeemView.vue'
 import XCookieGuide from '../../components/XCookieGuide.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
@@ -280,10 +286,21 @@ const recoveryPending = ref(false)
 let preflightSequence = 0
 const error = ref('')
 const code = ref('')
-const product = ref<'gpt' | 'x'>('gpt')
+const product = ref<'gpt' | 'x' | 'tg'>('gpt')
 const xSeed = ref('')
+const tgSeed = ref('')
 
 function onSwitchGpt(raw: string) {
+  if (/^DNX-/i.test(raw)) {
+    product.value = 'x'
+    xSeed.value = raw
+    return
+  }
+  if (/^DNT-/i.test(raw)) {
+    product.value = 'tg'
+    tgSeed.value = raw
+    return
+  }
   product.value = 'gpt'
   code.value = raw
 }
@@ -809,6 +826,11 @@ async function doPreview() {
     product.value = 'x'
     return
   }
+  if (/^DNT-/i.test(code.value.trim())) {
+    tgSeed.value = code.value.trim()
+    product.value = 'tg'
+    return
+  }
   busy.value = true
   try {
     const cdk = code.value.trim()
@@ -1037,6 +1059,11 @@ onMounted(() => {
   if (route.query.product === 'x' || /^DNX-/i.test(q)) {
     product.value = 'x'
     xSeed.value = q
+    return
+  }
+  if (route.query.product === 'tg' || /^DNT-/i.test(q)) {
+    product.value = 'tg'
+    tgSeed.value = q
     return
   }
   if (loadProgress()) {

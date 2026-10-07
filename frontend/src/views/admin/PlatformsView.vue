@@ -255,7 +255,12 @@
           </div>
 
           <div v-else-if="tab === 'calls'" class="card space-y-2 text-sm">
-            <p class="text-muted">X 没有回调。这里是本站调用上游的记录，用来看白名单、限流和权限。</p>
+            <p class="text-muted">X 和 TG 都没有回调，共用这套凭证。调用记录按产品分开看，白名单失败会同时出现在两边。</p>
+            <el-radio-group v-model="callProduct" size="small" @change="loadCalls">
+              <el-radio-button value="">全部</el-radio-button>
+              <el-radio-button value="x">X</el-radio-button>
+              <el-radio-button value="tg">TG</el-radio-button>
+            </el-radio-group>
             <div v-for="(row, i) in calls" :key="i" class="flex gap-3">
               <span class="text-muted">{{ row.At }}</span>
               <span>{{ row.Method }} {{ row.Path }}</span>
@@ -274,6 +279,7 @@
                 <el-form-item label="App Secret"><el-input v-model="edit.cred_secret" type="password" show-password placeholder="留空不修改" /></el-form-item>
                 <template v-if="!current.serves_openai">
                   <el-checkbox v-model="edit.xCdk">X CDK</el-checkbox>
+                  <p class="text-xs text-muted mt-1">Telegram Premium 用同一套 AppId 和同一个钱包，不用再加一条连接。</p>
                   <el-checkbox v-if="X_DIRECT_UI" v-model="edit.xDirect" class="ml-4">X 直充</el-checkbox>
                 </template>
                 <p v-else class="text-xs text-muted">Avanfinity 用 App ID 和 App Secret，请求走 /api/v1。</p>
@@ -458,6 +464,7 @@ function productLabel(p: any) {
   return `${p.productCode}${head ? ' · ' + head : ''} · 开卡费 $${p.openFee || '0'}`
 }
 const calls = ref<any[]>([])
+const callProduct = ref('')
 const payMode = ref('auto')
 const autoCard = reactive({ product: '', first: '', last: '' })
 const channelRow = ref<any>(null)
@@ -1037,7 +1044,8 @@ watch(current, () => fillEdit())
 async function loadCalls() {
   const a = current.value
   if (!a) return
-  const r = await authFetch('/api/v1/admin/card-platforms/x-calls?id=' + a.id)
+  const q = callProduct.value ? '&product=' + callProduct.value : ''
+  const r = await authFetch('/api/v1/admin/card-platforms/x-calls?id=' + a.id + q)
   const d = await r.json().catch(() => ({}))
   calls.value = d.calls || []
 }

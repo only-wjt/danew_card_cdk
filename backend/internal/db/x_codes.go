@@ -589,17 +589,26 @@ func InsertUpstreamCall(accountID int64, method, path string, status int, detail
 	`, accountID, method, path, status, detail)
 }
 
-func ListUpstreamCalls(accountID int64, limit int) ([]struct {
+func ListUpstreamCalls(accountID int64, limit int, product string) ([]struct {
 	Method, Path, Detail, At string
 	Status                   int
 }, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 30
 	}
+	where := `account_id = ?`
+	args := []any{accountID}
+	switch strings.TrimSpace(product) {
+	case "tg":
+		where += ` AND (path LIKE '%tg-cdk%' OR path LIKE '%tg-direct%')`
+	case "x":
+		where += ` AND path NOT LIKE '%tg-cdk%' AND path NOT LIKE '%tg-direct%'`
+	}
+	args = append(args, limit)
 	rows, err := DB.Query(`
 		SELECT method, path, status, detail, COALESCE(created_at,'')
-		FROM x_upstream_calls WHERE account_id = ? ORDER BY id DESC LIMIT ?
-	`, accountID, limit)
+		FROM x_upstream_calls WHERE `+where+` ORDER BY id DESC LIMIT ?
+	`, args...)
 	if err != nil {
 		return nil, err
 	}

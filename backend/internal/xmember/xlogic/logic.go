@@ -170,7 +170,8 @@ func DecideStatus(prev, upstream string, paymentAttempted, fundingDispatched boo
 
 // ShouldSecondRedeem 只在 CDK 已经注资、且本站还没发出第二次 redeem 时为真。
 func ShouldSecondRedeem(channel, codeStatus string, paymentDispatched bool) bool {
-	return channel == "x_cdk" && codeStatus == "funded" && !paymentDispatched
+	cdk := channel == "x_cdk" || channel == "tg_cdk"
+	return cdk && codeStatus == "funded" && !paymentDispatched
 }
 
 // NoteFunding 在真正调用过 redeem 之后，用上游状态记下「钱可能已经动了」。

@@ -11,6 +11,7 @@
     <header class="proto-head">
       <h1>danew 全站原型（双卡台版）</h1>
       <p>GPT 走 SpaceX，Avanfinity 做备台、默认关闭。X 统一发 DNX- 码，每个套餐在 SpaceX（客户填 X Cookie）和 Avanfinity CDK（客户填 X 用户名）里二选一，码发出时就定死，兑换时不切台。</p>
+      <p>Telegram Premium 跟 X 的 CDK 同一套：只发本站 DNT- 码，只走 Avanfinity CDK。客户填 Telegram 用户名，确认后看四步进度。没有 Cookie，也不把直充订单卖给客户。</p>
       <p class="muted">代理功能已停用，原型不再展示；开发时只隐藏路由和入口，代码和数据保留。</p>
       <p class="muted">金额、卡号、用户名、IP 全是示例数据。按钮都能点，状态会变；刷新页面恢复初始状态。</p>
       <nav id="entry" class="entry"></nav>
@@ -39,6 +40,7 @@
   <script src="site.js"></script>
   <script src="ops-main.js"></script>
   <script src="ops-x.js"></script>
+  <script src="ops-tg.js"></script>
   <script src="ops-platforms.js"></script>
   <script>render()</script>
 </body>

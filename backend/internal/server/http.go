@@ -14,6 +14,7 @@ import (
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/handler"
 	"github.com/danew/cdk-recharge-system/internal/plansync"
+	"github.com/danew/cdk-recharge-system/internal/tgmember"
 	"github.com/danew/cdk-recharge-system/internal/xmember"
 	"github.com/gin-gonic/gin"
 )
@@ -54,6 +55,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// 启动卡台产品状态后台同步（每3分钟）
 	plansync.Start(ctx)
 	xmember.Start(ctx)
+	tgmember.Start(ctx)
 
 	// 重启后把仍在途的批量充值明细与上游状态对齐一次
 	handler.ResumeInFlightBatchRecharges(ctx)
@@ -180,6 +182,13 @@ func setupRoutes(r *gin.Engine) {
 			pubX.POST("/quote", handler.PublicXQuote)
 			pubX.POST("/confirm", handler.PublicXConfirm)
 			pubX.GET("/result", handler.PublicXResult)
+		}
+		pubTG := api.Group("/public/tg")
+		{
+			pubTG.POST("/preview", handler.PublicTGPreview)
+			pubTG.POST("/quote", handler.PublicTGQuote)
+			pubTG.POST("/confirm", handler.PublicTGConfirm)
+			pubTG.GET("/result", handler.PublicTGResult)
 		}
 
 		// 卡密状态查询：是否已用 + 充值邮箱（不返回 token）
@@ -335,6 +344,16 @@ func setupRoutes(r *gin.Engine) {
 			admin.PUT("/x/supply", handler.AdminSaveXSupply)
 			admin.POST("/x/supply/issue", handler.AdminXSupplyIssue)
 			admin.PUT("/x/plan-limits", handler.AdminSaveXLimits)
+			admin.GET("/tg/overview", handler.AdminTGOverview)
+			admin.POST("/tg/issue", handler.AdminTGIssue)
+			admin.GET("/tg/batches", handler.AdminTGBatches)
+			admin.POST("/tg/batches/:id/retry", handler.AdminTGRetryBatch)
+			admin.GET("/tg/records", handler.AdminTGRecords)
+			admin.POST("/tg/records/:id/requery", handler.AdminTGRequery)
+			admin.POST("/tg/records/:id/resolve", handler.AdminTGResolve)
+			admin.POST("/tg/codes/:id/disable", handler.AdminTGDisable)
+			admin.GET("/tg/plan-limits", handler.AdminTGLimits)
+			admin.PUT("/tg/plan-limits", handler.AdminSaveTGLimits)
 			admin.PUT("/card-platforms/dual-bind", handler.AdminPutDualBindConfig)
 			admin.GET("/card-platforms/bindings", handler.AdminGetSiteCDKBindings)
 

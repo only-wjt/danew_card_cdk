@@ -101,7 +101,7 @@ func AdminXCalls(c *gin.Context) {
 	if _, ok := loadXAccount(c, id); !ok {
 		return
 	}
-	rows, err := db.ListUpstreamCalls(id, 40)
+	rows, err := db.ListUpstreamCalls(id, 40, c.Query("product"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return

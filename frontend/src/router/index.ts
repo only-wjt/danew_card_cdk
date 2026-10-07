@@ -128,6 +128,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
       { path: 'platforms', name: 'Platforms', component: () => import('../views/admin/PlatformsView.vue') },
       { path: 'x', name: 'XMember', component: () => import('../views/admin/XMemberView.vue') },
+      { path: 'tg', name: 'TGMember', component: () => import('../views/admin/TgMemberView.vue') },
       { path: 'integration', redirect: `${OPS_BASE}/platforms` },
       { path: 'webhooks', redirect: { path: `${OPS_BASE}/platforms`, query: { panel: 'webhook' } } },
       {

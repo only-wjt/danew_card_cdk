@@ -98,6 +98,9 @@ func TestDecideMapsEveryUpstreamStatus(t *testing.T) {
 }
 
 func TestSecondRedeemOnlyOnce(t *testing.T) {
+	if !ShouldSecondRedeem("tg_cdk", "funded", false) {
+		t.Fatal("tg cdk second redeem")
+	}
 	if !ShouldSecondRedeem("x_cdk", "funded", false) {
 		t.Fatal("funded CDK still needs the payment redeem")
 	}

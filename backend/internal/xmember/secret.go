@@ -67,6 +67,12 @@ func legacyKey() []byte {
 	return sum[:]
 }
 
+// SealPlain 加密上游完整码。TG 和 X 共用同一把密钥。
+func SealPlain(plain string) string { return seal(plain) }
+
+// OpenPlain 解密上游完整码。
+func OpenPlain(enc string) string { return openSeal(enc) }
+
 func seal(plain string) string {
 	if plain == "" {
 		return ""

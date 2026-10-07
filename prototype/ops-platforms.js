@@ -19,6 +19,12 @@ function matrixCell(prod, pid) {
     if (p.gptRole === 'backup') return `${dot(p.conns[0].state === 'ok' ? 'ok' : 'warn')} 备用`
     return `<span class="muted">不用</span>`
   }
+  if (prod === 'tg') {
+    if (pid !== 'avan') return `<span class="muted">不用</span>`
+    const n = S.tgPlans.filter((x) => x.on).length
+    const bad = S.xSources.avan_cdk.state === 'err'
+    return `${dot(bad ? 'err' : 'ok')} 供 ${n} 个套餐 · 共用钱包${bad ? ' · <span style="color:var(--err)">凭证不可用</span>' : ''}`
+  }
   const keys = Object.keys(S.xSources).filter((k) => S.xSources[k].platform === pid)
   const n = S.xPlans.filter((x) => x.on && keys.includes(x.source)).length
   const bad = keys.some((k) => S.xSources[k].state === 'err')
@@ -27,7 +33,8 @@ function matrixCell(prod, pid) {
 function matrixTable() {
   return `<table class="t matrix" style="margin-top:8px"><tr><th></th>${S.platforms.map((p) => `<th>${p.name}</th>`).join('')}</tr>
     <tr><td><b>ChatGPT</b></td>${S.platforms.map((p) => `<td><button class="link" data-act="openPlat" data-arg="${p.id}:gpt">${matrixCell('gpt', p.id)}</button></td>`).join('')}</tr>
-    <tr><td><b>X 会员</b></td>${S.platforms.map((p) => `<td><button class="link" data-act="openPlat" data-arg="${p.id}:x">${matrixCell('x', p.id)}</button></td>`).join('')}</tr></table>`
+    <tr><td><b>X 会员</b></td>${S.platforms.map((p) => `<td><button class="link" data-act="openPlat" data-arg="${p.id}:x">${matrixCell('x', p.id)}</button></td>`).join('')}</tr>
+    <tr><td><b>TG 会员</b></td>${S.platforms.map((p) => `<td>${p.id === 'avan' ? `<button class="link" data-act="openPlat" data-arg="avan:tg">${matrixCell('tg', p.id)}</button>` : matrixCell('tg', p.id)}</td>`).join('')}</tr></table>`
 }
 
 A.openPlat = (arg) => { const [id, tab] = arg.split(':'); S.page = 'ops-platforms'; S.ui.platSide = id; S.ui.plat = id; S.ui.platTab = tab || 'overview' }
@@ -56,7 +63,7 @@ A.testConn = (arg) => {
 A.fixWhitelist = () => {
   const c = plat('avan').conns.find((x) => x.id === 22)
   c.error = undefined; c.state = 'ok'; c.lastOk = '刚刚'; S.xSources.avan_cdk.state = 'ok'
-  toast('Avan X 连通正常，CDK 恢复可用')
+  toast('Avan 会员连通正常，X 和 TG 的 CDK 都恢复了')
 }
 A.saveSecret = (id) => { plat(id).webhook.secret = true; toast('Secret 已保存') }
 A.cardMove = (arg) => {
@@ -69,9 +76,9 @@ A.cardOnline = (arg) => { const [pid, code] = arg.split(':'); const c = plat(pid
 A.unblock = (arg) => { const [pid, id] = arg.split(':'); const p = plat(pid); p.blocked = p.blocked.filter((b) => b.id != id); toast('已解冻') }
 A.addPlat = () => {
   modal('添加卡台', `<label class="f">名称</label>${input('', '', '例如 新卡台 C', 'w-full')}
-    <label class="f">协议</label>${select('', '', [['spacexcard-legacy', 'SpaceX 旧 OpenAPI'], ['avanfinity-2026-08', 'Avanfinity OpenAI'], ['avanfinity-api-v1', 'Avanfinity X 会员']])}
+    <label class="f">协议</label>${select('', '', [['spacexcard-legacy', 'SpaceX 旧 OpenAPI'], ['avanfinity-2026-08', 'Avanfinity OpenAI'], ['avanfinity-api-v1', 'Avanfinity 会员 CDK（X + TG）']])}
     <label class="f">接口地址</label>${input('', '', 'https://', 'w-full')}<label class="f">凭证</label>${input('', '', 'API Key / AppId:Secret', 'w-full', 'password')}
-    <p class="small muted">一家卡台可以加多个连接（比如 Avan 的 OpenAI 和 X 是两套接口）。保存后先测连通，再决定用于哪个产品。</p>`,
+    <p class="small muted">一家卡台可以加多个连接。Avanfinity 的 X 和 TG 用同一套 AppId，不要再建一个 TG 连接。</p>`,
     btn('取消', 'closeModal') + btn('保存并测连通', 'toastMsg', '原型：已保存', 'primary'))
   return 'keep'
 }
@@ -82,17 +89,22 @@ A.editConn = (arg) => {
 }
 
 function platTabs(p) {
-  const t = [['overview', '概览'], ['gpt', 'GPT 选卡'], ['x', 'X · 调用记录'], ['webhook', '回调'], ['creds', '凭证']]
+  const t = [['overview', '概览'], ['gpt', 'GPT 选卡'], ['x', 'X'], ['webhook', '回调'], ['creds', '凭证']]
+  if (p.tg) t.splice(3, 0, ['tg', 'TG'])
   return seg(t, S.ui.platTab, 'platTab')
 }
 function tabOverview(p) {
   const g = p.gpt, x = p.x
+  const walletTitle = p.tg ? '会员钱包' : 'X 钱包'
+  const walletSub = p.tg ? 'X 和 TG 共用，不要加两次' : (x.liability ? `未兑负债 ${usd(x.liability)}` : '')
+  const sync = p.tg ? '已同步 5 个 GPT 套餐、10 个 X 套餐、3 个 TG 套餐' : '已同步 5 个 GPT 套餐、4 个 X 套餐'
   return `<div class="grid g3">${kpi('GPT 可用余额', usd(g.spendable), g.reserve ? `含 ${usd(g.reserve)} 风险保证金` : '')}${kpi('GPT 服务费', g.fee, g.feeNote)}${kpi('连通', p.conns.every((c) => c.state === 'ok') ? '正常' : '有问题', p.conns.map((c) => c.lastOk).join(' · '), p.conns.every((c) => c.state === 'ok') ? 'var(--ok)' : 'var(--warn)')}</div>
-    <div class="grid g3" style="margin-top:12px">${kpi('X 钱包', usd(x.wallet), x.liability ? `未兑负债 ${usd(x.liability)}` : '')}${kpi('近 24 小时 GPT', `成功 ${g.ok24} · 失败 ${g.fail24}`)}${kpi('近 24 小时 X', `成功 ${x.ok24} · 失败 ${x.fail24}`)}</div>
+    <div class="grid" style="margin-top:12px;grid-template-columns:repeat(${p.tg ? 4 : 3},minmax(0,1fr))">${kpi(walletTitle, usd(x.wallet), walletSub)}${kpi('近 24 小时 GPT', `成功 ${g.ok24} · 失败 ${g.fail24}`)}${kpi('近 24 小时 X', `成功 ${x.ok24} · 失败 ${x.fail24}`)}${p.tg ? kpi('近 24 小时 TG', `成功 ${p.tg.ok24} · 失败 ${p.tg.fail24}`) : ''}</div>
     <div class="card stack" style="margin-top:12px"><b>这家卡台用在哪</b>
       <div class="row"><span style="width:90px">ChatGPT</span>${seg([['primary', '主台'], ['backup', '备用'], ['off', '不用']], p.gptRole, 'gptRoleOf')}</div>
-      <div class="row"><span style="width:90px">X 会员</span><span>${matrixCell('x', p.id)}</span>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div></div>
-    <div class="row" style="margin-top:12px">${btn('一键检测（连通 + 余额 + 服务费）', 'toastMsg', '检测完成', 'primary')}${btn('同步套餐', 'toastMsg', '已同步 5 个 GPT 套餐、6 个 X 套餐')}</div>`
+      <div class="row"><span style="width:90px">X 会员</span><span>${matrixCell('x', p.id)}</span>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div>
+      <div class="row"><span style="width:90px">TG 会员</span><span>${matrixCell('tg', p.id)}</span>${p.tg ? btn('去 TG 会员', 'tgGoIssue', '', 'sm') : ''}</div></div>
+    <div class="row" style="margin-top:12px">${btn('一键检测（连通 + 余额 + 服务费）', 'toastMsg', '检测完成', 'primary')}${btn('同步套餐', 'toastMsg', sync)}</div>`
 }
 A.gptRoleOf = (role) => A.gptRole(S.ui.plat + ':' + role)
 function tabGpt(p) {
@@ -104,15 +116,30 @@ function tabGpt(p) {
     <div class="row" style="margin-top:8px">${sw(p.forceNewCard, 'toastMsg', '原型：开关')}<span class="small">每次都开新卡（不复用）</span></div></div>
     <div class="card" style="margin-top:12px"><b>拉黑的卡</b>${p.blocked.length ? `<table class="t"><tr><th>卡 ID</th><th>原因</th><th></th></tr>${p.blocked.map((b) => `<tr><td class="mono">${b.id}</td><td>${b.reason}</td><td>${btn('解冻', 'unblock', p.id + ':' + b.id, 'sm')}</td></tr>`).join('')}</table>` : '<div class="empty">没有</div>'}</div>`
 }
+function callTable(rows, empty) {
+  if (!rows.length) return `<div class="empty">${empty}</div>`
+  return `<table class="t"><tr><th>时间</th><th>方法</th><th>路径</th><th>状态</th><th>说明</th></tr>${rows.map((c) => `<tr><td>${c.at}</td><td>${c.m}</td><td class="mono small">${c.p}</td><td>${tag(c.s, c.s < 300 ? 'ok' : 'err')}</td><td class="small">${c.d}</td></tr>`).join('')}</table>`
+}
 function tabX(p) {
-  if (p.id === 'spacex') return `<div class="card stack"><b>SpaceX X 会员</b><div class="small">客户兑换时提交 X Cookie，SpaceX 负责下单付款。</div>
+  if (p.id === 'spacex') return `<div class="card stack"><b>SpaceX X 会员</b><div class="small">客户兑换时提交 X Cookie，SpaceX 负责下单付款。Telegram 不走这家。</div>
     <div class="grid g3">${kpi('X 钱包', usd(p.x.wallet))}${kpi('未兑 X 码', p.x.unused)}${kpi('近 24 小时', `成功 ${p.x.ok24}`)}</div>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div>`
   const x = p.x
-  return `<div class="card stack"><b>Avanfinity X 会员 · CDK</b><div class="small">兑换时本站先用钱包买一张 Avan CDK，再拿客户填的 X 用户名去兑。</div>
-    <div class="grid g3">${kpi('CDK 钱包', usd(x.wallet))}${kpi('未兑负债', usd(x.liability), `已买未兑 ${x.unusedCdk} 张`)}${kpi('近 24 小时', `成功 ${x.ok24} · 失败 ${x.fail24}`)}</div>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div>
-    <div class="card" style="margin-top:12px"><b>最近调用</b><p class="small muted">X 接口没有回调，这里看本站发给 Avan 的请求。</p>
-    <table class="t"><tr><th>时间</th><th>方法</th><th>路径</th><th>状态</th><th>说明</th></tr>${p.calls.map((c) => `<tr><td>${c.at}</td><td>${c.m}</td><td class="mono small">${c.p}</td><td>${tag(c.s, c.s < 300 ? 'ok' : 'err')}</td><td class="small">${c.d}</td></tr>`).join('')}</table></div>`
+  const rows = (p.calls || []).filter((c) => c.prod !== 'tg')
+  return `<div class="card stack"><b>Avanfinity X · CDK</b><div class="small">和 TG 共用下面这个钱包、同一套 AppId。这里只看 X 的未兑和调用。</div>
+    <div class="grid g3">${kpi('共用钱包', usd(x.wallet), 'TG 也扣这里')}${kpi('X 未兑负债', usd(x.liability), `已买未兑 ${x.unusedCdk} 张`)}${kpi('近 24 小时 X', `成功 ${x.ok24} · 失败 ${x.fail24}`)}</div>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div>
+    <div class="card" style="margin-top:12px"><b>X 的最近调用</b><p class="small muted">没有回调。TG 的请求在「TG」页签，不混在这里。</p>
+    ${callTable(rows, '还没有 X 调用')}</div>`
 }
+function tabTg(p) {
+  if (!p.tg) return `<div class="card"><b>这家卡台不卖 Telegram</b><p class="small muted">TG 只走 Avanfinity CDK，和 X 的 CDK 共用钱包和凭证。</p></div>`
+  const rows = (p.calls || []).filter((c) => c.prod === 'tg')
+  return `<div class="card stack"><b>Avanfinity TG · CDK</b><div class="small">没有第二套凭证。发码和兑换都走会员 CDK 那条连接，客户填 Telegram 用户名。</div>
+    <div class="grid g3">${kpi('共用钱包', usd(p.x.wallet), '和 X 是同一个余额')}${kpi('TG 未兑', p.tg.unused + ' 张', '不计入 X 的未兑负债')}${kpi('近 24 小时 TG', `成功 ${p.tg.ok24} · 失败 ${p.tg.fail24}`)}</div>
+    <div class="row">${btn('去 TG 会员', 'tgGoIssue', '', 'sm')}${btn('上限与告警', 'tgGoLimits', '', 'sm')}</div></div>
+    <div class="card" style="margin-top:12px"><b>TG 的最近调用</b><p class="small muted">路径是 /tg-direct 和 /api/public/tg-cdk。白名单失败会和 X 同时出现，因为是同一套 AppId。</p>
+    ${callTable(rows, '还没有 TG 调用')}</div>`
+}
+A.tgGoLimits = () => { S.page = 'ops-tg'; S.ui.tgTab = 'limits' }
 function tabWebhook(p) {
   const w = p.webhook
   return `<div class="card stack" style="max-width:640px"><b>回调（GPT 订单）</b>
@@ -124,7 +151,7 @@ function tabCreds(p) {
   return `<div class="card"><div class="row between"><b>连接</b>${btn('添加连接', 'addPlat', '', 'sm')}</div>
     <p class="small muted">一家卡台下面可能有几套接口，每套单独测连通。</p>
     <table class="t"><tr><th>接口</th><th>用于</th><th>凭证</th><th>状态</th><th></th></tr>${p.conns.map((c) => `<tr><td>${c.protoLabel}<div class="mono small muted">${c.proto}</div></td>
-      <td>${c.caps.map((k) => tag({ gpt: 'GPT', x_spacex: 'X', x_cdk: 'X CDK' }[k])).join(' ')}</td><td class="mono small">${c.cred}</td>
+      <td>${c.caps.map((k) => tag({ gpt: 'GPT', x_spacex: 'X', x_cdk: 'X CDK', tg_cdk: 'TG CDK' }[k] || k)).join(' ')}</td><td class="mono small">${c.cred}</td>
       <td>${dot(c.state === 'ok' ? 'ok' : c.state === 'idle' ? '' : 'err')} ${c.lastOk}${c.error ? `<div class="small" style="color:var(--err)">${esc(c.error)}</div>` : ''}</td>
       <td>${btn('测连通', 'testConn', p.id + ':' + c.id, 'sm')}${btn('编辑', 'editConn', p.id + ':' + c.id, 'sm')}${c.error ? btn('模拟：已加白名单', 'fixWhitelist', '', 'sm') : ''}</td></tr>`).join('')}</table>
     <div class="row" style="margin-top:10px">${btn(p.enabled ? '停用这家卡台' : '启用', 'platEnable', p.id, p.enabled ? 'danger sm' : 'primary sm')}</div></div>`
@@ -134,10 +161,13 @@ function platSideBar() {
   return `<div class="side-group">卡台</div>${S.platforms.map((p) => {
       const bad = platformProblems().some((x) => x.arg.startsWith(p.id + ':'))
       const role = { primary: 'GPT 主台', backup: 'GPT 备用', off: '' }[p.gptRole]
-      return it(p.id, p.name, p.enabled ? (bad ? '<span style="color:var(--warn)">需要处理</span>' : `GPT ${usd(p.gpt.spendable)} · X ${usd(p.x.wallet)}`) : '已停用', p.enabled ? (bad ? 'warn' : 'ok') : '', [role, 'X'].filter(Boolean).join(' / '))
+      const money = p.tg ? `钱包 ${usd(p.x.wallet)} · X+TG` : `GPT ${usd(p.gpt.spendable)} · X ${usd(p.x.wallet)}`
+      const marks = [role, 'X', p.tg ? 'TG' : ''].filter(Boolean).join(' / ')
+      return it(p.id, p.name, p.enabled ? (bad ? '<span style="color:var(--warn)">需要处理</span>' : money) : '已停用', p.enabled ? (bad ? 'warn' : 'ok') : '', marks)
     }).join('')}
     <div class="side-group">规则</div>${it('policy', 'GPT 发码策略', S.gptPolicy.backupOn ? '主台 + 备用' : '只用主台', null)}
-    <button class="side-item" data-act="xGoSupply"><span style="flex:1">X 供货设置 →<span class="sub">在 X 会员页</span></span></button>
+    <button class="side-item" data-act="xGoSupply"><span style="flex:1">X 供货设置 →<span class="sub">在 X 会员页，TG 不在这里选</span></span></button>
+    <button class="side-item" data-act="tgGoIssue"><span style="flex:1">TG 会员 →<span class="sub">只走这家的 CDK</span></span></button>
     <div class="side-group">其他</div>${it('orphans', '未归属回调', '找不到卡台的回调', null, S.orphans.length)}`
 }
 function platMain() {
@@ -152,7 +182,7 @@ function platMain() {
   if (v === 'orphans') return `<h3>未归属回调</h3><div class="card"><p class="small muted">回调地址对不上任何卡台。多半是卡台后台还填着旧地址。</p><table class="t"><tr><th>时间</th><th>路径</th><th>事件</th></tr>${S.orphans.map((o) => `<tr><td>${o.at}</td><td class="mono small">${o.path}</td><td>${o.ev}</td></tr>`).join('')}</table></div>`
   const p = plat(v)
   return `<div class="row between"><div class="row"><h3 style="margin:0">${p.name}</h3>${tag(p.enabled ? '启用' : '停用', p.enabled ? 'ok' : '')}${p.gptRole !== 'off' ? tag(p.gptRole === 'primary' ? 'GPT 主台' : 'GPT 备用', 'blue') : ''}<span class="small muted">${p.site}</span></div>${btn('一键检测', 'toastMsg', '检测完成', 'sm')}</div>
-    <div style="margin:12px 0">${platTabs(p)}</div>${{ overview: tabOverview, gpt: tabGpt, x: tabX, webhook: tabWebhook, creds: tabCreds }[S.ui.platTab](p)}`
+    <div style="margin:12px 0">${platTabs(p)}</div>${{ overview: tabOverview, gpt: tabGpt, x: tabX, tg: tabTg, webhook: tabWebhook, creds: tabCreds }[S.ui.platTab](p)}`
 }
 A.gptPrimary = (id) => A.gptRole(id + ':primary')
 A.gptBackup = () => {
@@ -173,9 +203,10 @@ page('ops-platforms', {
   notes: [
     '左边按「卡台」列，不再按 OPENAI / X 分组。一家卡台一行，右边页签里同时看到它的 GPT 和 X。现在 Avan 被拆成「备台 B」「Avan-X-CDK」「Avan-X-Direct」三行，其实是一家。',
     'GPT 走 SpaceX 主台；Avanfinity 做 GPT 备台，默认关闭，需要时在「GPT 发码策略」打开。',
-    '顶部「产品 × 卡台」小表回答一个问题：GPT 和 X 现在分别走哪家。点格子跳到对应页签。',
+    '顶部「产品 × 卡台」回答 GPT、X、TG 现在走哪家。TG 只有 Avanfinity 一格能点，进「TG」页签；SpaceX 那格是不用。',
     'GPT 角色（主台 / 备用 / 不用）在卡台概览或「GPT 发码策略」里改，两处是同一个设置。主台不能直接停用。',
-    'X 走哪家不在这里改，统一在「X 会员 → 供货设置」。卡台页只管凭证、钱包和调用记录。Avan X 只用 CDK，直充付款卡不再展示（后端保留）。',
+    'X 走哪家不在这里改，统一在「X 会员 → 供货设置」。TG 没有供货切换。',
+    'Avanfinity 的 X CDK 和 TG CDK 是同一套 AppId、同一个钱包。凭证上打两个标签，概览里钱包只出现一次。调用记录按产品拆开，白名单失败会在两边同时看到。',
     '「凭证」页签列出这家卡台下的每套接口，各自测连通。试试在 Avan 的凭证里点「模拟：已加白名单」，X 会员页的红条会消失。',
     '代理功能已停用：代理端 /partner、代理管理、代理换码在开发时只隐藏路由和入口，不删代码和数据。原来「其他」里的「代理换码」入口去掉。',
   ],

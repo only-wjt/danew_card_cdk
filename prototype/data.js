@@ -29,10 +29,11 @@ const S = {
       gptRole: 'off', // off | backup
       conns: [
         { id: 21, proto: 'avanfinity-2026-08', protoLabel: 'OpenAI · /api/v1 · AppId/Secret', caps: ['gpt'], cred: 'app_7731 / ****', state: 'idle', lastOk: '未启用' },
-        { id: 22, proto: 'avanfinity-api-v1', protoLabel: 'X 会员 · /api/v1 · AppId/Secret', caps: ['x_cdk'], cred: 'app_7731 / ****', state: 'warn', lastOk: '2 小时前', error: '买 CDK 被拒：出口 IP 203.0.113.24 不在这个 App 的白名单' },
+        { id: 22, proto: 'avanfinity-api-v1', protoLabel: '会员 CDK · /api/v1 · AppId/Secret', caps: ['x_cdk', 'tg_cdk'], cred: 'app_7731 / ****', state: 'warn', lastOk: '2 小时前', error: '买 CDK 被拒：出口 IP 203.0.113.24 不在这个 App 的白名单。X 和 TG 共用这套凭证，会一起失败' },
       ],
       gpt: { spendable: 300.0, reserve: 0, fee: '$1.2 / $5.5 / $11', feeNote: 'Plus / Pro 5x / Pro 20x', circuit: 'closed', fail: 0, unused: 0, ok24: 0, fail24: 0 },
       x: { wallet: 820.4, liability: 96.0, unusedCdk: 12, ok24: 9, fail24: 1 },
+      tg: { wallet: 820.4, unused: 4, ok24: 1, fail24: 0 },
       webhook: { secret: false, url: 'https://danew.cc/api/v1/webhooks/card/avan', last: '—' },
       cards: [
         { code: 'AV-VISA-01', label: 'Avan Visa 01', online: true, order: 1 },
@@ -40,9 +41,11 @@ const S = {
       blocked: [],
       forceNewCard: false,
       calls: [
-        { at: '10:42:11', m: 'POST', p: '/api/v1/x/redemptions', s: 403, d: 'ip_not_whitelisted' },
-        { at: '10:41:58', m: 'GET', p: '/api/v1/x/quote', s: 200, d: 'premium_monthly $8.10' },
-        { at: '09:12:03', m: 'GET', p: '/api/v1/wallet', s: 200, d: '$820.40' },
+        { at: '10:42:11', prod: 'x', m: 'POST', p: '/api/public/x-cdk/redeem', s: 403, d: 'ip_not_whitelisted' },
+        { at: '10:41:58', prod: 'x', m: 'POST', p: '/api/public/x-cdk/preview', s: 200, d: 'premium_3m' },
+        { at: '10:20:04', prod: 'tg', m: 'POST', p: '/api/public/tg-cdk/redeem', s: 403, d: '同一套凭证，同样被拒' },
+        { at: '09:12:03', prod: 'tg', m: 'GET', p: '/tg-direct/plans', s: 200, d: 'premium_3m / 6m / 12m' },
+        { at: '09:12:03', prod: 'x', m: 'GET', p: '/api/v1/wallet', s: 200, d: '$820.40 · X 和 TG 共用' },
       ],
     },
   ],
@@ -58,14 +61,35 @@ const S = {
     avan_cdk: { label: 'Avanfinity', sub: '客户填 X 用户名', platform: 'avan', state: 'err' },
   },
   xPlans: [
-    { key: 'x_basic_1m', name: 'Basic 1 个月', cost: { spacex: null, avan_cdk: 3.4 }, source: 'avan_cdk', on: true, cap: 4.5 },
-    { key: 'x_premium_1m', name: 'Premium 1 个月', cost: { spacex: 8.2, avan_cdk: 8.1 }, source: 'avan_cdk', on: true, cap: 9.5 },
-    { key: 'x_premium_3m', name: 'Premium 3 个月', cost: { spacex: 22.0, avan_cdk: 23.5 }, source: 'spacex', on: true, cap: 26 },
-    { key: 'x_premium_12m', name: 'Premium 12 个月', cost: { spacex: 82.0, avan_cdk: 79.0 }, source: 'avan_cdk', on: true, cap: 90 },
-    { key: 'x_plus_1m', name: 'Premium+ 1 个月', cost: { spacex: 15.0, avan_cdk: null }, source: 'spacex', on: true, cap: 18 },
-    { key: 'x_plus_12m', name: 'Premium+ 12 个月', cost: { spacex: 150.0, avan_cdk: 148.0 }, source: 'spacex', on: false, cap: 170 },
+    { key: 'basic_monthly', name: 'Basic · 月付', cost: { spacex: 3.2, avan_cdk: null }, source: 'spacex', on: true, cap: 4 },
+    { key: 'basic_yearly', name: 'Basic · 年付', cost: { spacex: 28, avan_cdk: null }, source: 'spacex', on: true, cap: 32 },
+    { key: 'premium_monthly', name: 'Premium · 月付', cost: { spacex: 8.2, avan_cdk: 8.1 }, source: 'spacex', on: true, cap: 9.5 },
+    { key: 'premium_3m', name: 'Premium · 3 个月', cost: { spacex: 22, avan_cdk: 15 }, source: 'avan_cdk', on: true, cap: 15 },
+    { key: 'premium_6m', name: 'Premium · 6 个月', cost: { spacex: null, avan_cdk: 34 }, source: 'avan_cdk', on: true, cap: 0 },
+    { key: 'premium_12m', name: 'Premium · 12 个月', cost: { spacex: 82, avan_cdk: 79 }, source: 'avan_cdk', on: true, cap: 0 },
+    { key: 'plus_monthly', name: 'Premium+ · 月付', cost: { spacex: 15, avan_cdk: null }, source: 'spacex', on: true, cap: 18 },
+    { key: 'plus_3m', name: 'Premium+ · 3 个月', cost: { spacex: null, avan_cdk: 40 }, source: 'avan_cdk', on: true, cap: 0 },
+    { key: 'plus_6m', name: 'Premium+ · 6 个月', cost: { spacex: null, avan_cdk: 75 }, source: 'avan_cdk', on: true, cap: 0 },
+    { key: 'plus_12m', name: 'Premium+ · 12 个月', cost: { spacex: 150, avan_cdk: 148 }, source: 'avan_cdk', on: true, cap: 0 },
   ],
   xAlerts: { wallet: 50, card: 10, stuck: 30 },
+
+  // Telegram Premium：只走 Avanfinity CDK，客户填用户名。套餐与上游 TgDirectPlanKey 一致。
+  tgPlans: [
+    { key: 'premium_3m', name: 'Premium · 3 个月', cost: 18.5, on: true, cap: 22, currency: 'bdt', official: 30000 },
+    { key: 'premium_6m', name: 'Premium · 6 个月', cost: 34.0, on: true, cap: 0, currency: 'bdt', official: 56000 },
+    { key: 'premium_12m', name: 'Premium · 12 个月', cost: 62.0, on: true, cap: 72, currency: 'bdt', official: 108000 },
+  ],
+  tgAlerts: { wallet: 50, stuck: 30 },
+  tgCodes: [
+    { id: 801, code: 'DNT-P3M-8K2Q-AC', plan: 'premium_3m', status: 'done', group: 'done', user: 'Jceywjt', amt: '30,000 BDT', fee: '', at: '10-07 05:56', ev: ['05:13 报价 @Jceywjt', '05:55 报价 @Jceywjt', '05:56 客户确认开通', '05:56 第二次 redeem：派发付款'] },
+    { id: 800, code: 'DNT-P6M-1AA0-AC', plan: 'premium_6m', status: 'running', group: 'running', user: 'tg_alice', amt: '56,000 BDT', fee: '$0.40', at: '10-07 04:12', ev: ['04:10 报价 @tg_alice', '04:12 客户确认开通', '04:12 注资中'] },
+    { id: 799, code: 'DNT-P12-90ZX-AC', plan: 'premium_12m', status: 'todo', group: 'todo', user: 'carol_tg', amt: '108,000 BDT', fee: '', at: '10-06 21:03', ev: ['21:01 报价 @carol_tg', '21:03 客户确认开通', '21:04 上游超时，付款结果不确定'] },
+    { id: 798, code: 'DNT-P3M-NEW1-AC', plan: 'premium_3m', status: 'unused', group: 'unused', user: '', amt: '—', fee: '', at: '10-06 18:00', ev: [] },
+  ],
+  tgBatches: [
+    { id: 12, at: '10-06 18:00', plan: 'premium_3m', qty: 10, used: 1, note: '闲鱼' },
+  ],
 
   // ── GPT 套餐 ──
   gptPlans: [
@@ -92,15 +116,15 @@ const S = {
 
   // ── X 码 ──
   xCodes: [
-    { id: 501, code: 'DNX-P1M-7HQ2-AC', plan: 'x_premium_1m', source: 'avan_cdk', status: 'running', group: 'running', user: 'alice_dev', msg: 'CDK 已提交，等待 Avanfinity 开通', usd: 8.1, at: '07-28 10:31', ev: ['10:31 客户提交 @alice_dev', '10:31 用 CDK 兑换（花费 $8.10，上限 $9.50）', '10:32 等待开通'] },
-    { id: 500, code: 'DNX-P3M-K1LM-SX', plan: 'x_premium_3m', source: 'spacex', status: 'done', group: 'done', user: 'bob_x', msg: '已开通', usd: 22.0, at: '07-28 09:50', ev: ['09:50 客户提交 Cookie', '09:51 SpaceX 订单完成'] },
-    { id: 499, code: 'DNX-P12-QQ90-AC', plan: 'x_premium_12m', source: 'avan_cdk', status: 'todo', group: 'todo', user: 'carol', msg: '上游返回不确定，需要人工确认是否已开通', usd: 79.0, at: '07-28 08:12', ev: ['08:12 客户提交 @carol', '08:13 上游超时', '08:43 查询 6 次仍不确定'] },
-    { id: 498, code: 'DNX-B1M-PO0A-AC', plan: 'x_basic_1m', source: 'avan_cdk', status: 'unused', group: 'unused', user: '', msg: '未兑换', usd: 0, at: '07-27 20:00', ev: [] },
-    { id: 497, code: 'DNX-PL1-8U7Y-SX', plan: 'x_plus_1m', source: 'spacex', status: 'failed', group: 'failed', user: 'dave', msg: 'Cookie 已过期，客户可重新提交', usd: 0, at: '07-27 19:30', ev: ['19:30 客户提交 Cookie', '19:30 SpaceX 返回 cookie_invalid'] },
+    { id: 1, code: 'DNX-F14EC888-A425F3AA-D754A286', plan: 'premium_3m', source: 'avan_cdk', status: 'done', group: 'done', user: 'Jceywjt', msg: '', official: '30,000 BDT', usd: 0, fee: '', note: '', at: '2026-10-07 04:45:36', ev: ['10-07 05:13:06 报价 @Jceywjt', '10-07 05:55:58 报价 @Jceywjt', '10-07 05:56:14 客户确认开通', '10-07 05:56:22 第二次 redeem：派发付款'] },
+    { id: 501, code: 'DNX-P1M-7HQ2-AC', plan: 'premium_monthly', source: 'spacex', status: 'running', group: 'running', user: 'alice_dev', msg: 'CDK 已提交，等待开通', official: '—', usd: 8.1, fee: '', note: '', at: '07-28 10:31', ev: ['10:31 客户提交 Cookie', '10:32 等待开通'] },
+    { id: 499, code: 'DNX-P12-QQ90-AC', plan: 'premium_12m', source: 'avan_cdk', status: 'todo', group: 'todo', user: 'carol', msg: '上游返回不确定，需要人工确认是否已开通', official: '108,000 BDT', usd: 79, fee: '', note: '客服 #331', at: '07-28 08:12', ev: ['08:12 客户提交 @carol', '08:13 上游超时', '08:43 查询 6 次仍不确定'] },
+    { id: 498, code: 'DNX-B1M-PO0A-AC', plan: 'basic_monthly', source: 'spacex', status: 'unused', group: 'unused', user: '', msg: '未兑换', official: '—', usd: 0, fee: '', note: '', at: '07-27 20:00', ev: [] },
+    { id: 497, code: 'DNX-PL1-8U7Y-SX', plan: 'plus_monthly', source: 'spacex', status: 'failed', group: 'failed', user: 'dave', msg: 'Cookie 已过期，客户可重新提交', official: '—', usd: 0, fee: '', note: '', at: '07-27 19:30', ev: ['19:30 客户提交 Cookie', '19:30 SpaceX 返回 cookie_invalid'] },
   ],
   xBatches: [
-    { id: 31, at: '07-28 09:00', plan: 'x_premium_1m', source: 'avan_cdk', qty: 20, used: 6, note: '闲鱼' },
-    { id: 30, at: '07-27 15:00', plan: 'x_premium_3m', source: 'spacex', qty: 10, used: 9, note: '' },
+    { id: 31, at: '10-07 04:40', plan: 'premium_3m', source: 'avan_cdk', qty: 1, used: 1, note: '' },
+    { id: 30, at: '07-27 15:00', plan: 'premium_monthly', source: 'spacex', qty: 10, used: 9, note: '' },
   ],
 
   // ── 兑换对账 ──
@@ -131,7 +155,8 @@ const S = {
   // ── 页面局部状态 ──
   ui: {
     plat: 'spacex', platTab: 'overview', platSide: 'spacex',
-    xTab: 'supply', xIssue: { plan: 'x_premium_1m', qty: 10, note: '' }, xIssued: [], xGroup: 'todo', xSel: 499, xQ: '',
+    xTab: 'issue', xIssue: { plan: 'premium_3m', qty: 1, note: '', region: '日本' }, xIssued: [], xGroup: 'all', xQ: '', xList: { q: '', group: 'all', plan: '', page: 1 }, xRecPage: 1, xSelIds: [],
+    tgTab: 'issue', tgIssue: { plan: 'premium_3m', qty: 1, note: '' }, tgIssued: [], tgGroup: 'all', tgQ: '', tgList: { q: '', group: 'all', plan: '', page: 1 }, tgRecPage: 1, tgSelIds: [],
     cdkTab: 'site', cdkIssue: { plan: 'plus', region: '菲律宾 PHP', qty: 10, note: '', dual: false }, cdkIssued: [], cdkFilter: { status: '', kind: '' },
     ordFilter: { product: '', plat: '', st: '' }, ordSel: null,
     redeem: { step: 1, code: '', info: null, cred: '', err: '' },

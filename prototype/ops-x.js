@@ -11,7 +11,7 @@ function cheapestOk(p, exclude) {
 }
 
 A.xTab = (v) => { S.ui.xTab = v }
-A.xGoTodo = () => { S.page = 'ops-x'; S.ui.xTab = 'records'; S.ui.xGroup = 'todo'; S.ui.xSel = S.xCodes.find((c) => c.group === 'todo')?.id ?? null }
+A.xGoTodo = () => { S.page = 'ops-x'; S.ui.xTab = 'records'; S.ui.xGroup = 'todo'; S.ui.xRecPage = 1 }
 A.xGoIssue = () => { S.page = 'ops-x'; S.ui.xTab = 'issue' }
 A.xGoSupply = () => { S.page = 'ops-x'; S.ui.xTab = 'supply' }
 
@@ -41,18 +41,34 @@ A.xFixAffected = () => {
 A.xFixDo = () => { xAffected().forEach((p) => { const to = cheapestOk(p, p.source); if (to) p.source = to; else p.on = false }); toast('已切换') }
 
 A.xIssuePlan = (k) => { S.ui.xIssue.plan = k }
+A.xQty = (n) => { S.ui.xIssue.qty = Number(n) }
+A.xQtyStep = (d) => { S.ui.xIssue.qty = Math.min(200, Math.max(1, Number(S.ui.xIssue.qty) + Number(d))) }
 A.xIssue = () => {
   const f = S.ui.xIssue, p = xPlan(f.plan)
+  if (!p.on) { toast('这个套餐已停售'); return }
   if (srcState(p.source) === 'err') { toast(`${srcLabel(p.source)} 现在不可用，先在「供货设置」切走`); return }
-  const n = Math.min(f.qty, 50)
-  const codes = Array.from({ length: n }, () => `DNX-${p.key.split('_')[1].slice(0, 1).toUpperCase()}${p.key.split('_')[2].toUpperCase()}-${rnd(4)}-${srcPrefix(p.source)}`)
-  codes.forEach((code, i) => S.xCodes.unshift({ id: 600 + S.xCodes.length + i, code, plan: p.key, source: p.source, status: 'unused', group: 'unused', user: '', msg: '未兑换', usd: 0, at: now(), ev: [] }))
+  const n = Math.min(Math.max(Number(f.qty) || 1, 1), 200)
+  const codes = Array.from({ length: n }, () => `DNX-${rnd(8)}-${rnd(8)}-${rnd(6)}`)
+  codes.forEach((code, i) => S.xCodes.unshift({ id: 600 + S.xCodes.length + i, code, plan: p.key, source: p.source, status: 'unused', group: 'unused', user: '', msg: '未兑换', official: '—', usd: 0, fee: '', note: f.note, at: now(), ev: [] }))
   S.xBatches.unshift({ id: 32 + S.xBatches.length, at: now(), plan: p.key, source: p.source, qty: n, used: 0, note: f.note })
   S.ui.xIssued = codes
   toast(`已生成 ${n} 张，供货 ${srcLabel(p.source)}`)
 }
-A.xGroup = (g) => { S.ui.xGroup = g; S.ui.xSel = S.xCodes.find((c) => c.group === g)?.id ?? null }
-A.xSel = (id) => { S.ui.xSel = Number(id) }
+A.xGroup = (g) => { S.ui.xGroup = g; S.ui.xRecPage = 1 }
+A.xRecPage = (n) => { S.ui.xRecPage = Math.max(1, Number(n) || 1) }
+A.xListPage = (n) => { S.ui.xList.page = Math.max(1, Number(n) || 1) }
+A.xListQuery = () => { S.ui.xList.page = 1; toast('已查询') }
+A.xToggle = (id) => {
+  const set = new Set(S.ui.xSelIds)
+  const n = Number(id)
+  if (set.has(n)) set.delete(n); else set.add(n)
+  S.ui.xSelIds = [...set]
+}
+A.xTogglePage = (ids) => {
+  const pageIds = String(ids).split(',').filter(Boolean).map(Number)
+  const all = pageIds.every((id) => S.ui.xSelIds.includes(id))
+  S.ui.xSelIds = all ? S.ui.xSelIds.filter((id) => !pageIds.includes(id)) : [...new Set([...S.ui.xSelIds, ...pageIds])]
+}
 A.xResolve = (arg) => {
   const [id, r] = arg.split(':'); const c = S.xCodes.find((x) => x.id == id)
   if (r === 'done') { c.status = 'done'; c.group = 'done'; c.msg = '人工确认已开通' }
@@ -62,7 +78,18 @@ A.xResolve = (arg) => {
 }
 A.xVoid = (id) => { const c = S.xCodes.find((x) => x.id == id); c.status = 'void'; c.group = 'void'; c.msg = '已作废'; toast('已作废') }
 
-const X_GROUPS = [['todo', '待处理'], ['running', '进行中'], ['failed', '失败'], ['unused', '未兑'], ['done', '已开通']]
+const X_GROUPS = [['all', '全部'], ['todo', '待处理'], ['running', '进行中'], ['done', '已完成'], ['unused', '未使用'], ['failed', '失败已退回']]
+const srcTag = (k) => `<span class="src-tag ${k === 'spacex' ? 'spacex' : 'avan'}">${k === 'spacex' ? 'SpaceX' : 'Avanfinity'}</span>`
+const xChannel = (c) => (c.source === 'spacex' ? 'SpaceX' : 'X CDK')
+function xCardLine(p) {
+  if (p.source === 'spacex') return '兑换时客户填 X Cookie'
+  if (!p.cap) return `<button class="link" data-act="xTab" data-arg="limits">还没填上限，去填</button>`
+  return `每张最多 ${usd(p.cap)}`
+}
+function xMatch(c, group, q, plan) {
+  const text = `${c.code} ${c.user} ${c.note || ''}`.toLowerCase()
+  return (group === 'all' || c.group === group) && (!plan || c.plan === plan) && (!q || text.includes(q))
+}
 
 function xSupplyTab() {
   const aff = xAffected()
@@ -77,33 +104,67 @@ function xSupplyTab() {
     <p class="small muted" style="margin-top:8px">金额是最近一次实测成本（含服务费）。点「卡台」页的「测试连接」会刷新。</p></div>`
 }
 
+function xMenu(label, items) {
+  return `<details class="menu"><summary>${label}</summary><div class="pop">${items.map(([t, act, arg]) => `<button data-act="${act}" data-arg="${esc(arg)}">${t}</button>`).join('')}</div></details>`
+}
 function xIssueTab() {
   const f = S.ui.xIssue, p = xPlan(f.plan), bad = srcState(p.source) === 'err'
-  return `<div class="card stack"><b>发 X 卡密</b>
-    <div class="grid g3">${S.xPlans.filter((x) => x.on).map((x) => `<button class="plan-card ${f.plan === x.key ? 'on' : ''}" data-act="xIssuePlan" data-arg="${x.key}"><div class="n">${x.name}</div><div class="s">${dot(srcState(x.source))} 供货 ${srcLabel(x.source)} · 约 ${usd(x.cost[x.source])}</div></button>`).join('')}</div>
-    <div class="row">${[1, 10, 50].map((n) => btn(n, 'xQty', n, 'sm')).join('')}${input('ui.xIssue.qty', f.qty, '', '', 'number')}${input('ui.xIssue.note', f.note, '备注，客服可搜')}${btn('生成', 'xIssue', '', 'primary', bad ? 'disabled' : '')}</div>
-    <p class="small">${f.qty} 张 ${p.name} · 供货 <b>${srcLabel(p.source)}</b> · 客户兑换时${S.xSources[p.source].sub.replace('客户', '')} ${btn('改供货', 'xTab', 'supply', 'sm')}</p>
+  const q = (S.ui.xList.q || '').trim().toLowerCase()
+  const rows = S.xCodes.filter((c) => c.source === 'avan_cdk' && xMatch(c, S.ui.xList.group, q, S.ui.xList.plan))
+  const page = S.ui.xList.page || 1
+  const pageRows = rows.slice((page - 1) * 20, page * 20)
+  const ids = pageRows.map((r) => r.id).join(',')
+  return `<div class="card stack">
+    <div class="grid g3">${S.xPlans.filter((x) => x.on).map((x) => `<div class="plan-card ${f.plan === x.key ? 'on' : ''}" data-act="xIssuePlan" data-arg="${x.key}"><div class="top"><span class="n">${x.name}</span>${srcTag(x.source)}</div><div class="s">${xCardLine(x)}</div></div>`).join('')}</div>
+    <p class="small muted">${p.source === 'spacex' ? 'SpaceX：发码时锁定付款地区，客户兑换时要填 X 的 Cookie（auth_token / ct0）。' : 'Avanfinity：发码不扣钱，兑换时从钱包出，客户只填 X 用户名。上限在发码时锁死。'}</p>
+    <div class="row"><span class="small muted">数量</span>${btn('−', 'xQtyStep', -1, 'sm')}${input('ui.xIssue.qty', f.qty, '', '', 'number')}${btn('+', 'xQtyStep', 1, 'sm')}${[1, 10, 50, 100, 200].map((n) => btn(n, 'xQty', n, 'sm')).join('')}${p.source === 'spacex' ? `<span class="small muted">付款地区</span>${select('ui.xIssue.region', f.region, ['日本', '美国', '菲律宾', '土耳其'].map((r) => [r, r]))}` : ''}${input('ui.xIssue.note', f.note, '备注，客服可搜')}${btn(`生成 ${f.qty} 张 ${p.name}`, 'xIssue', '', 'primary', bad ? 'disabled' : '')}</div>
     ${bad ? `<div class="alert err small">这个套餐的供货卡台现在不可用，先去「供货设置」切走。</div>` : ''}
-    ${S.ui.xIssued.length ? `<div class="card" style="background:var(--surface-2)"><div class="row between"><b>刚生成 ${S.ui.xIssued.length} 张</b><span class="row">${btn('复制兑换链接', 'toastMsg', '已复制', 'sm')}${btn('复制卡密', 'toastMsg', '已复制', 'sm')}</span></div><div class="mono small">${S.ui.xIssued.slice(0, 5).join('<br/>')}</div></div>` : ''}</div>
-    <div class="card" style="margin-top:12px"><b>最近批次</b><table class="t" style="margin-top:8px"><tr><th>时间</th><th>套餐</th><th>供货</th><th>已用/总数</th><th>备注</th><th></th></tr>
-    ${S.xBatches.map((b) => `<tr><td>${b.at}</td><td>${xPlan(b.plan).name}</td><td>${srcLabel(b.source)}</td><td>${b.used}/${b.qty}</td><td>${esc(b.note)}</td><td>${btn('导出', 'toastMsg', '已导出', 'sm')}</td></tr>`).join('')}</table></div>`
+    ${S.ui.xIssued.length ? `<div class="card" style="background:var(--ok-soft)"><div class="row between"><b>本批 ${S.ui.xIssued.length} 张</b><span class="row">${btn('复制', 'toastMsg', '已复制', 'sm')}${btn('复制链接', 'toastMsg', '已复制', 'sm')}${btn('导出', 'toastMsg', '已导出', 'sm')}</span></div><div class="mono small">${S.ui.xIssued.slice(0, 5).join('<br/>')}</div></div>` : ''}</div>
+    <div class="card" style="margin-top:12px">
+      <b>CDK 列表</b>
+      <p class="small muted">共 ${rows.length} 条 · 只列 Avanfinity 出的码（DNX-），SpaceX 出的码在「GPT 会员」页</p>
+      <div class="row" style="margin:8px 0">${input('ui.xList.q', S.ui.xList.q, '搜索卡密 / 用户名 / 备注')}${select('ui.xList.group', S.ui.xList.group, X_GROUPS)}${select('ui.xList.plan', S.ui.xList.plan, [['', '套餐'], ...S.xPlans.map((x) => [x.key, x.name])])}${btn('查询', 'xListQuery', '', 'primary sm')}${btn('刷新', 'toastMsg', '已刷新', 'sm')}<span style="flex:1"></span>${xMenu('复制 / 导出', [['复制选中', 'toastMsg', '已复制'], ['导出当前列表', 'toastMsg', '已导出']])}${xMenu('批量操作', [['复制兑换链接', 'toastMsg', '已复制'], ['批量作废未使用', 'toastMsg', '已作废未使用的码']])}</div>
+      ${pageRows.length ? `<table class="t"><tr><th><button class="link" data-act="xTogglePage" data-arg="${ids}">选</button></th><th>ID</th><th>卡密</th><th>套餐</th><th>状态</th><th>开通给</th><th>参考金额</th><th>服务费</th><th>备注</th><th>时间</th><th></th></tr>
+        ${pageRows.map((r) => `<tr><td><button class="link" data-act="xToggle" data-arg="${r.id}">${S.ui.xSelIds.includes(r.id) ? '☑' : '☐'}</button></td><td>${r.id}</td><td class="mono small">${esc(r.code)}<div class="muted">完整 · ${r.code.length}字 · 点复制</div></td><td>${xPlan(r.plan).name}</td><td>${statusTag(r.status)}</td><td>${r.user ? '@' + esc(r.user) : '—'}</td><td class="mono">${r.usd ? usd(r.usd) : '—'}</td><td>${r.fee || '—'}</td><td>${esc(r.note) || '—'}</td><td>${r.at}</td><td>${xMenu('操作', [['复制卡密', 'toastMsg', '已复制'], ['复制兑换链接', 'toastMsg', '已复制'], ['看兑换记录', 'xDetail', r.id], ...(r.status === 'unused' ? [['作废', 'xVoid', r.id]] : [])])}</td></tr>`).join('')}</table>` : '<div class="empty">暂无数据</div>'}
+      ${pagerBar(page, rows.length, 'xListPage', 20)}
+      <details style="margin-top:8px"><summary class="small muted">最近批次</summary>
+        <table class="t"><tr><th>时间</th><th>套餐</th><th>供货</th><th>已用/总数</th><th>备注</th><th></th></tr>
+        ${S.xBatches.map((b) => `<tr><td>${b.at}</td><td>${xPlan(b.plan).name}</td><td>${srcLabel(b.source)}</td><td>${b.used}/${b.qty}</td><td>${esc(b.note)}</td><td>${btn('导出', 'toastMsg', '已导出', 'sm')}</td></tr>`).join('')}</table></details>
+    </div>`
 }
-A.xQty = (n) => { S.ui.xIssue.qty = Number(n) }
+
+A.xDetail = (id) => {
+  const c = S.xCodes.find((x) => x.id == id)
+  if (!c) return
+  const p = xPlan(c.plan)
+  drawer('兑换详情', `<div class="stack small">
+      <div class="row">${c.group === 'done' ? tag('已开通', 'ok') : statusTag(c.status)}<span class="muted">${xChannel(c)}</span></div>
+      ${c.msg ? `<div class="alert small">${esc(c.msg)}</div>` : ''}
+      <table class="t"><tr><td class="muted">卡密</td><td class="mono">${esc(c.code)}</td></tr>
+        <tr><td class="muted">套餐</td><td>${esc(p.name)}</td></tr>
+        <tr><td class="muted">开通给</td><td>${c.user ? '@' + esc(c.user) : '—'}</td></tr>
+        <tr><td class="muted">官方金额</td><td>${esc(c.official || '—')}</td></tr>
+        <tr><td class="muted">参考美元</td><td>${c.usd ? usd(c.usd) : '—'}</td></tr>
+        <tr><td class="muted">服务费</td><td>${c.fee || '—'}</td></tr>
+        ${c.note ? `<tr><td class="muted">备注</td><td>${esc(c.note)}</td></tr>` : ''}
+        <tr><td class="muted">时间</td><td>${esc(c.at)}</td></tr></table>
+      <b>处理过程</b>
+      <div class="timeline">${c.ev.length ? c.ev.map((e) => `<div>${esc(e)}</div>`).join('') : '<div class="muted">还没有过程记录。</div>'}</div>
+      <details><summary class="muted">排障信息</summary><div class="muted">卡台 ${plat(S.xSources[c.source].platform).name} · 上游订单 up_${c.id}88 · 请求 req_${c.id}<br/>注资 ${c.status === 'unused' ? '未发出' : '已发出'} · 付款 ${c.status === 'done' ? '已发出' : '未发出'}</div></details>
+    </div>`,
+    `<div class="row">${c.status === 'running' || c.status === 'todo' ? btn('重新查询', 'toastMsg', '上游：付款中', 'sm') : ''}${c.group === 'todo' ? btn('人工处理', 'xResolve', c.id + ':done', 'primary sm') : ''}${c.status === 'unused' ? btn('作废', 'xVoid', c.id, 'danger sm') : ''}${btn('复制兑换链接', 'toastMsg', '已复制', 'sm')}</div>`)
+  return 'keep'
+}
 
 function xRecordsTab() {
-  const rows = S.xCodes.filter((c) => c.group === S.ui.xGroup)
-  const c = S.xCodes.find((x) => x.id === S.ui.xSel && x.group === S.ui.xGroup)
-  return `<div class="row" style="margin-bottom:10px">${X_GROUPS.map(([g, l]) => btn(`${l} ${S.xCodes.filter((x) => x.group === g).length}`, 'xGroup', g, S.ui.xGroup === g ? 'primary sm' : 'sm')).join('')}${input('ui.xQ', S.ui.xQ, '搜卡密 / 用户名 / 备注')}</div>
-    <div class="grid" style="grid-template-columns:minmax(0,1fr) 340px">
-    <div class="card">${rows.length ? `<table class="t"><tr><th>卡密</th><th>套餐</th><th>供货</th><th>开通给</th><th>说明</th><th>时间</th></tr>
-      ${rows.map((r) => `<tr class="click ${c?.id === r.id ? 'sel' : ''}" data-act="xSel" data-arg="${r.id}"><td class="mono">${r.code}</td><td>${xPlan(r.plan).name}</td><td>${srcLabel(r.source)}</td><td>${r.user ? '@' + esc(r.user) : '—'}</td><td class="small">${esc(r.msg)}</td><td>${r.at}</td></tr>`).join('')}</table>` : '<div class="empty">这一组是空的</div>'}</div>
-    ${c ? `<div class="card stack small"><div class="row between"><b>${statusTag(c.status)} ${c.code}</b></div>
-      ${c.group === 'todo' ? `<div class="alert small">${esc(c.msg)}</div>` : ''}
-      <div>套餐 ${xPlan(c.plan).name} · 供货 ${srcLabel(c.source)}</div><div>开通给 ${c.user ? '@' + esc(c.user) : '—'} · 花费 ${usd(c.usd)}</div>
-      <b>处理过程</b><div class="timeline">${c.ev.length ? c.ev.map((e) => `<div>${esc(e)}</div>`).join('') : '<div class="muted">还没有记录</div>'}</div>
-      <div class="row">${c.group === 'todo' ? btn('确认已开通', 'xResolve', c.id + ':done', 'primary sm') + btn('没开通，退回重提', 'xResolve', c.id + ':retry', 'sm') : ''}
-        ${c.status === 'running' || c.status === 'todo' ? btn('重新查询', 'toastMsg', '上游：处理中', 'sm') : ''}${c.status === 'unused' ? btn('作废', 'xVoid', c.id, 'danger sm') : ''}${btn('复制兑换链接', 'toastMsg', '已复制', 'sm')}</div>
-      <details><summary class="muted">排障信息</summary><div class="muted">卡台 ${plat(S.xSources[c.source].platform).name} · 上游订单 up_${c.id}88 · 请求 req_${c.id}</div></details></div>` : '<div></div>'}</div>`
+  const q = (S.ui.xQ || '').trim().toLowerCase()
+  const rows = S.xCodes.filter((c) => xMatch(c, S.ui.xGroup, q, ''))
+  const page = S.ui.xRecPage || 1
+  const pageRows = rows.slice((page - 1) * 20, page * 20)
+  return `<div class="card"><div class="row"><span class="small muted">共 <b>${rows.length}</b> 笔</span>${select('ui.xGroup', S.ui.xGroup, X_GROUPS)}${input('ui.xQ', S.ui.xQ, '卡密 / 用户名 / 备注')}${btn('查询', 'xGroup', S.ui.xGroup, 'primary sm')}</div></div>
+    <div class="card" style="margin-top:12px;padding:0">${pageRows.length ? `<table class="t"><tr><th>记录</th><th>卡密</th><th>套餐</th><th>开通给</th><th>金额</th><th>状态</th><th>时间</th><th>操作</th></tr>
+      ${pageRows.map((r) => `<tr><td>#${r.id}</td><td class="mono small">${esc(r.code)}<div class="muted">${xChannel(r)}</div></td><td>${xPlan(r.plan).name}</td><td class="mono">${r.user ? '@' + esc(r.user) : '—'}</td><td class="mono">${esc(r.official || (r.usd ? usd(r.usd) : '—'))}${r.fee ? `<div class="small muted">费 ${esc(r.fee)}</div>` : ''}</td><td>${r.status === 'done' ? tag('完成', 'ok') : statusTag(r.status)}</td><td>${r.at}</td><td>${btn('详情', 'xDetail', r.id, 'sm')}</td></tr>`).join('')}</table>` : '<div class="empty">暂无兑换记录</div>'}
+    <div style="padding:0 12px 12px">${pagerBar(page, rows.length, 'xRecPage', 20)}</div></div>`
 }
 
 function xLimitsTab() {
@@ -122,26 +183,36 @@ page('ops-x', {
   group: 'ops', title: 'X 会员', url: () => '/ops/x?tab=' + S.ui.xTab,
   render: () => {
     const sx = plat('spacex'), av = plat('avan')
-    const strip = (name, d, line, act) => `<div class="card"><div class="row between"><span class="row">${dot(d)}<b>${name}</b></span>${btn('在卡台查看', 'openPlat', act, 'sm')}</div><div class="small muted" style="margin-top:4px">${line}</div></div>`
-    return `<div class="page-head"><div><h2>X 会员</h2><p>X 只在这里发码、选卡台、处理单子。凭证和调用记录在「卡台」页。</p></div>${btn('刷新', 'toastMsg', '已刷新')}</div>
-    <div class="grid g2" style="margin-bottom:12px">
-      ${strip('SpaceX', srcState('spacex'), `钱包 ${usd(sx.x.wallet)} · 未兑 ${sx.x.unused} 张 · 客户填 X Cookie`, 'spacex:x')}
-      ${strip('Avanfinity · CDK', srcState('avan_cdk'), srcState('avan_cdk') === 'err' ? '<span style="color:var(--err)">买 CDK 被拒（出口 IP 不在白名单）</span>' : `钱包 ${usd(av.x.wallet)} · 未兑负债 ${usd(av.x.liability)} · 客户填 X 用户名`, 'avan:x')}
+    const nSx = S.xPlans.filter((p) => p.on && p.source === 'spacex').length
+    const nAv = S.xPlans.filter((p) => p.on && p.source === 'avan_cdk').length
+    const today = S.xCodes.filter((c) => c.group === 'done').length
+    const running = S.xCodes.filter((c) => c.group === 'running').length
+    const todo = S.xCodes.filter((c) => c.group === 'todo').length
+    const unused = S.xCodes.filter((c) => c.status === 'unused').length
+    const strip = (name, d, tags, lines, act) => `<div class="card stack"><div class="row">${dot(d)}<b>${name}</b>${tags}</div>${lines}<div>${btn('在卡台查看', 'openPlat', act, 'sm')}</div></div>`
+    return `<div class="page-head"><div><h2>X 会员</h2><p>每个套餐只从一家卡台出码，在「供货设置」里二选一。卡台凭证在「卡台」页改。</p></div>${btn('刷新', 'toastMsg', '已刷新')}</div>
+    <div class="grid g2" style="margin-bottom:8px">
+      ${strip('SpaceX', srcState('spacex'), tag(nSx ? `供 ${nSx} 个套餐` : '没有套餐走这里', nSx ? 'ok' : ''), `<p class="small">主台 A（现网）（GPT 主台，同一套凭证）</p><p class="small muted">发码时锁定付款地区，客户兑换时填 X Cookie。</p>`, 'spacex:x')}
+      ${strip('Avanfinity X', srcState('avan_cdk') === 'err' ? 'warn' : 'ok', tag('已启用', 'ok') + tag(nAv ? `供 ${nAv} 个套餐` : '没有套餐走这里', nAv ? 'ok' : ''), `<p class="small">avanfinity · X</p><p class="small muted">钱包 ${usd(av.x.wallet)} · 未兑负债 ${usd(av.x.liability)} · ${av.x.unusedCdk} 张未兑</p>${srcState('avan_cdk') === 'err' ? `<p class="small" style="color:var(--warn)">${esc(plat('avan').conns[1].error)}</p>` : ''}`, 'avan:x')}
     </div>
-    <div class="row" style="margin-bottom:12px">${seg([['supply', '供货设置'], ['issue', '发码'], ['records', `兑换记录${S.xCodes.filter((c) => c.group === 'todo').length ? ' · 待处理 ' + S.xCodes.filter((c) => c.group === 'todo').length : ''}`], ['limits', '上限与告警']], S.ui.xTab, 'xTab')}</div>
+    <div class="statline">今日开通 ${today} · 进行中 ${running} · 待处理 ${todo} · 未兑 ${unused}</div>
+    <div class="row" style="margin-bottom:12px">${seg([['issue', '发码'], ['records', '兑换记录'], ['supply', '供货设置'], ['limits', '上限与告警']], S.ui.xTab, 'xTab')}</div>
     ${{ supply: xSupplyTab, issue: xIssueTab, records: xRecordsTab, limits: xLimitsTab }[S.ui.xTab]()}`
   },
   notes: () => ({
     supply: [
-      '「供货设置」是运营唯一要动的地方：每个套餐一行，选一家卡台。点圆点就切换，会记审计。',
-      '切换只影响之后新发的码。每张 DNX- 码在发出那一刻就绑定了卡台（码尾 SX / AC 只是原型里方便你看，正式版不带）。',
-      '每个套餐只有两个选项：SpaceX（客户填 X Cookie）或 Avanfinity CDK（客户填 X 用户名）。Avan 直充不再提供，后端代码保留，界面隐藏。',
-      '某家卡台挂了，顶部红条会列出受影响的套餐，「把受影响的套餐切走」按成本自动挑一个可用的。试试点一下。',
-      'X 不做双绑：两家兑换要填的东西不同（用户名 / Cookie），X 每一步都可能动钱，自动切台容易重复扣款。',
-      '「不卖」表示这家卡台没有这个套餐，不能选。停售开关关掉后，发码页就看不到这个套餐。',
+      '供货设置仍是每个套餐二选一。发码页不再选卡台，角标直接显示这套餐现在走 SpaceX 还是 Avanfinity。',
+      '切换只影响之后新发的码。SpaceX 出的码在「GPT 会员」页，Avanfinity 的 DNX- 留在本页 CDK 列表。',
     ],
-    issue: ['发码只选套餐、数量、备注。供货卡台跟着「供货设置」走，发码时不用再选，下面一行写清楚这批走哪家、客户要填什么。', '供货卡台不可用时，生成按钮置灰，提示先去切。'],
-    records: ['兑换记录按「待处理 / 进行中 / 失败 / 未兑 / 已开通」分组，默认打开待处理。右侧是处理面板，人工确认或退回重提一步完成。', '「待处理」的数量同时显示在顶部导航的红点上。'],
-    limits: ['花费上限改成按套餐一行，不再按通道拆成好几列（原来 CDK 钱包上限、CDK 注资、服务费上限分开设，运营很难理解）。'],
+    issue: [
+      '发码页和现网一致：套餐卡片右上角是供货来源，下面一行是客户要填什么，或「还没填上限，去填」。',
+      '数量用加减和 1 / 10 / 50 / 100 / 200。走 SpaceX 时多一个付款地区。按钮文案是「生成 N 张 套餐名」。',
+      'CDK 列表只列 Avanfinity 的码。点「详情」或操作里的「看兑换记录」打开右侧抽屉，时间线不铺在表格上。',
+    ],
+    records: [
+      '兑换记录默认「全部」，用下拉筛选状态。表格列是记录、卡密、套餐、开通给、金额、状态、时间、详情。',
+      '详情是右侧抽屉：官方金额、参考美元、服务费、处理过程、重新查询 / 人工处理 / 复制链接、排障信息。',
+    ],
+    limits: ['没填上限的 Avanfinity 套餐，发码卡片上会提示去这里填。已经发出去的码按发码当时的上限执行。'],
   })[S.ui.xTab],
 })

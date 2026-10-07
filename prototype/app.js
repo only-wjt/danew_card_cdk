@@ -13,6 +13,7 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const usd = (n) => (n == null ? '—' : '$' + Number(n).toFixed(2))
 const plat = (id) => S.platforms.find((p) => p.id === id)
 const xPlan = (k) => S.xPlans.find((p) => p.key === k)
+const tgPlan = (k) => S.tgPlans.find((p) => p.key === k)
 const gptPlan = (k) => S.gptPlans.find((p) => p.key === k)
 const rnd = (n) => Array.from({ length: n }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('')
 const now = () => { const d = new Date(); return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` }
@@ -36,12 +37,22 @@ function toast(msg) {
   clearTimeout(toast._t); toast._t = setTimeout(() => (el.hidden = true), 2200)
 }
 function modal(title, body, foot = '') {
+  $('#modal-mask').classList.remove('as-drawer')
   $('#modal-title').textContent = title
   $('#modal-body').innerHTML = body
   $('#modal-foot').innerHTML = foot || btn('关闭', 'closeModal')
   $('#modal-mask').hidden = false
 }
-A.closeModal = () => { $('#modal-mask').hidden = true }
+function drawer(title, body, foot = '') {
+  modal(title, body, foot)
+  $('#modal-mask').classList.add('as-drawer')
+}
+A.closeModal = () => { $('#modal-mask').hidden = true; $('#modal-mask').classList.remove('as-drawer') }
+function pagerBar(page, total, act, size = 20) {
+  const pages = Math.max(1, Math.ceil(total / size))
+  const p = Math.min(page, pages)
+  return `<div class="pager"><span>第 ${p} 页 · 共 ${total} 条</span><span class="row">${btn('‹', act, String(p - 1), 'sm', p <= 1 ? 'disabled' : '')}<span class="tag">${p}</span>${btn('›', act, String(p + 1), 'sm', p >= pages ? 'disabled' : '')}<span class="small">20/page</span></span></div>`
+}
 
 // 按路径写状态，例如 "ui.xIssue.qty"
 function setPath(path, val) {
@@ -54,10 +65,11 @@ function setPath(path, val) {
 // 管理端外壳
 function opsNav() {
   const todo = S.xCodes.filter((c) => c.group === 'todo').length
+  const tgTodo = S.tgCodes.filter((c) => c.group === 'todo').length
   const probs = platformProblems().length
   return [
-    ['ops-dash', '总览'], ['ops-cdk', 'GPT 卡密'], ['ops-batch', '批量充值'], ['ops-orders', '兑换对账'],
-    ['ops-x', 'X 会员', todo], ['ops-platforms', '卡台', probs], ['ops-appearance', '外观'], ['ops-audit', '审计'],
+    ['ops-dash', '总览'], ['ops-cdk', 'GPT 会员'], ['ops-x', 'X 会员', todo], ['ops-tg', 'TG 会员', tgTodo],
+    ['ops-batch', '批量充值'], ['ops-orders', '兑换对账'], ['ops-platforms', '卡台', probs], ['ops-appearance', '外观'], ['ops-audit', '审计'],
   ]
 }
 function opsShell(inner) {
@@ -73,7 +85,10 @@ function siteShell(inner) {
 function render() {
   const p = PAGES[S.page]
   $('#entry').innerHTML = GROUPS.map((g) => `<button class="chip ${g.id === p.group ? 'on' : ''}" data-act="group" data-arg="${g.id}">${g.label}</button>`).join('')
-  $('#pages').innerHTML = Object.values(PAGES).filter((x) => x.group === p.group && !x.hidden).map((x) => `<button class="chip ${x.id === S.page ? 'on' : ''}" data-act="go" data-arg="${x.id}">${x.title}</button>`).join('')
+  const opsOrder = ['ops-dash', 'ops-cdk', 'ops-x', 'ops-tg', 'ops-batch', 'ops-orders', 'ops-platforms', 'ops-appearance', 'ops-audit']
+  const pages = Object.values(PAGES).filter((x) => x.group === p.group && !x.hidden)
+  if (p.group === 'ops') pages.sort((a, b) => opsOrder.indexOf(a.id) - opsOrder.indexOf(b.id))
+  $('#pages').innerHTML = pages.map((x) => `<button class="chip ${x.id === S.page ? 'on' : ''}" data-act="go" data-arg="${x.id}">${x.title}</button>`).join('')
   $('#url').textContent = 'danew.cc' + (typeof p.url === 'function' ? p.url() : p.url)
   const inner = p.render()
   $('#frame').innerHTML = p.group === 'ops' ? opsShell(inner) : siteShell(inner)

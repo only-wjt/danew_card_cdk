@@ -2,7 +2,7 @@
   <div class="card overflow-x-auto">
     <div class="mb-2 flex items-center justify-between">
       <div class="text-sm font-semibold text-ink">产品 × 卡台</div>
-      <div class="text-xs text-muted">GPT 按主台优先、失败切备台；X 每个套餐只从一家卡台取码</div>
+      <div class="text-xs text-muted">GPT 按主台优先、失败切备台。X 按套餐选卡台。TG 只走 Avanfinity，和 X CDK 共用钱包。</div>
     </div>
     <table class="data-table">
       <thead>
@@ -30,6 +30,13 @@
             <span v-if="!hasX(v.key)" class="text-muted">未接入</span>
             <span v-else-if="supplyCounts[v.key]" class="text-emerald-600">供 {{ supplyCounts[v.key] }} 个套餐</span>
             <span v-else class="text-muted">已接入 · 没有套餐走这家</span>
+          </td>
+        </tr>
+        <tr>
+          <td>TG 会员</td>
+          <td v-for="v in vendors" :key="'tg-' + v.key">
+            <span v-if="v.key !== 'avan' || !hasX('avan')" class="text-muted">不用</span>
+            <span v-else class="text-emerald-600">共用 X 的钱包</span>
           </td>
         </tr>
       </tbody>

@@ -2,7 +2,7 @@
   <div class="pb-2 space-y-4">
     <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
       <div>
-        <h1 class="text-2xl font-bold text-ink">CDK 卡密</h1>
+        <h1 class="text-2xl font-bold text-ink">GPT 会员</h1>
         <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
           <el-tag :type="configured ? 'success' : 'danger'" size="small">
             {{ configured ? 'API 已配置' : '未配置 Key' }}

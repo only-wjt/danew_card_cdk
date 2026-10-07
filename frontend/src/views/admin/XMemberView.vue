@@ -136,7 +136,7 @@
     <section class="card space-y-3">
       <div>
         <h2 class="text-lg font-semibold text-ink">CDK 列表</h2>
-        <p class="text-xs text-muted mt-0.5">共 {{ listTotal }} 条 · 只列 Avanfinity 出的码（DNX-），SpaceX 出的码在「CDK 卡密」页</p>
+        <p class="text-xs text-muted mt-0.5">共 {{ listTotal }} 条 · 只列 Avanfinity 出的码（DNX-），SpaceX 出的码在「GPT 会员」页</p>
       </div>
       <div class="toolbar-filters">
         <el-input v-model="listQ" clearable class="!w-[260px]" placeholder="搜索卡密 / 用户名 / 备注" @keyup.enter="loadList" @clear="loadList" />
@@ -683,7 +683,6 @@ function onRowCommand(cmd: string, row: RecordRow) {
 function planName(k: string) { return names[k] || k }
 function statusName(k: string) { return statusNames[k] || k }
 function channelName(k: string) { return k === 'x_cdk' ? 'X CDK' : k === 'x_direct' ? 'X 直充' : k }
-function groupName(k: string) { return groups.find((g) => g.key === k)?.label || k }
 function batchStatus(k: string) {
   if (k === 'pending') return '待确认'
   if (k === 'failed') return '失败'

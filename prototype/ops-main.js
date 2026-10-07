@@ -4,24 +4,30 @@ page('ops-dash', {
   render: () => {
     const sx = plat('spacex'), av = plat('avan')
     const xTodo = S.xCodes.filter((c) => c.group === 'todo').length
+    const tgTodo = S.tgCodes.filter((c) => c.group === 'todo').length
     const probs = platformProblems()
     return `<div class="page-head"><div><h2>总览</h2><p>今天的情况，按产品线看。</p></div></div>
-    ${probs.length || xTodo ? `<div class="alert"><b>需要处理</b>
+    ${probs.length || xTodo || tgTodo ? `<div class="alert"><b>需要处理</b>
       ${probs.map((p) => `<div class="row"><span>${p.text}</span><button class="link" data-act="${p.act}" data-arg="${p.arg}">${p.btn}</button></div>`).join('')}
-      ${xTodo ? `<div class="row"><span>X 会员有 ${xTodo} 单需要人工确认</span><button class="link" data-act="xGoTodo">去处理</button></div>` : ''}</div>` : ''}
-    <div class="grid g2">
+      ${xTodo ? `<div class="row"><span>X 会员有 ${xTodo} 单需要人工确认</span><button class="link" data-act="xGoTodo">去处理</button></div>` : ''}
+      ${tgTodo ? `<div class="row"><span>TG 会员有 ${tgTodo} 单需要人工确认</span><button class="link" data-act="tgGoTodo">去处理</button></div>` : ''}</div>` : ''}
+    <div class="grid g3">
       <div class="card stack"><div class="row between"><b>ChatGPT</b>${tag('SpaceX 主台', 'blue')}</div>
         <div class="grid g3">${kpi('今日兑换', sx.gpt.ok24)}${kpi('失败', sx.gpt.fail24)}${kpi('SpaceX 可用余额', usd(sx.gpt.spendable))}</div>
         <div class="small muted">备用台：${S.gptPolicy.backupOn ? 'Avanfinity（已开启）' : '未开启'} · 未用本站码 ${sx.gpt.unused} 张</div>
-        <div class="row">${btn('发 GPT 卡密', 'go', 'ops-cdk', 'primary sm')}${btn('看 SpaceX', 'openPlat', 'spacex:overview', 'sm')}</div></div>
+        <div class="row">${btn('GPT 会员', 'go', 'ops-cdk', 'primary sm')}${btn('看 SpaceX', 'openPlat', 'spacex:overview', 'sm')}</div></div>
       <div class="card stack"><div class="row between"><b>X 会员</b>${tag('按套餐选卡台')}</div>
         <div class="grid g3">${kpi('今日开通', sx.x.ok24 + av.x.ok24)}${kpi('待处理', xTodo, '', xTodo ? 'var(--warn)' : '')}${kpi('未兑负债', usd(av.x.liability), 'Avan CDK')}</div>
         <div class="small muted">SpaceX 供 ${S.xPlans.filter((p) => p.on && p.source === 'spacex').length} 个套餐 · Avanfinity 供 ${S.xPlans.filter((p) => p.on && p.source !== 'spacex').length} 个</div>
         <div class="row">${btn('发 X 卡密', 'xGoIssue', '', 'primary sm')}${btn('供货设置', 'xGoSupply', '', 'sm')}</div></div>
+      <div class="card stack"><div class="row between"><b>TG 会员</b>${tag('Avanfinity CDK')}</div>
+        <div class="grid g3">${kpi('今日开通', av.tg.ok24)}${kpi('待处理', tgTodo, '', tgTodo ? 'var(--warn)' : '')}${kpi('未兑', av.tg.unused, '张')}</div>
+        <div class="small muted">只卖 Premium 3 / 6 / 12 个月 · 客户填 Telegram 用户名</div>
+        <div class="row">${btn('发 TG 卡密', 'tgGoIssue', '', 'primary sm')}${btn('兑换记录', 'tgGoTodo', '', 'sm')}</div></div>
     </div>
     <div class="card" style="margin-top:12px"><b>卡台</b>${matrixTable()}</div>`
   },
-  notes: ['总览按产品线分两块：ChatGPT、X 会员。所有问题汇总在顶部黄条，每条都直接跳到能修它的地方。', '下面的「产品 × 卡台」小表和卡台页顶部是同一张，一眼看出哪个产品在哪家卡台上有问题。'],
+  notes: ['总览按产品线分三块：ChatGPT、X 会员、TG 会员。所有问题汇总在顶部黄条，每条都直接跳到能修它的地方。', 'TG 只走 Avanfinity CDK，不进 GPT 的兑换对账。记录在「TG 会员」。'],
 })
 
 // ── GPT 卡密 ──
@@ -41,16 +47,16 @@ A.cdkFilter = (v) => { const [k, val] = v.split(':'); S.ui.cdkFilter[k] = val }
 A.cdkVoid = (id) => { const c = S.gptCodes.find((x) => x.id == id); c.status = 'void'; toast('已作废，卡台上的码同步撤销') }
 
 page('ops-cdk', {
-  group: 'ops', title: 'GPT 卡密', url: '/ops/cdkeys',
+  group: 'ops', title: 'GPT 会员', url: '/ops/cdkeys',
   render: () => {
     const f = S.ui.cdkIssue, fl = S.ui.cdkFilter
     const tabs = seg([['site', '本站码 DN-'], ['legacy', '老码（卡台原生）'], ['stock', '白号库存']], S.ui.cdkTab, 'cdkTab')
-    const issue = `<div class="card stack"><b>发 GPT 卡密</b>
+    const issue = `<div class="card stack"><b>发 GPT 会员</b>
       <div class="grid g4" style="grid-template-columns:repeat(5,minmax(0,1fr))">${S.gptPlans.map((p) => `<button class="plan-card ${f.plan === p.key ? 'on' : ''}" data-act="cdkPlan" data-arg="${p.key}"><div class="n">${p.name}</div><div class="s">SpaceX 服务费 ${usd(p.price)}</div></button>`).join('')}</div>
       <div class="row">${select('ui.cdkIssue.region', f.region, S.regions.map((r) => [r, r]))}${input('ui.cdkIssue.qty', f.qty, '', '', 'number')}${input('ui.cdkIssue.note', f.note, '备注，客服可搜')}
         <span class="row small">${sw(f.dual && S.gptPolicy.backupOn, 'cdkDual')}<span class="${S.gptPolicy.backupOn ? '' : 'muted'}">同时在 Avanfinity 备一张</span></span>
         ${btn('生成', 'cdkIssue', '', 'primary')}</div>
-      <p class="small muted">${S.gptPolicy.backupOn ? '备用台已开启。勾选后，SpaceX 挂了会自动用 Avanfinity 那张兜底。' : '备用台没开，只在 SpaceX 买一张。要开去「卡台 → GPT 发码策略」。'} X 卡密不在这里发，去「X 会员」。</p>
+      <p class="small muted">${S.gptPolicy.backupOn ? '备用台已开启。勾选后，SpaceX 挂了会自动用 Avanfinity 那张兜底。' : '备用台没开，只在 SpaceX 买一张。要开去「卡台 → GPT 发码策略」。'} X 卡密去「X 会员」，TG 卡密去「TG 会员」。</p>
       ${S.ui.cdkIssued.length ? `<div class="card" style="background:var(--surface-2)"><div class="row between"><b>刚生成 ${S.ui.cdkIssued.length} 张</b>${btn('复制全部', 'toastMsg', '已复制', 'sm')}</div><div class="mono small">${S.ui.cdkIssued.slice(0, 5).join('<br/>')}${S.ui.cdkIssued.length > 5 ? '<br/>…' : ''}</div></div>` : ''}</div>`
     let list = ''
     if (S.ui.cdkTab === 'site') {
@@ -67,10 +73,10 @@ page('ops-cdk', {
       list = `<div class="row between" style="margin:10px 0"><span class="small muted">白号（已有 Plus 的现成账号）。兑换 Plus 时优先出白号，不消耗卡台余额。</span>${btn('导入白号', 'stockImport', '', 'primary sm')}</div>
       <table class="t"><tr><th>账号</th><th>套餐</th><th>状态</th><th>导入</th></tr>${S.localStock.map((s) => `<tr><td>${s.email}</td><td>${gptPlan(s.plan).name}</td><td>${tag(s.status, s.status === '可用' ? 'ok' : '')}</td><td>${s.at}</td></tr>`).join('')}</table>`
     }
-    return `<div class="page-head"><div><h2>GPT 卡密</h2><p>只管 ChatGPT。默认在 SpaceX 买码，对外发 DN- 本站码。</p></div></div>${issue}<div class="card" style="margin-top:12px"><div class="row between"><b>卡密列表</b>${tabs}</div>${list}</div>`
+    return `<div class="page-head"><div><h2>GPT 会员</h2><p>只管 ChatGPT。默认在 SpaceX 买码，对外发 DN- 本站码。SpaceX 出的 X 码也在这张表里；Avanfinity 的 DNX-、DNT- 不在这里。</p></div></div>${issue}<div class="card" style="margin-top:12px"><div class="row between"><b>卡密列表</b>${tabs}</div>${list}</div>`
   },
   notes: [
-    '原「CDK卡密」改名「GPT 卡密」，只发 GPT。原来在这里能发的 X 套餐挪到「X 会员」，三条 X 链路合成一条。',
+    '导航原「CDK卡密」改名为「GPT 会员」。X 会员、TG 会员紧跟在它后面。',
     '「同时在 Avanfinity 备一张」只有在 GPT 发码策略里开了备用台才能点；默认关，GPT 就是单台出货。',
     '列表拆成三个页签：本站码、老码（只读）、白号库存。原来一张表混三类码，靠筛选区分，很难看懂。',
     '白号导入入口挪到这里（原 AgentManagement.vue 没挂路由，进不去）。',
