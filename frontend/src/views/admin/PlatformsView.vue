@@ -158,69 +158,27 @@
             </div>
           </div>
 
-          <div v-else-if="tab === 'cards' && current.serves_openai" class="space-y-3">
-            <div class="flex flex-wrap items-center justify-between gap-2">
-              <p class="text-sm text-muted">跟着左边选中的卡台。顺序只影响这台自动选卡，上移优先级更高。</p>
-              <el-button type="primary" plain :loading="syncingCards" @click="syncOpenAICards">立即同步</el-button>
-            </div>
-            <div class="card overflow-x-auto">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th>卡产品</th>
-                    <th>在线</th>
-                    <th>自动选卡顺序</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(row, i) in cardRows" :key="row.code">
-                    <td>{{ row.label }}</td>
-                    <td>{{ row.online ? '在线' : '下线' }}</td>
-                    <td>{{ row.order || '—' }}</td>
-                    <td class="text-right">
-                      <el-button link :disabled="!row.inRules || i === 0" @click="moveCard(i, -1)">上移</el-button>
-                      <el-button link :disabled="!row.inRules || i === cardRows.length - 1" @click="moveCard(i, 1)">下移</el-button>
-                    </td>
-                  </tr>
-                  <tr v-if="!cardRows.length">
-                    <td colspan="4" class="text-muted">还没有产品。点「立即同步」。</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <div class="grid gap-3 sm:grid-cols-2">
-              <div class="card">
-                <div class="text-xs text-muted">本站策略</div>
-                <div class="mt-1 text-sm">失败 {{ healthPolicy.threshold || '—' }} 次拉黑</div>
-                <div class="text-xs text-muted">强制新卡：{{ current.force_new_card ? '开' : '关' }}</div>
-              </div>
-              <div class="card">
-                <div class="text-xs text-muted">已拉黑的卡</div>
-                <div class="mt-1 text-sm">{{ blockedCards.length }} 张</div>
-                <div v-for="b in blockedCards" :key="b.card_id" class="mt-1 flex items-center justify-between text-xs">
-                  <span>卡 {{ b.card_id }}</span>
-                  <el-button link @click="unblock(b.card_id)">解冻</el-button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <CardSelectionConfig v-else-if="tab === 'cards' && current.serves_openai" embedded :fixed-account-id="current.id" />
 
-          <div v-else-if="tab === 'cards'" class="card space-y-4">
-            <div class="space-y-1">
-              <div class="font-semibold">客户兑换 X 或 Telegram 时，钱从哪张卡付出去</div>
-              <p class="text-sm text-muted">X CDK 和 Telegram Premium 共用这个钱包、也共用下面选的卡。发码不扣钱。客户兑换时，Avanfinity 先给这张卡充值，再用它付给 X 或 Telegram。选好后保存，X CDK 通道会一起启用，TG 发码也走这里。</p>
-            </div>
-            <el-radio-group v-model="payMode" class="flex flex-col items-start gap-2">
-              <el-radio v-if="hasCap(current, 'x_cdk')" value="auto">每张码自动开一张新卡（推荐，卡之间互不影响）</el-radio>
-              <el-radio v-for="card in xCards" :key="card.id" :value="String(card.id)" :disabled="!cardOk(card)">
-                固定用 {{ card.cardNumberMasked || ('卡 ' + card.id) }} · {{ card.productCode || '—' }} · {{ card.status || '未知' }} · 余额 {{ card.balance || '—' }}
-              </el-radio>
-            </el-radio-group>
-            <p v-if="!xCards.length" class="text-xs text-muted">账户里还没有卡，所以只能自动开卡。</p>
-            <div v-if="payMode === 'auto'" class="space-y-2">
-              <div class="text-sm">自动开卡用哪种卡，持卡人姓名填什么（拼音即可）</div>
-              <div class="grid gap-2 sm:grid-cols-3">
+          <div v-else-if="tab === 'cards'" class="space-y-4">
+            <div class="card space-y-3">
+              <div class="space-y-1">
+                <div class="font-semibold">客户兑换 X 或 Telegram 时，钱从哪张卡付出去</div>
+                <p class="text-sm text-muted">X CDK 和 Telegram Premium 共用这个钱包，也共用下面这一池已经开好的卡。发码时按顺序挑卡，不是每笔新开一张。改完只影响之后新发的码。</p>
+              </div>
+              <p class="text-sm">{{ paySummary }}</p>
+              <el-radio-group v-model="payMode">
+                <el-radio-button value="existing">从已有卡自动选</el-radio-button>
+                <el-radio-button value="fixed">固定一张</el-radio-button>
+                <el-radio-button value="new">每笔开新卡</el-radio-button>
+              </el-radio-group>
+              <div v-if="payMode === 'existing'" class="flex items-center gap-2 text-sm">
+                <el-switch v-model="payFallback" />
+                <span>{{ payFallback ? '池子里没有合格卡时，才按下面的卡种开一张新卡。' : '池子里没有合格卡就停止，不开新卡。' }}</span>
+              </div>
+              <p v-if="payMode === 'fixed'" class="text-sm text-muted">只付点了「用这张」的那一张。它冻结或不可用时，X 和 TG 一起停，不会改去别的卡。</p>
+              <p v-if="payMode === 'new'" class="text-sm text-amber-700">每笔兑换都新开一张卡。开卡费每笔都扣，这不是默认。</p>
+              <div v-if="payMode === 'new' || (payMode === 'existing' && payFallback)" class="grid gap-2 sm:grid-cols-3">
                 <el-select v-if="xProducts.length" v-model="autoCard.product" filterable allow-create placeholder="选卡种">
                   <el-option v-for="p in xProducts" :key="p.productCode" :value="p.productCode" :label="productLabel(p)" />
                 </el-select>
@@ -228,11 +186,46 @@
                 <el-input v-model="autoCard.first" placeholder="名，例如 San" />
                 <el-input v-model="autoCard.last" placeholder="姓，例如 Zhang" />
               </div>
-              <p class="text-xs text-muted">开卡费和充值费会从每张码的「CDK 钱包上限」里扣，选便宜的卡种能少花钱。</p>
+            </div>
+            <div class="card overflow-x-auto">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>参与</th>
+                    <th>卡</th>
+                    <th>余额</th>
+                    <th>状态</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, i) in payRows" :key="row.id">
+                    <td>{{ i + 1 }}</td>
+                    <td><el-switch :model-value="row.enabled" :disabled="!cardOk(row)" @change="(v: boolean) => setPayEnabled(row.id, v)" /></td>
+                    <td>
+                      <span class="mono">{{ row.cardNumberMasked || ('卡 ' + row.id) }}</span>
+                      <span class="text-muted"> · {{ row.productCode || '—' }}</span>
+                      <el-tag v-if="payMode === 'fixed' && fixedCardId === row.id" size="small" class="ml-2">固定</el-tag>
+                      <el-tag v-else-if="nextPayId === row.id" size="small" type="success" class="ml-2">下一笔</el-tag>
+                    </td>
+                    <td>{{ row.balance || '—' }}</td>
+                    <td>{{ row.status || '未知' }}</td>
+                    <td class="text-right">
+                      <el-button link :disabled="i === 0" @click="movePay(i, -1)">上移</el-button>
+                      <el-button link :disabled="i === payRows.length - 1" @click="movePay(i, 1)">下移</el-button>
+                      <el-button v-if="payMode === 'fixed'" link :disabled="!cardOk(row)" @click="fixedCardId = row.id">用这张</el-button>
+                    </td>
+                  </tr>
+                  <tr v-if="!payRows.length">
+                    <td colspan="6" class="text-muted">账户里还没有卡。可以改成「每笔开新卡」，或先在卡台开出卡再回来同步。</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
             <div class="flex flex-wrap items-center gap-3">
               <el-button type="primary" :loading="savingChannel" @click="savePayCard">保存并启用通道</el-button>
-              <span v-if="channelRow?.enabled && channelRow?.account_id === current.id" class="text-sm" style="color: var(--ok, #16a34a)">通道已启用，X 和 TG 都走这张卡</span>
+              <span v-if="channelRow?.enabled && channelRow?.account_id === current.id" class="text-sm" style="color: var(--ok, #16a34a)">通道已启用，X 和 TG 都走这里</span>
               <button type="button" class="app-link text-sm" @click="router.push({ name: 'XMember', query: { tab: 'settings' } })">去填 X 套餐上限</button>
               <button type="button" class="app-link text-sm" @click="router.push({ name: 'TGMember', query: { tab: 'limits' } })">去填 TG 套餐上限</button>
             </div>
@@ -382,6 +375,7 @@ import { dialog } from '../../lib/dialog'
 import WebhookEvents from './WebhookEvents.vue'
 import { AGENT_ENABLED, X_DIRECT_UI } from '../../lib/features'
 import PlatformMatrix from './PlatformMatrix.vue'
+import CardSelectionConfig from './CardSelectionConfig.vue'
 import XSupplyTable from '../../components/XSupplyTable.vue'
 import { vendorOf, gptRoleOf } from '../../lib/platformVendor'
 
@@ -415,26 +409,9 @@ const dlg = ref(false)
 const saving = ref(false)
 const pinging = ref(false)
 const syncingCards = ref(false)
-const cardProducts = ref<any[]>([])
-const cardRules = ref<any[]>([])
-const blockedCards = ref<any[]>([])
-const healthPolicy = reactive({ threshold: 0 })
 const feeLine = computed(() => {
   if (!planFees.value.length) return ''
   return planFees.value.map((p) => `${p.label || p.key} $${Number(p.fee_usd || 0).toFixed(2)}`).join(' · ')
-})
-const cardRows = computed(() => {
-  const order = new Map<string, number>()
-  cardRules.value.forEach((r, i) => order.set(r.plan_key, i + 1))
-  const rows = cardProducts.value.map((p) => ({
-    code: p.product_code,
-    label: [p.issuer, p.product_code, p.bin || p.description].filter(Boolean).join(' · '),
-    online: p.enabled !== false && !p.suspended_at,
-    order: order.get(p.product_code) || 0,
-    inRules: order.has(p.product_code),
-  }))
-  rows.sort((a, b) => (a.order || 999) - (b.order || 999))
-  return rows
 })
 const probing = ref(false)
 const savingHook = ref(false)
@@ -466,8 +443,30 @@ function productLabel(p: any) {
 }
 const calls = ref<any[]>([])
 const callProduct = ref('')
-const payMode = ref('auto')
+const payMode = ref<'existing' | 'fixed' | 'new'>('existing')
+const payFallback = ref(false)
+const fixedCardId = ref(0)
+const cardPrefs = ref<{ id: number; enabled: boolean }[]>([])
 const autoCard = reactive({ product: '', first: '', last: '' })
+const payRows = computed(() => cardPrefs.value.map((pref) => {
+  const card = xCards.value.find((c) => Number(c.id) === pref.id) || { id: pref.id }
+  return { ...card, id: pref.id, enabled: pref.enabled }
+}))
+const nextPayId = computed(() => {
+  if (payMode.value !== 'existing') return 0
+  const row = payRows.value.find((r) => r.enabled && cardOk(r))
+  return row ? Number(row.id) : 0
+})
+const paySummary = computed(() => {
+  if (payMode.value === 'new') return '下一笔会新开一张卡。'
+  if (payMode.value === 'fixed') {
+    const row = payRows.value.find((r) => Number(r.id) === fixedCardId.value)
+    return row ? `下一笔固定用 ${row.cardNumberMasked || ('卡 ' + row.id)}。` : '还没指定固定的那一张。'
+  }
+  const row = payRows.value.find((r) => Number(r.id) === nextPayId.value)
+  if (!row) return payFallback.value ? '现在没有合格卡，下一笔会开新卡。' : '现在没有合格卡，下一笔会停住。'
+  return `下一笔用 ${row.cardNumberMasked || ('卡 ' + row.id)}。冻结、关闭或关掉「参与」的会跳过。`
+})
 const channelRow = ref<any>(null)
 const webhookUrlDraft = ref('')
 const webhookSecret = ref('')
@@ -942,12 +941,45 @@ async function loadXPay() {
   const row = (cfg.channels || []).find((c: any) => c.channel === cap && c.account_id === a.id)
     || (cfg.channels || []).find((c: any) => c.channel === cap)
   channelRow.value = row || null
-  if (row?.auto_card) payMode.value = 'auto'
-  else if (row?.card_id) payMode.value = String(row.card_id)
-  else payMode.value = hasCap(a, 'x_cdk') ? 'auto' : (xCards.value[0] ? String(xCards.value[0].id) : 'auto')
+  const saved = Array.isArray(row?.card_order) ? row.card_order : []
+  const seen = new Set<number>()
+  const prefs: { id: number; enabled: boolean }[] = []
+  for (const item of saved) {
+    const id = Number(item.id)
+    if (!id || seen.has(id) || !xCards.value.some((c) => Number(c.id) === id)) continue
+    seen.add(id)
+    prefs.push({ id, enabled: item.enabled !== false })
+  }
+  for (const card of xCards.value) {
+    const id = Number(card.id)
+    if (!id || seen.has(id)) continue
+    prefs.push({ id, enabled: true })
+  }
+  cardPrefs.value = prefs
+  payFallback.value = !!row?.pay_fallback
+  fixedCardId.value = Number(row?.card_id) || 0
+  if (row?.pay_mode === 'new' || row?.pay_mode === 'fixed' || row?.pay_mode === 'existing') payMode.value = row.pay_mode
+  else if (row?.auto_card) payMode.value = 'new'
+  else if (row?.card_id) payMode.value = 'fixed'
+  else payMode.value = 'existing'
   autoCard.product = row?.auto_card_product || ''
   autoCard.first = row?.auto_card_first_name || ''
   autoCard.last = row?.auto_card_last_name || ''
+}
+
+function setPayEnabled(id: number, enabled: boolean) {
+  const row = cardPrefs.value.find((p) => p.id === id)
+  if (row) row.enabled = enabled
+}
+
+function movePay(index: number, dir: number) {
+  const next = index + dir
+  if (next < 0 || next >= cardPrefs.value.length) return
+  const copy = cardPrefs.value.slice()
+  const tmp = copy[index]
+  copy[index] = copy[next]
+  copy[next] = tmp
+  cardPrefs.value = copy
 }
 
 async function savePayCard() {
@@ -959,9 +991,13 @@ async function savePayCard() {
     const ok = await dialog.confirm(`这个通道现在绑在其他卡台上。要把它切到「${a.name}」吗？`)
     if (!ok) return
   }
-  const auto = payMode.value === 'auto'
-  if (auto && (!autoCard.product.trim() || !autoCard.first.trim() || !autoCard.last.trim())) {
-    dialog.toast('自动开卡要选卡种，并填持卡人的名和姓', 'warn')
+  const needsHolder = payMode.value === 'new' || (payMode.value === 'existing' && payFallback.value)
+  if (needsHolder && (!autoCard.product.trim() || !autoCard.first.trim() || !autoCard.last.trim())) {
+    dialog.toast('开新卡要选卡种，并填持卡人的名和姓', 'warn')
+    return
+  }
+  if (payMode.value === 'fixed' && !fixedCardId.value) {
+    dialog.toast('先点「用这张」指定固定卡', 'warn')
     return
   }
   savingChannel.value = true
@@ -972,8 +1008,11 @@ async function savePayCard() {
         channel,
         account_id: a.id,
         enabled: true,
-        card_id: auto ? 0 : Number(payMode.value),
-        auto_card: auto,
+        pay_mode: payMode.value,
+        pay_fallback: payFallback.value,
+        card_order: cardPrefs.value,
+        card_id: payMode.value === 'fixed' ? fixedCardId.value : 0,
+        auto_card: payMode.value === 'new',
         auto_card_product: autoCard.product,
         auto_card_first_name: autoCard.first,
         auto_card_last_name: autoCard.last,
@@ -1052,27 +1091,8 @@ async function loadCalls() {
 }
 watch(tab, (v) => {
   if (v === 'cards' && current.value && !current.value.serves_openai) loadXPay()
-  if (v === 'cards' && current.value?.serves_openai) void loadOpenAICards()
   if (v === 'calls') loadCalls()
 })
-
-async function loadOpenAICards() {
-  const a = current.value
-  if (!a) return
-  const q = `account_id=${a.id}`
-  const [st, rules, health] = await Promise.all([
-    authFetch(`/api/v1/admin/card-selection/plan-status?${q}`),
-    authFetch(`/api/v1/admin/card-selection/rules?${q}`),
-    authFetch(`/api/v1/admin/card-health?${q}`),
-  ])
-  const sd = await st.json().catch(() => ({}))
-  const rd = await rules.json().catch(() => ({}))
-  const hd = await health.json().catch(() => ({}))
-  cardProducts.value = sd.products || []
-  cardRules.value = rd.rules || []
-  blockedCards.value = (hd.blocklist || []).filter((b: any) => b.active)
-  healthPolicy.threshold = hd.policy?.fail_threshold || 0
-}
 
 async function syncOpenAICards() {
   const a = current.value
@@ -1085,56 +1105,11 @@ async function syncOpenAICards() {
       dialog.toast(d.error || '同步失败', 'err')
       return
     }
-    cardProducts.value = d.products || []
-    dialog.toast(`已同步 ${cardProducts.value.length} 个产品`, 'ok')
+    dialog.toast(`已同步 ${(d.products || []).length} 个产品`, 'ok')
     await load()
   } finally {
     syncingCards.value = false
   }
-}
-
-async function moveCard(index: number, dir: number) {
-  const rows = cardRows.value.filter((row) => row.inRules)
-  const row = cardRows.value[index]
-  if (!row?.inRules) return
-  const pos = rows.findIndex((item) => item.code === row.code)
-  const next = pos + dir
-  if (pos < 0 || next < 0 || next >= rows.length) return
-  const swapped = rows.slice()
-  const tmp = swapped[pos]
-  swapped[pos] = swapped[next]
-  swapped[next] = tmp
-  const a = current.value
-  if (!a) return
-  const payload = swapped.map((item, i) => {
-    const src = cardRules.value.find((r) => r.plan_key === item.code) || {}
-    return { id: src.id || 0, sort_order: i + 1, plan_key: item.code, display_name: src.display_name || item.label, bin_prefix: src.bin_prefix || '', channel: src.channel || '', enabled: src.enabled !== false }
-  })
-  const r = await authFetch('/api/v1/admin/card-selection/rules', {
-    method: 'PUT',
-    body: JSON.stringify({ account_id: a.id, rules: payload }),
-  })
-  const d = await r.json().catch(() => ({}))
-  if (!r.ok) {
-    dialog.toast(d.error || '保存顺序失败', 'err')
-    return
-  }
-  cardRules.value = d.rules || cardRules.value
-}
-
-async function unblock(cardId: number) {
-  const a = current.value
-  if (!a) return
-  const r = await authFetch('/api/v1/admin/card-health/unblock', {
-    method: 'POST',
-    body: JSON.stringify({ account_id: a.id, card_id: cardId }),
-  })
-  const d = await r.json().catch(() => ({}))
-  if (!r.ok) {
-    dialog.toast(d.error || '解冻失败', 'err')
-    return
-  }
-  await loadOpenAICards()
 }
 
 onMounted(async () => {

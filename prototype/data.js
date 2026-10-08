@@ -17,12 +17,32 @@ const S = {
       x: { wallet: 410.5, unused: 38, ok24: 21, fail24: 0 },
       webhook: { secret: true, url: 'https://danew.cc/api/v1/webhooks/card/spacex', last: '3 分钟前 · order.completed' },
       cards: [
-        { code: 'VISA-US-01', label: 'Visa 美区 01', online: true, order: 1 },
-        { code: 'MC-PH-02', label: 'Master 菲律宾 02', online: true, order: 2 },
-        { code: 'VISA-JP-03', label: 'Visa 日本 03', online: false, order: 3 },
+        { code: '537872', label: 'one · PS3750X', bin: '537872', area: '美国', online: true, enabled: true, order: 1 },
+        { code: '555659', label: 'one · P5556VX', bin: '555659', area: '美国', online: true, enabled: true, order: 2 },
+        { code: '486695', label: 'four · 11107407P', bin: '486695', area: '美国', online: true, enabled: true, order: 3 },
+        { code: '446602', label: 'four · 11106307P', bin: '446602', area: '美国', online: true, enabled: false, order: 4 },
+        { code: '558325', label: 'four · PP5583RC', bin: '558325', area: '香港', online: true, enabled: false, order: 5 },
+        { code: '531711', label: 'three · 11106407', bin: '531711', area: '美国', online: false, enabled: true, order: 6 },
       ],
-      blocked: [{ id: 88123, reason: '连续 3 次 card_declined' }],
-      forceNewCard: false,
+      policy: {
+        localOn: true,
+        strict: true,
+        switchOnFail: false,
+        autoOpen: true,
+        maxNew: 4,
+        maxCards: 3,
+        cooldown: 24,
+        area: 'United States',
+        holderFirst: 'GPT',
+        holderLast: 'Direct',
+      },
+      health: { enabled: true, threshold: 2, freeze: false, requireEmail: true },
+      blocked: [{ id: 88123, last4: '1904', reason: '不同邮箱，判成坏卡', emails: 3, fails: 2, freeze: '未冻结' }],
+      failEvents: [
+        { at: '10-08 09:12', card: '88123', order: 'up_9188', email: 'a@example.com', verdict: '卡的问题', status: '失败' },
+        { at: '10-08 09:40', card: '88123', order: 'up_9201', email: 'b@example.com', verdict: '卡的问题', status: '失败' },
+        { at: '10-08 11:02', card: '77210', order: 'up_9304', email: 'same@example.com', verdict: '号的问题', status: '失败' },
+      ],
     },
     {
       id: 'avan', name: 'Avanfinity', site: 'https://avanfinity.example', enabled: true,
@@ -35,11 +55,18 @@ const S = {
       x: { wallet: 820.4, liability: 96.0, unusedCdk: 12, ok24: 9, fail24: 1 },
       tg: { wallet: 820.4, unused: 4, ok24: 1, fail24: 0 },
       webhook: { secret: false, url: 'https://danew.cc/api/v1/webhooks/card/avan', last: '—' },
-      cards: [
-        { code: 'AV-VISA-01', label: 'Avan Visa 01', online: true, order: 1 },
+      cards: [],
+      // X 和 TG 共用这一池已开出的卡。默认从池子里按顺序自动选，不每笔开新卡，也不钉死一张。
+      payMode: 'existing',
+      payFallbackNew: false,
+      fixedCardId: 441,
+      payCards: [
+        { id: 441, mask: '4412', product: 'one', balance: 18.40, status: '正常', enabled: true, order: 1 },
+        { id: 552, mask: '5521', product: 'four', balance: 6.20, status: '正常', enabled: true, order: 2 },
+        { id: 400, mask: '4001', product: 'one', balance: 0.15, status: '正常', enabled: true, order: 3 },
+        { id: 378, mask: '3782', product: 'three', balance: 40.00, status: '冻结', enabled: false, order: 4 },
       ],
-      blocked: [],
-      forceNewCard: false,
+      payBlocked: [{ id: 378, mask: '3782', reason: '付款被拒 2 次' }],
       calls: [
         { at: '10:42:11', prod: 'x', m: 'POST', p: '/api/public/x-cdk/redeem', s: 403, d: 'ip_not_whitelisted' },
         { at: '10:41:58', prod: 'x', m: 'POST', p: '/api/public/x-cdk/preview', s: 200, d: 'premium_3m' },
@@ -154,7 +181,7 @@ const S = {
 
   // ── 页面局部状态 ──
   ui: {
-    plat: 'spacex', platTab: 'overview', platSide: 'spacex',
+    plat: 'spacex', platTab: 'gpt', platSide: 'spacex',
     xTab: 'issue', xIssue: { plan: 'premium_3m', qty: 1, note: '', region: '日本' }, xIssued: [], xGroup: 'all', xQ: '', xList: { q: '', group: 'all', plan: '', page: 1 }, xRecPage: 1, xSelIds: [],
     tgTab: 'issue', tgIssue: { plan: 'premium_3m', qty: 1, note: '' }, tgIssued: [], tgGroup: 'all', tgQ: '', tgList: { q: '', group: 'all', plan: '', page: 1 }, tgRecPage: 1, tgSelIds: [],
     cdkTab: 'site', cdkIssue: { plan: 'plus', region: '菲律宾 PHP', qty: 10, note: '', dual: false }, cdkIssued: [], cdkFilter: { status: '', kind: '' },

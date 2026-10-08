@@ -232,17 +232,12 @@ func issueBatch(ctx context.Context, ch db.XChannel, acc db.CardPlatformAccount,
 		"maxWalletDebitUsd": xmember.E4ToUSD(wallet), "maxOfficialAmountMinor": limit.MaxOfficialAmountMinor,
 		"currency": strings.ToLower(limit.Currency), "fundingAmountUsd": xmember.E4ToUSD(funding),
 	}
-	if ch.AutoCard {
-		if ch.AutoCardProduct == "" {
-			return nil, fmt.Errorf("自动开卡还没填产品编码")
-		}
-		body["autoCard"] = map[string]string{
-			"productCode": ch.AutoCardProduct, "firstName": ch.AutoCardFirstName, "lastName": ch.AutoCardLastName,
-		}
-	} else if ch.CardID > 0 {
-		body["cardId"] = ch.CardID
-	} else {
-		return nil, fmt.Errorf("X CDK 还没选付款方式，TG 用的是同一张设置")
+	pay, err := xmember.CDKPayFields(ctx, clientFor(acc), ch)
+	if err != nil {
+		return nil, err
+	}
+	for k, v := range pay {
+		body[k] = v
 	}
 	raw, _ := json.Marshal(body)
 	batchID, err := db.InsertTGBatch(db.TGBatch{

@@ -72,8 +72,27 @@ A.cardMove = (arg) => {
   if (j < 0 || j >= cs.length) return
   ;[cs[i].order, cs[j].order] = [cs[j].order, cs[i].order]
 }
-A.cardOnline = (arg) => { const [pid, code] = arg.split(':'); const c = plat(pid).cards.find((x) => x.code === code); c.online = !c.online }
+A.cardEnabled = (arg) => { const [pid, code] = arg.split(':'); const c = plat(pid).cards.find((x) => x.code === code); c.enabled = !c.enabled }
+A.spacexPolicy = (key) => { const p = plat('spacex').policy; p[key] = !p[key] }
+A.spacexHealth = (key) => { const h = plat('spacex').health; h[key] = !h[key] }
 A.unblock = (arg) => { const [pid, id] = arg.split(':'); const p = plat(pid); p.blocked = p.blocked.filter((b) => b.id != id); toast('已解冻') }
+A.payMode = (mode) => { plat('avan').payMode = mode }
+A.payFallback = () => { const p = plat('avan'); p.payFallbackNew = !p.payFallbackNew }
+A.payCardOn = (id) => { const c = plat('avan').payCards.find((x) => x.id == id); if (c.status === '冻结') { toast('冻结的卡先解冻再启用'); return } c.enabled = !c.enabled }
+A.payCardMove = (arg) => {
+  const [id, d] = arg.split(':'); const cs = plat('avan').payCards.sort((a, b) => a.order - b.order)
+  const i = cs.findIndex((c) => c.id == id), j = i + Number(d)
+  if (j < 0 || j >= cs.length) return
+  ;[cs[i].order, cs[j].order] = [cs[j].order, cs[i].order]
+}
+A.payFix = (id) => { const p = plat('avan'); p.fixedCardId = Number(id); p.payMode = 'fixed' }
+A.payUnblock = (id) => {
+  const p = plat('avan')
+  p.payBlocked = p.payBlocked.filter((b) => b.id != id)
+  const c = p.payCards.find((x) => x.id == id)
+  if (c) { c.status = '正常'; c.enabled = true }
+  toast('已解冻，回到自动选卡')
+}
 A.addPlat = () => {
   modal('添加卡台', `<label class="f">名称</label>${input('', '', '例如 新卡台 C', 'w-full')}
     <label class="f">协议</label>${select('', '', [['spacexcard-legacy', 'SpaceX 旧 OpenAPI'], ['avanfinity-2026-08', 'Avanfinity OpenAI'], ['avanfinity-api-v1', 'Avanfinity 会员 CDK（X + TG）']])}
@@ -108,13 +127,66 @@ function tabOverview(p) {
 }
 A.gptRoleOf = (role) => A.gptRole(S.ui.plat + ':' + role)
 function tabGpt(p) {
+  if (p.id !== 'spacex') return `<div class="card"><b>这家的 GPT 不在本站选卡</b><p class="small muted">Avanfinity 的 OpenAI 接口不提供卡头顺序。选卡由上游自己做。卡头优先级、兑换换卡、坏卡归因只属于 SpaceX。</p></div>`
   const cs = [...p.cards].sort((a, b) => a.order - b.order)
-  return `<div class="card"><div class="row between"><b>GPT 选卡顺序</b>${btn('从卡台同步卡片', 'toastMsg', '已同步', 'sm')}</div>
-    <p class="small muted">开通 GPT 时按顺序挑第一张在线、没拉黑的卡。</p>
-    <table class="t"><tr><th>#</th><th>卡</th><th>在线</th><th></th></tr>${cs.map((c, i) => `<tr><td>${i + 1}</td><td>${c.label} <span class="mono small muted">${c.code}</span></td><td>${sw(c.online, 'cardOnline', p.id + ':' + c.code)}</td>
+  const pol = p.policy
+  const health = p.health
+  const first = cs.find((c) => c.enabled && c.online)
+  const online = cs.filter((c) => c.online).length
+  const how = !pol.localOn
+    ? '本站策略关着。发码和兑换都走卡台自己的级联，下面的卡头顺序不会盖过它。'
+    : `发码时把「${first ? first.label : '没有可用卡头'}」写成这张码的偏好。兑换时${pol.strict ? '严格按下面的顺序，卡台默认的 537872 / 星链不能盖过。' : '仍可能被卡台默认卡头盖过。'}${pol.switchOnFail ? `确认没扣款之后，按顺序换下一张，这一单最多换 ${pol.maxCards} 张。` : '失败了不自动换卡。'}${pol.autoOpen ? '顺序里没有合格卡头时，允许开新卡。' : '没有合格卡头就停，不开新卡。'}`
+  return `<div class="card stack"><b>这台现在怎么选卡</b><p class="small" style="margin:0">${how}</p><p class="small muted" style="margin:0">改完只影响之后新发的码。已经发出的码不追溯。</p></div>
+
+    <div class="card" style="margin-top:12px"><div class="row between"><div><b>1. 卡头优先级</b><div class="small muted">选的是开卡产品，不是一张张已开出的实体卡。在线 ${online} / ${cs.length}。靠前且启用、在线的先用；关掉或下线的跳过。默认只收美卡，香港卡可以加进来但默认关。保存后同步到这台的 select_priority。</div></div>${btn('立即同步', 'toastMsg', '已同步', 'sm')}</div>
+    <table class="t"><tr><th>#</th><th>参与</th><th>状态</th><th>卡头</th><th>地区</th><th></th></tr>${cs.map((c, i) => `<tr><td>${i + 1}</td><td>${sw(c.enabled, 'cardEnabled', p.id + ':' + c.code)}</td><td>${c.online ? tag('在线', 'ok') : tag('下线')}</td>
+      <td>${esc(c.label)} <span class="mono small muted">${c.bin}</span></td><td>${c.area}</td>
       <td>${btn('↑', 'cardMove', `${p.id}:${c.code}:-1`, 'sm')}${btn('↓', 'cardMove', `${p.id}:${c.code}:1`, 'sm')}</td></tr>`).join('')}</table>
-    <div class="row" style="margin-top:8px">${sw(p.forceNewCard, 'toastMsg', '原型：开关')}<span class="small">每次都开新卡（不复用）</span></div></div>
-    <div class="card" style="margin-top:12px"><b>拉黑的卡</b>${p.blocked.length ? `<table class="t"><tr><th>卡 ID</th><th>原因</th><th></th></tr>${p.blocked.map((b) => `<tr><td class="mono">${b.id}</td><td>${b.reason}</td><td>${btn('解冻', 'unblock', p.id + ':' + b.id, 'sm')}</td></tr>`).join('')}</table>` : '<div class="empty">没有</div>'}</div>`
+    <p class="small muted">当前发码产品：${first ? `${esc(first.label)}（优先级里第一条启用且在线的）` : '没有'}。不用单独再填一个产品码。</p></div>
+
+    <div class="card stack" style="margin-top:12px"><div class="row between"><b>2. 兑换时换不换卡</b><span class="row">${sw(pol.localOn, 'spacexPolicy', 'localOn')}<span class="small">${pol.localOn ? '本站策略开' : '本站策略关'}</span></span></div>
+      <p class="small muted" style="margin:0">这一组只有本站策略开着才生效。开着时，发码写入选卡偏好，兑换向卡台声明按本站来，不跟卡台账户里的 ACC 换卡策略。</p>
+      <div class="row">${sw(pol.strict, 'spacexPolicy', 'strict')}<span class="small">严格按上面的卡头顺序（strict_card_preference）。关掉之后，卡台默认卡头可以盖过 CDK。</span></div>
+      <div class="row">${sw(pol.switchOnFail, 'spacexPolicy', 'switchOnFail')}<span class="small">${pol.switchOnFail ? '确认未扣款或失败后，按优先级换下一张卡。' : '不自动换卡（no_auto_card_switch）。这张失败了就停在这张，等人工或本站拉黑后再跳过。'}</span></div>
+      <div class="grid g3">
+        <div><label class="f">这一单最多用几张卡</label>${input('platforms.0.policy.maxCards', pol.maxCards, '', 'w-full')}</div>
+        <div><label class="f">失败后冷却（小时）</label>${input('platforms.0.policy.cooldown', pol.cooldown, '', 'w-full')}<div class="small muted">预留，界面上有，兑换还没按它拦截。</div></div>
+        <div><label class="f">每张卡新账号上限</label>${input('platforms.0.policy.maxNew', pol.maxNew, '', 'w-full')}<div class="small muted">一卡几付的硬限制仍在卡台。这里是本站记下的上限。</div></div>
+      </div></div>
+
+    <div class="card stack" style="margin-top:12px"><b>3. 没有合格卡时</b>
+      <div class="row">${sw(pol.autoOpen, 'spacexPolicy', 'autoOpen')}<span class="small">${pol.autoOpen ? '顺序里没有能用的卡头时，允许开新卡。' : '没有合格卡头就停止，不开新卡。'}</span></div>
+      <div class="grid g3">
+        <div><label class="f">限定发卡地区</label>${input('platforms.0.policy.area', pol.area, 'United States', 'w-full')}</div>
+        <div><label class="f">新卡持卡人名</label>${input('platforms.0.policy.holderFirst', pol.holderFirst, 'GPT', 'w-full')}</div>
+        <div><label class="f">新卡持卡人姓</label>${input('platforms.0.policy.holderLast', pol.holderLast, 'Direct', 'w-full')}</div>
+      </div></div>
+
+    <div class="card" style="margin-top:12px"><div class="row between"><div><b>4. 坏卡</b><div class="small muted">看的是已经开出来的那张实体卡，不是卡头。同一张卡失败到阈值：不同邮箱判卡的问题，本站拉黑，下次兑换排除它；同一个邮箱判号的问题，不拉黑。没有邮箱时${health.requireEmail ? '不拉黑' : '也会拉黑'}。</div></div><span class="row">${sw(health.enabled, 'spacexHealth', 'enabled')}<span class="small">${health.enabled ? '启用' : '停用'}</span></span></div>
+      <div class="grid g3">
+        <div><label class="f">失败几次算坏卡</label>${input('platforms.0.health.threshold', health.threshold, '', 'w-full')}</div>
+        <div class="row" style="align-items:flex-end">${sw(health.freeze, 'spacexHealth', 'freeze')}<span class="small">判定后冻结卡台上的卡。现在实际不冻结，只在本站排除，直充还能用这张。</span></div>
+        <div class="row" style="align-items:flex-end">${sw(health.requireEmail, 'spacexHealth', 'requireEmail')}<span class="small">没有邮箱就不拉黑。</span></div>
+      </div>
+      <div style="margin-top:10px"><b class="small">已拉黑</b></div>
+      ${p.blocked.length ? `<table class="t"><tr><th>卡</th><th>原因</th><th></th></tr>${p.blocked.map((b) => `<tr><td class="mono">#${b.id} ****${b.last4}</td><td>${b.reason} · 失败 ${b.fails} · 邮箱 ${b.emails} · ${b.freeze}</td><td>${btn('解禁', 'unblock', p.id + ':' + b.id, 'sm')}</td></tr>`).join('')}</table>` : '<div class="empty">没有</div>'}
+      <div style="margin-top:10px"><b class="small">最近失败</b></div>
+      <table class="t"><tr><th>时间</th><th>卡</th><th>订单</th><th>邮箱</th><th>判定</th><th>状态</th></tr>${(p.failEvents || []).map((e) => `<tr><td>${e.at}</td><td class="mono">#${e.card}</td><td class="mono">${e.order}</td><td class="mono">${e.email}</td><td>${e.verdict === '卡的问题' ? tag(e.verdict, 'err') : tag(e.verdict, 'warn')}</td><td>${e.status}</td></tr>`).join('')}</table></div>`
+}
+function tabPayCards(p) {
+  const rows = [...p.payCards].sort((a, b) => a.order - b.order)
+  const next = p.payMode === 'existing' ? rows.find((c) => c.enabled && c.status === '正常' && c.balance >= 1) : null
+  return `<div class="card stack"><div class="row between"><div><b>付款从哪张已有卡出</b><div class="small muted">X 和 TG 共用这一池卡、同一个顺序。发码不扣钱。客户兑换时按顺序用已经开好的卡，不每笔新开一张。</div></div></div>
+    ${seg([['existing', '从已有卡自动选'], ['fixed', '固定一张'], ['new', '每笔开新卡']], p.payMode, 'payMode')}
+    ${p.payMode === 'existing' ? `<p class="small">下一笔会用 ${next ? `<b>****${next.mask}</b>（${next.product}，余额 ${usd(next.balance)}）` : '<b>没有合格卡，这笔会停住</b>'}。条件：已启用、状态正常、余额够付、没拉黑。余额不够或冻结的自动跳过。</p>
+      <div class="row">${sw(p.payFallbackNew, 'payFallback')}<span class="small">${p.payFallbackNew ? '池子里没有合格卡时，才按卡种开一张新卡。' : '池子里没有合格卡就停止，不开新卡。'}</span></div>` : ''}
+    ${p.payMode === 'new' ? '<p class="small" style="color:var(--warn)">每笔兑换都新开一张卡。卡之间互不影响，但开卡费每笔都扣。这不是默认。</p>' : ''}
+    ${p.payMode === 'fixed' ? '<p class="small">只付这一张。它冻结、余额不够或被拉黑时，X 和 TG 一起停，不会改去别的卡。</p>' : ''}
+    <table class="t"><tr><th>#</th><th>启用</th><th>卡</th><th>余额</th><th>状态</th><th></th></tr>${rows.map((c, i) => `<tr><td>${i + 1}</td><td>${sw(c.enabled && c.status === '正常', 'payCardOn', c.id)}</td>
+      <td class="mono">****${c.mask} <span class="small muted">${c.product}</span>${p.payMode === 'fixed' && p.fixedCardId === c.id ? ' ' + tag('固定', 'blue') : ''}${next && next.id === c.id ? ' ' + tag('下一笔', 'ok') : ''}</td>
+      <td>${usd(c.balance)}</td><td>${c.status === '正常' ? tag('正常', 'ok') : tag(c.status, 'err')}</td>
+      <td>${btn('↑', 'payCardMove', c.id + ':-1', 'sm')}${btn('↓', 'payCardMove', c.id + ':1', 'sm')}${p.payMode === 'fixed' ? btn('用这张', 'payFix', c.id, 'sm') : ''}</td></tr>`).join('')}</table></div>
+    <div class="card" style="margin-top:12px"><b>拉黑的卡</b>${p.payBlocked.length ? `<table class="t"><tr><th>卡</th><th>原因</th><th></th></tr>${p.payBlocked.map((b) => `<tr><td class="mono">****${b.mask}</td><td>${b.reason}</td><td>${btn('解冻', 'payUnblock', b.id, 'sm')}</td></tr>`).join('')}</table>` : '<div class="empty">没有</div>'}</div>`
 }
 function callTable(rows, empty) {
   if (!rows.length) return `<div class="empty">${empty}</div>`
@@ -125,17 +197,19 @@ function tabX(p) {
     <div class="grid g3">${kpi('X 钱包', usd(p.x.wallet))}${kpi('未兑 X 码', p.x.unused)}${kpi('近 24 小时', `成功 ${p.x.ok24}`)}</div>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div>`
   const x = p.x
   const rows = (p.calls || []).filter((c) => c.prod !== 'tg')
-  return `<div class="card stack"><b>Avanfinity X · CDK</b><div class="small">和 TG 共用下面这个钱包、同一套 AppId。这里只看 X 的未兑和调用。</div>
+  return `<div class="card stack"><b>Avanfinity X · CDK</b><div class="small">和 TG 共用钱包、同一套 AppId，也共用下面这池已有卡。这里只看 X 的未兑和调用。</div>
     <div class="grid g3">${kpi('共用钱包', usd(x.wallet), 'TG 也扣这里')}${kpi('X 未兑负债', usd(x.liability), `已买未兑 ${x.unusedCdk} 张`)}${kpi('近 24 小时 X', `成功 ${x.ok24} · 失败 ${x.fail24}`)}</div>${btn('去 X 供货设置', 'xGoSupply', '', 'sm')}</div>
-    <div class="card" style="margin-top:12px"><b>X 的最近调用</b><p class="small muted">没有回调。TG 的请求在「TG」页签，不混在这里。</p>
+    <div style="margin-top:12px">${tabPayCards(p)}</div>
+    <div class="card" style="margin-top:12px"><b>X 的最近调用</b><p class="small muted">没有回调。TG 的请求在「TG」页签，不混在这里。改卡序在哪边改都是同一份。</p>
     ${callTable(rows, '还没有 X 调用')}</div>`
 }
 function tabTg(p) {
   if (!p.tg) return `<div class="card"><b>这家卡台不卖 Telegram</b><p class="small muted">TG 只走 Avanfinity CDK，和 X 的 CDK 共用钱包和凭证。</p></div>`
   const rows = (p.calls || []).filter((c) => c.prod === 'tg')
-  return `<div class="card stack"><b>Avanfinity TG · CDK</b><div class="small">没有第二套凭证。发码和兑换都走会员 CDK 那条连接，客户填 Telegram 用户名。</div>
+  return `<div class="card stack"><b>Avanfinity TG · CDK</b><div class="small">没有第二套凭证，也没有第二池卡。客户填 Telegram 用户名。付款卡和 X 是同一份顺序。</div>
     <div class="grid g3">${kpi('共用钱包', usd(p.x.wallet), '和 X 是同一个余额')}${kpi('TG 未兑', p.tg.unused + ' 张', '不计入 X 的未兑负债')}${kpi('近 24 小时 TG', `成功 ${p.tg.ok24} · 失败 ${p.tg.fail24}`)}</div>
     <div class="row">${btn('去 TG 会员', 'tgGoIssue', '', 'sm')}${btn('上限与告警', 'tgGoLimits', '', 'sm')}</div></div>
+    <div style="margin-top:12px">${tabPayCards(p)}</div>
     <div class="card" style="margin-top:12px"><b>TG 的最近调用</b><p class="small muted">路径是 /tg-direct 和 /api/public/tg-cdk。白名单失败会和 X 同时出现，因为是同一套 AppId。</p>
     ${callTable(rows, '还没有 TG 调用')}</div>`
 }
@@ -207,6 +281,8 @@ page('ops-platforms', {
     'GPT 角色（主台 / 备用 / 不用）在卡台概览或「GPT 发码策略」里改，两处是同一个设置。主台不能直接停用。',
     'X 走哪家不在这里改，统一在「X 会员 → 供货设置」。TG 没有供货切换。',
     'Avanfinity 的 X CDK 和 TG CDK 是同一套 AppId、同一个钱包。凭证上打两个标签，概览里钱包只出现一次。调用记录按产品拆开，白名单失败会在两边同时看到。',
+    'SpaceX「GPT 选卡」按兑换顺序分成四块：卡头优先级、失败了换不换卡、没有合格卡头开不开新卡、实体卡坏了怎么拉黑。现在线上卡台页把这些收成一张上下移的表，对不上。',
+    'Avanfinity 的 X 和 TG 不再默认「每笔开一张新卡」，也不默认钉死一张。两边看到的是同一池已开出的卡，按顺序自动选；没有合格卡就停，除非打开「才开新卡」。',
     '「凭证」页签列出这家卡台下的每套接口，各自测连通。试试在 Avan 的凭证里点「模拟：已加白名单」，X 会员页的红条会消失。',
     '代理功能已停用：代理端 /partner、代理管理、代理换码在开发时只隐藏路由和入口，不删代码和数据。原来「其他」里的「代理换码」入口去掉。',
   ],

@@ -73,13 +73,19 @@
       </div>
     </div>
 
-    <!-- 自动选卡优先级 -->
+    <div class="card">
+      <b>这台现在怎么选卡</b>
+      <p class="text-sm mt-1">{{ strategyLine }}</p>
+      <p class="text-xs text-muted mt-1">改完只影响之后新发的码。已经发出的码不追溯。</p>
+    </div>
+
+    <!-- 卡头优先级 -->
     <div class="card">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
-          <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 自动选卡优先级</h2>
+          <h2 class="text-xl font-bold text-ink">1. 卡头优先级</h2>
           <p class="text-sm text-muted mt-1">
-            顺序越靠前优先级越高；已下线或未启动的自动跳过。保存后会同步到该卡台账户规则。
+            排的是开卡产品，不是已经开出来的实体卡。靠前、启用且在线的先用；下线或关掉的跳过。保存后同步到这台的 select_priority。
             <el-tag type="warning" size="small" effect="plain" class="ml-2">仅美卡参与自动选卡</el-tag>
           </p>
         </div>
@@ -145,14 +151,13 @@
     </div>
 
 
-    <!-- 本站可控策略 -->
+    <!-- 兑换换卡 -->
     <div class="card">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
-          <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 本站可控策略</h2>
+          <h2 class="text-xl font-bold text-ink">2. 兑换时换不换卡</h2>
           <p class="text-sm text-muted mt-1">
-            不依赖 ACC 换卡策略：启用后发码写入选卡偏好，兑换向卡台声明
-            <code class="mono text-xs">no_auto_card_switch</code>（失败不自动换卡，由本站/卡台容量策略控卡）
+            本站策略开着才生效。开着之后不跟卡台自己的换卡策略：发码写入选卡偏好，兑换按上面的卡头顺序。
           </p>
           <p v-if="resolvedPref.segment_key" class="text-xs text-subtle mt-1">
             当前生效偏好：{{ resolvedPref.issuer || '—' }} / {{ resolvedPref.segment_key }}
@@ -200,31 +205,39 @@
       </div>
 
       <div class="flex flex-wrap items-center gap-4 mt-4">
+        <el-switch v-model="policy.strict_card_preference" :disabled="!policy.enabled" active-text="严格按卡头顺序" />
         <el-checkbox v-model="autoSwitchUnpaid" :disabled="!policy.enabled">
-          确认未扣款/失败后自动换卡（关闭=发 no_auto_card_switch）
+          确认未扣款或失败后，按优先级换下一张卡
         </el-checkbox>
-        <el-switch
-          v-model="policy.auto_open_when_no_card"
-          :disabled="!policy.enabled"
-          active-text="无合格卡时自动开卡"
-        />
         <el-button type="primary" :loading="policySaving" @click="savePolicy">保存策略</el-button>
       </div>
       <p class="text-xs text-subtle mt-3">
-        说明：保存选卡优先级或策略后，会把 select_priority / strict_select 同步到<strong>当前卡台账户</strong>。
-        兑换有规则即严格按本站顺序，不再被卡台 537872/星链级联盖过。未启动卡头会跳过。已发出的码不追溯修改。
+        不勾换卡时，兑换向卡台声明 no_auto_card_switch，失败就停在这一张。严格按顺序时，卡台默认的 537872 / 星链不能盖过。未启动的卡头会跳过。
       </p>
+    </div>
+
+    <div class="card">
+      <h2 class="text-xl font-bold text-ink">3. 没有合格卡头时</h2>
+      <p class="text-sm text-muted mt-1">顺序里没有能用的卡头时，是否允许开新卡。新卡的地区和持卡人姓名只在开新卡时用。</p>
+      <div class="mt-3">
+        <el-switch
+          v-model="policy.auto_open_when_no_card"
+          :disabled="!policy.enabled"
+          active-text="没有合格卡头时允许开新卡"
+        />
+      </div>
+      <p class="text-xs text-subtle mt-3">发卡地区和持卡人在上面「兑换时换不换卡」里填。这里只决定开不开。</p>
     </div>
 
     <!-- 卡健康：同卡失败 × 邮箱归因 -->
     <div class="card">
       <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
         <div>
-          <h2 class="text-xl font-bold text-ink">{{ selectedAccountName }} · 卡健康（失败归因）</h2>
+          <h2 class="text-xl font-bold text-ink">4. 坏卡</h2>
           <p class="text-sm text-muted mt-1">
-            本站观察充值失败：同一张卡失败达到阈值后——
-            <strong>不同邮箱</strong>判为卡问题（拉黑并冻结，下次自动选卡跳过）；
-            <strong>同一邮箱</strong>判为邮箱/号问题（不冻卡）。
+            看的是已经开出来的实体卡，不是卡头。同一张卡失败达到阈值后——
+            <strong>不同邮箱</strong>判为卡的问题，本站拉黑，下次兑换排除它；
+            <strong>同一个邮箱</strong>判为号的问题，不拉黑。
           </p>
         </div>
         <div class="flex items-center gap-3">
@@ -240,7 +253,7 @@
           <el-input-number v-model="healthPolicy.fail_threshold" :min="1" :max="10" class="!w-full" />
         </div>
         <div class="flex items-end pb-1">
-          <el-checkbox v-model="healthPolicy.freeze_on_block">判定坏卡后自动冻结（卡台）</el-checkbox>
+          <el-checkbox v-model="healthPolicy.freeze_on_block">判定坏卡后冻结卡台（现在只在本站排除，不真冻结，直充还能用）</el-checkbox>
         </div>
         <div class="flex items-end pb-1">
           <el-checkbox v-model="healthPolicy.require_known_email">无邮箱时不拉黑（推荐）</el-checkbox>
@@ -399,6 +412,15 @@ const activeAccountPreference = computed(() => {
   const first = rules.value.find((r) => r.enabled && r.plan_key.trim())
   return first ? `${first.channel || '默认渠道'} / ${first.plan_key}` : ''
 })
+const strategyLine = computed(() => {
+  const first = rules.value.find((r) => r.enabled && r.plan_key.trim())
+  const head = first ? first.plan_key : '没有可用卡头'
+  if (!policy.enabled) return '本站策略关着。发码和兑换都走卡台自己的级联，下面的卡头顺序不会盖过它。'
+  const strict = policy.strict_card_preference ? '严格按卡头顺序，卡台默认的 537872 / 星链不能盖过。' : '仍可能被卡台默认卡头盖过。'
+  const swap = autoSwitchUnpaid.value ? `确认没扣款之后按顺序换卡，这一单最多 ${policy.max_cards_per_task} 张。` : '失败了不自动换卡。'
+  const open = policy.auto_open_when_no_card ? '没有合格卡头时允许开新卡。' : '没有合格卡头就停，不开新卡。'
+  return `发码时把「${head}」写成这张码的偏好。兑换时${strict}${swap}${open}`
+})
 
 function accountQuery() {
   const qs = new URLSearchParams()
@@ -447,6 +469,7 @@ async function switchAccount() {
 const policy = reactive({
   enabled: false,
   no_auto_card_switch: true,
+  strict_card_preference: true,
   auto_open_when_no_card: true,
   max_new_accounts_per_card: 4,
   max_cards_per_task: 3,
@@ -651,6 +674,7 @@ async function loadPolicy() {
     Object.assign(policy, {
       enabled: !!p.enabled,
       no_auto_card_switch: p.no_auto_card_switch !== false,
+      strict_card_preference: p.strict_card_preference !== false,
       auto_open_when_no_card: p.auto_open_when_no_card !== false,
       max_new_accounts_per_card: Number(p.max_new_accounts_per_card) || 4,
       max_cards_per_task: Number(p.max_cards_per_task) || 3,

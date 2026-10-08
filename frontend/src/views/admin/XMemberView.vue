@@ -712,7 +712,14 @@ function accountName(id: number) {
 function channelLine(ch: any) {
   const who = accountName(ch.account_id)
   if (ch.channel === 'x_direct') return `${who} · 付款卡 ${ch.card_id || '未选'}`
-  return `${who} · ${ch.auto_card ? '自动开卡' : ch.card_id ? '固定卡 ' + ch.card_id : '未选付款方式'}`
+  const how = ch.pay_mode === 'existing' || (!ch.pay_mode && !ch.auto_card && !ch.card_id)
+    ? '已有卡自动选'
+    : ch.pay_mode === 'new' || ch.auto_card
+      ? '每笔开新卡'
+      : ch.card_id
+        ? '固定卡 ' + ch.card_id
+        : '未选付款方式'
+  return `${who} · ${how}`
 }
 function sampleOf(channel: string, plan: string) {
   return samples.value.find((s) => s.channel === channel && s.plan === plan)

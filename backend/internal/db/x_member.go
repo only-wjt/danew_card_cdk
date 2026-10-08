@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -10,17 +11,28 @@ const (
 	XChannelDirect = "x_direct"
 )
 
+// XCardPref 是已有卡池里的一张，以及它是否参与自动选。
+type XCardPref struct {
+	ID      int64 `json:"id"`
+	Enabled bool  `json:"enabled"`
+}
+
 // XChannel 是一条 X 会员通道。一个通道同一时间只绑一个卡台。
+// PayMode：existing 从已有卡按顺序自动选，fixed 钉死 CardID，new 每笔开新卡。
 type XChannel struct {
-	Channel           string `json:"channel"`
-	AccountID         int64  `json:"account_id"`
-	Enabled           bool   `json:"enabled"`
-	CardID            int64  `json:"card_id"`
-	AutoCard          bool   `json:"auto_card"`
-	AutoCardProduct   string `json:"auto_card_product"`
-	AutoCardFirstName string `json:"auto_card_first_name"`
-	AutoCardLastName  string `json:"auto_card_last_name"`
-	UpdatedAt         string `json:"updated_at"`
+	Channel           string      `json:"channel"`
+	AccountID         int64       `json:"account_id"`
+	Enabled           bool        `json:"enabled"`
+	CardID            int64       `json:"card_id"`
+	AutoCard          bool        `json:"auto_card"`
+	AutoCardProduct   string      `json:"auto_card_product"`
+	AutoCardFirstName string      `json:"auto_card_first_name"`
+	AutoCardLastName  string      `json:"auto_card_last_name"`
+	PayMode           string      `json:"pay_mode"`
+	PayFallback       bool        `json:"pay_fallback"`
+	CardOrder         string      `json:"-"`
+	CardPrefs         []XCardPref `json:"card_order"`
+	UpdatedAt         string      `json:"updated_at"`
 }
 
 // XPlanLimit 是某个通道、某个套餐的花费上限。金额用十进制字符串，避免浮点。
@@ -88,7 +100,38 @@ func migrateXMember() error {
 			}
 		}
 	}
+	if err := ensureXChannelPayCols(); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureXChannelPayCols() error {
+	specs := []struct{ col, ddl string }{
+		{"pay_mode", `ALTER TABLE x_channels ADD COLUMN pay_mode TEXT NOT NULL DEFAULT ''`},
+		{"pay_fallback", `ALTER TABLE x_channels ADD COLUMN pay_fallback INTEGER NOT NULL DEFAULT 0`},
+		{"card_order", `ALTER TABLE x_channels ADD COLUMN card_order TEXT NOT NULL DEFAULT ''`},
+	}
+	for _, s := range specs {
+		var n int
+		if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('x_channels') WHERE name=?`, s.col).Scan(&n); err != nil {
+			return err
+		}
+		if n > 0 {
+			continue
+		}
+		if _, err := DB.Exec(s.ddl); err != nil {
+			return err
+		}
+	}
+	_, err := DB.Exec(`
+		UPDATE x_channels SET pay_mode = CASE
+			WHEN auto_card = 1 THEN 'new'
+			WHEN card_id > 0 THEN 'fixed'
+			ELSE 'existing'
+		END WHERE pay_mode = ''
+	`)
+	return err
 }
 
 func ListXChannels() ([]XChannel, error) {
@@ -100,7 +143,8 @@ func ListXChannels() ([]XChannel, error) {
 	}
 	rows, err := DB.Query(`
 		SELECT channel, account_id, enabled, card_id, auto_card,
-		       auto_card_product, auto_card_first_name, auto_card_last_name, COALESCE(updated_at,'')
+		       auto_card_product, auto_card_first_name, auto_card_last_name,
+		       COALESCE(pay_mode,''), COALESCE(pay_fallback,0), COALESCE(card_order,''), COALESCE(updated_at,'')
 		FROM x_channels ORDER BY channel
 	`)
 	if err != nil {
@@ -110,21 +154,39 @@ func ListXChannels() ([]XChannel, error) {
 	var out []XChannel
 	for rows.Next() {
 		var ch XChannel
-		var enabled, auto int
+		var enabled, auto, fallback int
 		if err := rows.Scan(&ch.Channel, &ch.AccountID, &enabled, &ch.CardID, &auto,
-			&ch.AutoCardProduct, &ch.AutoCardFirstName, &ch.AutoCardLastName, &ch.UpdatedAt); err != nil {
+			&ch.AutoCardProduct, &ch.AutoCardFirstName, &ch.AutoCardLastName,
+			&ch.PayMode, &fallback, &ch.CardOrder, &ch.UpdatedAt); err != nil {
 			return nil, err
 		}
 		ch.Enabled = enabled != 0
 		ch.AutoCard = auto != 0
+		ch.PayFallback = fallback != 0
+		ch.CardPrefs = decodeCardPrefs(ch.CardOrder)
 		out = append(out, ch)
 	}
 	return out, rows.Err()
 }
 
+func decodeCardPrefs(raw string) []XCardPref {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var prefs []XCardPref
+	if err := json.Unmarshal([]byte(raw), &prefs); err != nil {
+		return nil
+	}
+	return prefs
+}
+
 func SaveXChannel(ch XChannel) error {
 	if DB == nil {
 		return fmt.Errorf("db not ready")
+	}
+	if err := ensureXChannelPayCols(); err != nil {
+		return err
 	}
 	ch.Channel = strings.TrimSpace(ch.Channel)
 	if ch.Channel != XChannelCDK && ch.Channel != XChannelDirect {
@@ -155,24 +217,63 @@ func SaveXChannel(ch XChannel) error {
 	if ch.Channel == XChannelDirect && ch.Enabled && ch.CardID <= 0 {
 		return fmt.Errorf("X 直充要选一张付款卡")
 	}
-	if ch.Channel == XChannelCDK && ch.Enabled && !ch.AutoCard && ch.CardID <= 0 {
-		return fmt.Errorf("X CDK 要选自动开卡，或指定一张固定卡")
+	if ch.Channel == XChannelCDK {
+		normalizeXPayMode(&ch)
 	}
-	// Avanfinity 的 autoCard 三个字段都是必填。
-	if ch.Channel == XChannelCDK && ch.Enabled && ch.AutoCard &&
-		(strings.TrimSpace(ch.AutoCardProduct) == "" || strings.TrimSpace(ch.AutoCardFirstName) == "" || strings.TrimSpace(ch.AutoCardLastName) == "") {
+	if ch.Channel == XChannelCDK && ch.Enabled && ch.PayMode == "fixed" && ch.CardID <= 0 {
+		return fmt.Errorf("固定付款要指定一张卡")
+	}
+	if ch.Channel == XChannelCDK && ch.Enabled && ch.PayMode == "new" && !autoCardReady(ch) {
 		return fmt.Errorf("自动开卡要选卡种，并填持卡人的名和姓")
 	}
-	_, err := DB.Exec(`
+	if ch.Channel == XChannelCDK && ch.Enabled && ch.PayMode == "existing" && ch.PayFallback && !autoCardReady(ch) {
+		return fmt.Errorf("没有合格卡时要开新卡，先选卡种并填持卡人的名和姓")
+	}
+	order, err := json.Marshal(ch.CardPrefs)
+	if err != nil {
+		return err
+	}
+	if ch.CardPrefs == nil {
+		order = []byte(ch.CardOrder)
+	}
+	_, err = DB.Exec(`
 		UPDATE x_channels
 		SET account_id = ?, enabled = ?, card_id = ?, auto_card = ?,
 		    auto_card_product = ?, auto_card_first_name = ?, auto_card_last_name = ?,
+		    pay_mode = ?, pay_fallback = ?, card_order = ?,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE channel = ?
 	`, ch.AccountID, boolToInt(ch.Enabled), ch.CardID, boolToInt(ch.AutoCard),
 		strings.TrimSpace(ch.AutoCardProduct), strings.TrimSpace(ch.AutoCardFirstName), strings.TrimSpace(ch.AutoCardLastName),
+		ch.PayMode, boolToInt(ch.PayFallback), string(order),
 		ch.Channel)
 	return err
+}
+
+func normalizeXPayMode(ch *XChannel) {
+	switch strings.TrimSpace(ch.PayMode) {
+	case "":
+		if ch.AutoCard {
+			ch.PayMode = "new"
+		} else if ch.CardID > 0 {
+			ch.PayMode = "fixed"
+		} else {
+			ch.PayMode = "existing"
+		}
+	case "new", "fixed", "existing":
+	default:
+		ch.PayMode = "existing"
+	}
+	ch.AutoCard = ch.PayMode == "new"
+	if ch.PayMode != "fixed" {
+		ch.CardID = 0
+	}
+}
+
+func autoCardReady(ch XChannel) bool {
+	return strings.TrimSpace(ch.AutoCardProduct) != "" &&
+		strings.TrimSpace(ch.AutoCardFirstName) != "" &&
+		strings.TrimSpace(ch.AutoCardLastName) != ""
 }
 
 func ListXPlanLimits(channel string) ([]XPlanLimit, error) {

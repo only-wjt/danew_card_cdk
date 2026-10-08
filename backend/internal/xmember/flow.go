@@ -267,15 +267,12 @@ func issueBatch(ctx context.Context, ch db.XChannel, acc db.CardPlatformAccount,
 			"maxWalletDebitUsd": E4ToUSD(wallet), "maxOfficialAmountMinor": limit.MaxOfficialAmountMinor,
 			"currency": strings.ToLower(limit.Currency), "fundingAmountUsd": E4ToUSD(funding),
 		}
-		if ch.AutoCard {
-			if ch.AutoCardProduct == "" {
-				return nil, fmt.Errorf("自动开卡还没填产品编码")
-			}
-			body["autoCard"] = map[string]string{
-				"productCode": ch.AutoCardProduct, "firstName": ch.AutoCardFirstName, "lastName": ch.AutoCardLastName,
-			}
-		} else {
-			body["cardId"] = ch.CardID
+		pay, err := CDKPayFields(ctx, clientFor(acc), ch)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range pay {
+			body[k] = v
 		}
 		buf, _ := json.Marshal(body)
 		rawBody = string(buf)

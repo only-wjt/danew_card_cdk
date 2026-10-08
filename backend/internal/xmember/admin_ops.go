@@ -158,12 +158,12 @@ func TestQuote(ctx context.Context, channel, plan, handle string) (db.XQuoteSamp
 		"maxWalletDebitUsd": E4ToUSD(wallet), "maxOfficialAmountMinor": limit.MaxOfficialAmountMinor,
 		"currency": strings.ToLower(limit.Currency), "fundingAmountUsd": E4ToUSD(funding),
 	}
-	if ch.AutoCard {
-		body["autoCard"] = map[string]string{
-			"productCode": ch.AutoCardProduct, "firstName": ch.AutoCardFirstName, "lastName": ch.AutoCardLastName,
-		}
-	} else {
-		body["cardId"] = ch.CardID
+	pay, err := CDKPayFields(ctx, client, ch)
+	if err != nil {
+		return db.XQuoteSample{}, err
+	}
+	for k, v := range pay {
+		body[k] = v
 	}
 	gen, err := client.GenerateCDKs(ctx, NewUUID(), body)
 	noteCall(acc.ID, "POST", "/x-direct/cdks/generate", err)
