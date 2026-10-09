@@ -87,9 +87,9 @@
           </div>
           <div v-if="sibling" class="flex flex-wrap items-center gap-2">
             <span class="text-xs text-muted">同一套凭证，GPT 和 X 分开启停：</span>
-            <el-radio-group :model-value="sel" size="small" @change="(v: any) => openAccount(Number(v), 'overview')">
+            <el-radio-group :model-value="sel" size="small" @change="(v: any) => openAccount(Number(v), partOpensCards(Number(v)) ? 'cards' : 'overview')">
               <el-radio-button v-for="p in partsOf(current)" :key="p.id" :value="String(p.id)">
-                {{ p.serves_openai ? 'GPT' : 'X 会员' }} · {{ brief(p) }}
+                {{ p.serves_openai ? 'GPT' : 'X / TG 付款卡' }} · {{ brief(p) }}
               </el-radio-button>
             </el-radio-group>
           </div>
@@ -102,6 +102,7 @@
             <el-radio-button v-if="!current.serves_openai" value="calls">调用记录</el-radio-button>
             <el-radio-button value="credentials">凭证</el-radio-button>
           </el-radio-group>
+          <el-button v-if="xPaySibling && current.serves_openai" size="small" class="ml-2" @click="openAccount(xPaySibling.id, 'cards')">X / TG 付款卡</el-button>
 
           <div v-if="tab === 'overview' && current.serves_openai" class="space-y-3">
             <div class="grid gap-3 sm:grid-cols-3">
@@ -133,7 +134,8 @@
             </div>
             <p v-if="pingMsg" class="text-sm text-muted">{{ pingMsg }}</p>
             <p v-if="isAvanGpt" class="text-xs text-muted">
-              Avan 开放接口不提供选卡、作废和退款：选卡由 Avan 自动处理；回收时只在本站作废，上游码不会撤销。完整码只在发码时返回，之前发的码补不回来。
+              这是 GPT 备台，Avan 开放接口不提供选卡。X 和 Telegram 指定卡、自动选卡在旁边的「付款卡」。
+              <button v-if="xPaySibling" type="button" class="app-link" @click="openAccount(xPaySibling.id, 'cards')">打开付款卡</button>
             </p>
             <div class="flex flex-wrap gap-2">
               <el-button type="primary" :loading="pinging" @click="pingOpenAI">一键检测</el-button>
@@ -523,6 +525,11 @@ function partsOf(a: Acc | null): Acc[] {
   return allItems.value.find((i) => i.parts.some((p) => p.id === a.id))?.parts || [a]
 }
 const sibling = computed(() => partsOf(current.value).length > 1)
+const xPaySibling = computed(() => partsOf(current.value).find((p) => !p.serves_openai && (X_DIRECT_UI || hasCap(p, 'x_cdk'))) || null)
+function partOpensCards(id: number) {
+  const p = partsOf(current.value).find((x) => x.id === id)
+  return !!p && !p.serves_openai && (X_DIRECT_UI || hasCap(p, 'x_cdk'))
+}
 const healthRank: Record<string, number> = { ok: 0, off: 1, warn: 2, bad: 3 }
 function itemHealth(item: SideItem) {
   return item.parts.map(healthOf).reduce((w, h) => (healthRank[h] > healthRank[w] ? h : w), 'ok')
