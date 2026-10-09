@@ -65,8 +65,9 @@
         </template>
 
         <template v-else-if="phase === 'queued' || phase === 'progress'">
-          <h2 class="text-xl font-bold text-ink">{{ phase === 'queued' ? t('xRedeem.queuedTitle') : (state?.headline || t('xRedeem.title')) }}</h2>
-          <p v-if="polling" class="text-sm text-muted">
+          <h2 class="text-xl font-bold text-ink">{{ error ? t('xRedeem.failedTitle') : phase === 'queued' ? t('xRedeem.queuedTitle') : (state?.headline || t('xRedeem.title')) }}</h2>
+          <div v-if="error" class="alert alert-error">{{ error }}</div>
+          <p v-else-if="polling" class="text-sm text-muted">
             <span class="inline-block animate-pulse">●</span> {{ t('xRedeem.polling') }}
           </p>
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
@@ -79,11 +80,12 @@
             >{{ p.label }}</div>
           </div>
           <p v-if="phase === 'queued'" class="text-sm text-muted">{{ t('xRedeem.queuedBody', { n: state?.queue_ahead || 0 }) }}</p>
-          <template v-else>
+          <template v-else-if="!error">
             <p class="text-sm text-muted">{{ t('xRedeem.progressBody', { name: state?.recipient || '' }) }}</p>
             <p class="text-sm">{{ t('xRedeem.progressKeep') }}</p>
           </template>
-          <p v-if="state?.detail" class="text-sm text-muted">{{ state.detail }}</p>
+          <p v-if="state?.detail && !error" class="text-sm text-muted">{{ state.detail }}</p>
+          <button v-if="error && state?.reusable" class="btn-secondary" @click="backToAccount">{{ t('xRedeem.backEdit') }}</button>
         </template>
 
         <template v-else-if="phase === 'done'">
@@ -138,7 +140,7 @@ interface State {
   headline: string
   detail: string
   recipient: string
-  reusable: boolean
+  reusable?: boolean
   queued: boolean
   queue_ahead: number
   status: string
@@ -161,6 +163,7 @@ const state = ref<State | null>(null)
 const error = ref('')
 const busy = ref(false)
 const polling = ref(false)
+const activating = ref(false)
 let timer: ReturnType<typeof setInterval> | null = null
 
 const normalized = computed(() => {
@@ -187,14 +190,46 @@ const openSteps = computed(() => {
   return keys.map((key, i) => ({ key, label: labels[i] || key, active: i <= idx }))
 })
 
+function phaseOf(st: State) {
+  if (st.queued) return 'queued'
+  if (st.step === 'ineligible') return 'ineligible'
+  if (st.step === 'code') return 'user'
+  return st.step
+}
+function movingForward(next: string) {
+  return next === 'progress' || next === 'queued' || next === 'locked' || next === 'done'
+}
 function apply(st: State) {
   state.value = st
-  error.value = st.detail && st.step !== 'confirm' && st.step !== 'done' ? '' : error.value
-  if (st.queued) phase.value = 'queued'
-  else if (st.step === 'ineligible') phase.value = 'ineligible'
-  else phase.value = st.step === 'code' ? 'user' : st.step
+  const next = phaseOf(st)
+  if (activating.value) {
+    // 点过开通后锁在第四步。报价还在、或轮询仍返回「待确认」，都继续等，不要跳回第三步。
+    if (movingForward(next)) {
+      error.value = ''
+      phase.value = next
+      if (next === 'done') stopPoll()
+      else startPoll()
+      return
+    }
+    if (next === 'confirm') {
+      phase.value = 'progress'
+      startPoll()
+      return
+    }
+    error.value = st.detail || st.headline || t('xRedeem.requestFailed')
+    phase.value = 'progress'
+    stopPoll()
+    return
+  }
+  error.value = ''
+  phase.value = next
   if (phase.value === 'progress' || phase.value === 'queued' || phase.value === 'locked') startPoll()
   else stopPoll()
+}
+function backToAccount() {
+  activating.value = false
+  error.value = ''
+  phase.value = 'user'
 }
 
 async function post(path: string, body: Record<string, string>) {
@@ -242,6 +277,7 @@ async function quote() {
 async function confirm() {
   busy.value = true
   error.value = ''
+  activating.value = true
   // 先进入开通进度，避免确认请求还在付款时页面停在确认按钮上。
   phase.value = 'progress'
   if (state.value) state.value = { ...state.value, status: 'paying' }
@@ -249,7 +285,7 @@ async function confirm() {
   try {
     apply(await post('/api/v1/public/x/confirm', { code: code.value.trim() }))
   } catch (e: unknown) {
-    phase.value = 'confirm'
+    phase.value = 'progress'
     stopPoll()
     error.value = e instanceof Error ? e.message : t('xRedeem.requestFailed')
   } finally {
@@ -258,6 +294,7 @@ async function confirm() {
 }
 
 async function poll() {
+  if (busy.value) return
   const r = await fetch('/api/v1/public/x/result?code=' + encodeURIComponent(code.value.trim()))
   const data = await r.json().catch(() => null)
   if (r.ok && data) apply(data)
@@ -274,9 +311,11 @@ function stopPoll() {
 }
 function reset() {
   stopPoll()
+  activating.value = false
   code.value = ''
   handle.value = ''
   state.value = null
+  error.value = ''
   phase.value = 'code'
 }
 async function copyCode() {

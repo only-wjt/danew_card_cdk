@@ -45,6 +45,12 @@ const routes: RouteRecordRaw[] = [
     path: '/',
     name: 'Home',
     component: () => import('../views/HomeView.vue'),
+    // 客户链接用 /?code=卡密。带卡密时直接进兑换页，不要停在首页。
+    beforeEnter: (to) => {
+      const code = String(to.query.code || to.query.cdk || '').trim()
+      if (!code) return true
+      return { path: '/recharge', query: { ...to.query, code } }
+    },
   },
   // 旧登录路径 → 隐蔽入口
   { path: '/auth/login', redirect: `${OPS_BASE}/login` },
