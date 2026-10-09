@@ -206,9 +206,14 @@ func jsonNumber(f float64) string {
 
 // AdminListWebhooks GET /api/v1/admin/webhooks/events
 func AdminListWebhooks(c *gin.Context) {
-	limit := 100
-	accountID, _ := strconv.ParseInt(strings.TrimSpace(c.Query("account_id")), 10, 64)
-	rows, err := db.ListWebhookEvents(accountID, limit)
+	page, pageSize := pageQuery(c, 20)
+	accountRaw := strings.TrimSpace(c.Query("account_id"))
+	orphans := accountRaw == "-1"
+	accountID, _ := strconv.ParseInt(accountRaw, 10, 64)
+	if orphans {
+		accountID = 0
+	}
+	rows, total, err := db.ListWebhookEvents(accountID, orphans, pageSize, (page-1)*pageSize)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "list failed"})
 		return
@@ -265,6 +270,9 @@ func AdminListWebhooks(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"events":              out,
+		"total":               total,
+		"page":                page,
+		"page_size":           pageSize,
 		"webhook_url":         urlHint,
 		"accounts":            accOut,
 		"any_secret_set":      anySet,
@@ -273,6 +281,18 @@ func AdminListWebhooks(c *gin.Context) {
 		"webhook_secret_set":  anySet,
 		"webhook_secret_hint": maskSecret(legacy),
 	})
+}
+
+func pageQuery(c *gin.Context, defSize int) (int, int) {
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(defSize)))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = defSize
+	}
+	return page, size
 }
 
 func resolveWebhookAccountID(c *gin.Context) int64 {

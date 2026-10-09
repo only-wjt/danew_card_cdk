@@ -394,15 +394,6 @@
             <el-switch :model-value="ch.enabled" @change="onToggle(ch, $event)" />
           </div>
           <p class="text-sm">{{ channelLine(ch) }}</p>
-          <div v-if="ch.channel === 'x_cdk'" class="space-y-1 text-sm">
-            <p v-if="payCardsErr" class="text-xs" style="color: var(--warn, #b45309)">{{ payCardsErr }}</p>
-            <p v-else-if="!payCards.length" class="text-xs text-muted">这台账户里还没有卡。可以去付款卡页改成「每笔开新卡」。</p>
-            <div v-for="card in payCards" :key="card.id" class="flex flex-wrap items-center justify-between gap-2">
-              <span class="mono">{{ card.cardNumberMasked || ('卡 ' + card.id) }}<span class="text-muted"> · {{ card.productCode || '—' }} · {{ card.status || '未知' }} · 余额 {{ card.balance || '—' }}</span></span>
-              <el-tag v-if="cardMark(ch, card)" size="small" type="success" effect="plain">{{ cardMark(ch, card) }}</el-tag>
-            </div>
-          </div>
-          <p class="text-xs text-muted">X 和 Telegram 共用这些卡。改顺序、固定某一张，或改成每笔开新卡，都在付款卡页。</p>
           <div class="flex flex-wrap gap-2">
             <el-button v-if="ch.channel === 'x_cdk'" size="small" type="primary" plain @click="goPlatform(ch.account_id, 'cards')">去改付款卡</el-button>
             <el-button size="small" @click="testQuote(ch.channel)">试报价</el-button>
@@ -542,8 +533,6 @@ const avanStrips = computed(() => (avanXAcc.value ? visibleStrips.value : visibl
 const visibleChannels = computed(() => channels.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
 const visibleLimits = computed(() => limits.value.filter((s) => X_DIRECT_UI || s.channel !== 'x_direct'))
 const channels = ref<any[]>([])
-const payCards = ref<any[]>([])
-const payCardsErr = ref('')
 const limits = ref<any[]>([])
 const samples = ref<Sample[]>([])
 const strips = ref<any[]>([])
@@ -721,27 +710,6 @@ function openRecord(row: RecordRow) {
 }
 function accountName(id: number) {
   return accounts.value.find((a) => a.id === id)?.name || (id ? `账户 ${id}` : '未绑定卡台')
-}
-function cardUsable(card: any) {
-  const st = String(card.status || '').toLowerCase()
-  return !['frozen', 'closed', 'deleted', 'disabled'].some((w) => st.includes(w))
-}
-function cardMark(ch: any, card: any) {
-  const fixed = ch.pay_mode === 'fixed' || (!ch.pay_mode && ch.card_id && !ch.auto_card)
-  if (fixed) return Number(card.id) === Number(ch.card_id) ? '固定使用' : ''
-  if (ch.pay_mode === 'new' || ch.auto_card) return ''
-  const order = Array.isArray(ch.card_order) ? ch.card_order : []
-  const pick = (list: any[]) => list.find((c) => cardUsable(c))
-  if (!order.length) {
-    const first = pick(payCards.value)
-    return first && Number(first.id) === Number(card.id) ? '下一笔' : ''
-  }
-  for (const pref of order) {
-    if (pref.enabled === false) continue
-    const hit = payCards.value.find((c) => Number(c.id) === Number(pref.id) && cardUsable(c))
-    if (hit) return Number(hit.id) === Number(card.id) ? '下一笔' : ''
-  }
-  return ''
 }
 function channelLine(ch: any) {
   const who = accountName(ch.account_id)
@@ -974,24 +942,7 @@ async function load() {
     alerts.stuck_minutes = cfg.alerts?.stuck_minutes || ''
   }
   if (accRes.ok) accounts.value = acc.accounts || []
-  await Promise.all([loadOverview(), loadPayCards()])
-}
-async function loadPayCards() {
-  const ch = channels.value.find((c) => c.channel === 'x_cdk' && c.account_id)
-  if (!ch) {
-    payCards.value = []
-    payCardsErr.value = ''
-    return
-  }
-  const r = await authFetch('/api/v1/admin/card-platforms/x-cards?id=' + ch.account_id)
-  const d = await r.json().catch(() => ({}))
-  if (!r.ok) {
-    payCardsErr.value = d.error || '读不到这台账户的卡'
-    payCards.value = []
-    return
-  }
-  payCardsErr.value = ''
-  payCards.value = d.cards || []
+  await loadOverview()
 }
 function onToggle(ch: any, value: string | number | boolean) {
   toggleChannel(ch, value === true || value === 'true' || value === 1)

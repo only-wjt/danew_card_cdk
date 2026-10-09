@@ -802,30 +802,46 @@ func InsertWebhookEvent(accountID int64, eventType, idemKey, payload string) err
 	return err
 }
 
-func ListWebhookEvents(accountID int64, limit int) ([]WebhookEvent, error) {
-	if limit <= 0 || limit > 200 {
-		limit = 50
+func ListWebhookEvents(accountID int64, orphans bool, limit, offset int) ([]WebhookEvent, int, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
 	}
+	if offset < 0 {
+		offset = 0
+	}
+	where := "1=1"
+	args := []any{}
+	if orphans {
+		where = "account_id = 0"
+	} else if accountID > 0 {
+		where = "account_id = ?"
+		args = append(args, accountID)
+	}
+	var total int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM webhook_events WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	qargs := append(append([]any{}, args...), limit, offset)
 	rows, err := DB.Query(`
 		SELECT id, COALESCE(account_id,0), COALESCE(event_type,''), idem_key, payload, COALESCE(created_at,'')
 		FROM webhook_events
-		WHERE ? = 0 OR account_id = ?
-		ORDER BY id DESC LIMIT ?
-	`, accountID, accountID, limit)
+		WHERE `+where+`
+		ORDER BY id DESC LIMIT ? OFFSET ?
+	`, qargs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []WebhookEvent
 	for rows.Next() {
 		var e WebhookEvent
 		if err := rows.Scan(&e.ID, &e.AccountID, &e.EventType, &e.IdemKey, &e.Payload, &e.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		e.IdemKey = displayWebhookIdemKey(e.AccountID, e.IdemKey)
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func normalizeCDKCode(code string) string {

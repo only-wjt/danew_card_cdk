@@ -30,6 +30,8 @@ type XChannel struct {
 	AutoCardLastName  string      `json:"auto_card_last_name"`
 	PayMode           string      `json:"pay_mode"`
 	PayFallback       bool        `json:"pay_fallback"`
+	PayExtraTries     int         `json:"pay_extra_tries"`
+	PayMinBalance     string      `json:"pay_min_balance"`
 	CardOrder         string      `json:"-"`
 	CardPrefs         []XCardPref `json:"card_order"`
 	UpdatedAt         string      `json:"updated_at"`
@@ -111,6 +113,8 @@ func ensureXChannelPayCols() error {
 		{"pay_mode", `ALTER TABLE x_channels ADD COLUMN pay_mode TEXT NOT NULL DEFAULT ''`},
 		{"pay_fallback", `ALTER TABLE x_channels ADD COLUMN pay_fallback INTEGER NOT NULL DEFAULT 0`},
 		{"card_order", `ALTER TABLE x_channels ADD COLUMN card_order TEXT NOT NULL DEFAULT ''`},
+		{"pay_extra_tries", `ALTER TABLE x_channels ADD COLUMN pay_extra_tries INTEGER NOT NULL DEFAULT 2`},
+		{"pay_min_balance", `ALTER TABLE x_channels ADD COLUMN pay_min_balance TEXT NOT NULL DEFAULT ''`},
 	}
 	for _, s := range specs {
 		var n int
@@ -144,7 +148,8 @@ func ListXChannels() ([]XChannel, error) {
 	rows, err := DB.Query(`
 		SELECT channel, account_id, enabled, card_id, auto_card,
 		       auto_card_product, auto_card_first_name, auto_card_last_name,
-		       COALESCE(pay_mode,''), COALESCE(pay_fallback,0), COALESCE(card_order,''), COALESCE(updated_at,'')
+		       COALESCE(pay_mode,''), COALESCE(pay_fallback,0), COALESCE(pay_extra_tries,2), COALESCE(pay_min_balance,''),
+		       COALESCE(card_order,''), COALESCE(updated_at,'')
 		FROM x_channels ORDER BY channel
 	`)
 	if err != nil {
@@ -157,7 +162,7 @@ func ListXChannels() ([]XChannel, error) {
 		var enabled, auto, fallback int
 		if err := rows.Scan(&ch.Channel, &ch.AccountID, &enabled, &ch.CardID, &auto,
 			&ch.AutoCardProduct, &ch.AutoCardFirstName, &ch.AutoCardLastName,
-			&ch.PayMode, &fallback, &ch.CardOrder, &ch.UpdatedAt); err != nil {
+			&ch.PayMode, &fallback, &ch.PayExtraTries, &ch.PayMinBalance, &ch.CardOrder, &ch.UpdatedAt); err != nil {
 			return nil, err
 		}
 		ch.Enabled = enabled != 0
@@ -219,6 +224,13 @@ func SaveXChannel(ch XChannel) error {
 	}
 	if ch.Channel == XChannelCDK {
 		normalizeXPayMode(&ch)
+		if ch.PayExtraTries < 0 {
+			ch.PayExtraTries = 0
+		}
+		if ch.PayExtraTries > 3 {
+			ch.PayExtraTries = 3
+		}
+		ch.PayMinBalance = strings.TrimSpace(ch.PayMinBalance)
 	}
 	if ch.Channel == XChannelCDK && ch.Enabled && ch.PayMode == "fixed" && ch.CardID <= 0 {
 		return fmt.Errorf("固定付款要指定一张卡")
@@ -240,12 +252,12 @@ func SaveXChannel(ch XChannel) error {
 		UPDATE x_channels
 		SET account_id = ?, enabled = ?, card_id = ?, auto_card = ?,
 		    auto_card_product = ?, auto_card_first_name = ?, auto_card_last_name = ?,
-		    pay_mode = ?, pay_fallback = ?, card_order = ?,
+		    pay_mode = ?, pay_fallback = ?, pay_extra_tries = ?, pay_min_balance = ?, card_order = ?,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE channel = ?
 	`, ch.AccountID, boolToInt(ch.Enabled), ch.CardID, boolToInt(ch.AutoCard),
 		strings.TrimSpace(ch.AutoCardProduct), strings.TrimSpace(ch.AutoCardFirstName), strings.TrimSpace(ch.AutoCardLastName),
-		ch.PayMode, boolToInt(ch.PayFallback), string(order),
+		ch.PayMode, boolToInt(ch.PayFallback), ch.PayExtraTries, ch.PayMinBalance, string(order),
 		ch.Channel)
 	return err
 }

@@ -12,12 +12,10 @@
         <router-link class="app-link" to="/ops/platforms">卡台</router-link>
         各账户下配置。
       </p>
-      <el-radio-group v-if="!embedded" v-model="filterAccountId" size="small" class="mb-3">
-        <el-radio-button :value="0">全部 {{ events.length }}</el-radio-button>
-        <el-radio-button v-for="acc in accounts" :key="acc.id" :value="acc.id">
-          {{ acc.name }} {{ countFor(acc.id) }}
-        </el-radio-button>
-        <el-radio-button v-if="orphanCount" :value="-1">未归属 {{ orphanCount }}</el-radio-button>
+      <el-radio-group v-if="!embedded" v-model="filterAccountId" size="small" class="mb-3" @change="onFilter">
+        <el-radio-button :value="0">全部</el-radio-button>
+        <el-radio-button v-for="acc in accounts" :key="acc.id" :value="acc.id">{{ acc.name }}</el-radio-button>
+        <el-radio-button :value="-1">未归属</el-radio-button>
       </el-radio-group>
       <div v-if="error" class="alert alert-error mb-3">{{ error }}</div>
       <div class="overflow-x-auto">
@@ -49,6 +47,18 @@
           </tr>
         </tbody>
       </table>
+      </div>
+      <div class="mt-3 flex justify-end">
+        <el-pagination
+          background
+          layout="total, prev, pager, next, sizes"
+          :total="total"
+          :page-size="pageSize"
+          :current-page="page"
+          :page-sizes="[20, 50, 100]"
+          @current-change="(p: number) => { page = p; load() }"
+          @size-change="(s: number) => { pageSize = s; page = 1; load() }"
+        />
       </div>
     </el-card>
   </div>
@@ -84,17 +94,11 @@ const events = ref<WebhookEventRow[]>([])
 const filterAccountId = ref(0)
 const loading = ref(false)
 const error = ref('')
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
-const orphanCount = computed(() => events.value.filter((e) => !e.account_id).length)
-const visibleEvents = computed(() => {
-  if (filterAccountId.value === 0) return events.value
-  if (filterAccountId.value === -1) return events.value.filter((e) => !e.account_id)
-  return events.value.filter((e) => e.account_id === filterAccountId.value)
-})
-
-function countFor(id: number) {
-  return events.value.filter((e) => e.account_id === id).length
-}
+const visibleEvents = computed(() => events.value)
 
 function summarize(p: any) {
   if (!p || typeof p !== 'object') return '—'
@@ -110,11 +114,23 @@ function summarize(p: any) {
   return Object.keys(p).slice(0, 4).join(',')
 }
 
+function onFilter() {
+  page.value = 1
+  void load()
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const r = await authFetch('/api/v1/admin/webhooks/events')
+    const params = new URLSearchParams({
+      page: String(page.value),
+      page_size: String(pageSize.value),
+    })
+    if (props.orphansOnly) params.set('account_id', '-1')
+    else if (props.fixedAccountId) params.set('account_id', String(props.fixedAccountId))
+    else if (filterAccountId.value) params.set('account_id', String(filterAccountId.value))
+    const r = await authFetch('/api/v1/admin/webhooks/events?' + params.toString())
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
       error.value = d.error || '加载失败'
@@ -122,6 +138,7 @@ async function load() {
     }
     accounts.value = d.accounts || []
     events.value = d.events || []
+    total.value = Number(d.total || 0)
     if (props.orphansOnly) filterAccountId.value = -1
     else if (props.fixedAccountId) filterAccountId.value = props.fixedAccountId
   } finally {

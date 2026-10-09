@@ -288,14 +288,9 @@ func issueBatch(ctx context.Context, ch db.XChannel, acc db.CardPlatformAccount,
 		return insertLocalCodes(ctx, nil, limit, ch, acc.ID, batchID, idem, note, by, n, nil)
 	}
 	client := clientFor(acc)
-	gen, err := client.GenerateCDKs(ctx, idem, body)
-	noteCall(acc.ID, "POST", "/x-direct/cdks/generate", err)
-	if callUncertain(err) {
-		return nil, fmt.Errorf("上游发码结果还没确认。请在最近批次里重试第 %d 批，不要重新生成", batchID)
-	}
+	gen, idem, rawBody, err := generateXWithFallback(ctx, client, acc.ID, batchID, idem, body, ch)
 	if err != nil {
-		_ = db.SaveXBatchState(batchID, "failed", rawBody)
-		return nil, fmt.Errorf("上游发码失败：%w", err)
+		return nil, err
 	}
 	fillIssuedCodes(ctx, client, gen.List)
 	codes, err := insertLocalCodes(ctx, client, limit, ch, acc.ID, batchID, idem, note, by, n, gen.List)
@@ -306,7 +301,46 @@ func issueBatch(ctx context.Context, ch db.XChannel, acc db.CardPlatformAccount,
 	return codes, nil
 }
 
-// RetryIssue 用同一批次的幂等键和同一份参数重放发码。响应丢了也不会再开一批。
+func generateXWithFallback(ctx context.Context, client *avanfinity.Client, accountID, batchID int64, idem string, body map[string]any, ch db.XChannel) (*avanfinity.GenerateResult, string, string, error) {
+	ids, err := CDKTryIDs(ctx, client, ch)
+	raw := mustJSON(body)
+	if err != nil {
+		return nil, idem, raw, err
+	}
+	var last error
+	for i, id := range ids {
+		if i > 0 {
+			idem = NewUUID()
+			body["cardId"] = id
+			delete(body, "autoCard")
+			raw = mustJSON(body)
+		}
+		_ = db.SaveXBatchAttempt(batchID, "pending", idem, raw)
+		gen, callErr := client.GenerateCDKs(ctx, idem, body)
+		noteCall(accountID, "POST", "/x-direct/cdks/generate", callErr)
+		if callErr == nil {
+			return gen, idem, raw, nil
+		}
+		last = callErr
+		if callUncertain(callErr) || !CardRefused(callErr) || i == len(ids)-1 {
+			break
+		}
+	}
+	if callUncertain(last) {
+		return nil, idem, raw, fmt.Errorf("上游发码结果还没确认。请在最近批次里重试第 %d 批，不要重新生成", batchID)
+	}
+	_ = db.SaveXBatchAttempt(batchID, "failed", idem, raw)
+	if last == nil {
+		last = fmt.Errorf("没有发出去")
+	}
+	return nil, idem, raw, fmt.Errorf("上游发码失败：%w", last)
+}
+
+func mustJSON(body map[string]any) string {
+	buf, _ := json.Marshal(body)
+	return string(buf)
+}
+
 func RetryIssue(ctx context.Context, batchID int64) ([]string, error) {
 	b, err := db.GetXBatch(batchID)
 	if err != nil {

@@ -214,6 +214,11 @@ func SaveTGBatchState(id int64, status, raw string) error {
 	return err
 }
 
+func SaveTGBatchAttempt(id int64, status, idem, raw string) error {
+	_, err := DB.Exec(`UPDATE tg_batches SET status = ?, idempotency_key = ?, request_json = ? WHERE id = ?`, status, idem, raw, id)
+	return err
+}
+
 func GetTGBatch(id int64) (TGBatch, error) {
 	var b TGBatch
 	err := DB.QueryRow(`

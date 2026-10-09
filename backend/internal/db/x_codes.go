@@ -589,12 +589,15 @@ func InsertUpstreamCall(accountID int64, method, path string, status int, detail
 	`, accountID, method, path, status, detail)
 }
 
-func ListUpstreamCalls(accountID int64, limit int, product string) ([]struct {
+func ListUpstreamCalls(accountID int64, limit, offset int, product string) ([]struct {
 	Method, Path, Detail, At string
 	Status                   int
-}, error) {
+}, int, error) {
 	if limit <= 0 || limit > 100 {
-		limit = 30
+		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
 	}
 	where := `account_id = ?`
 	args := []any{accountID}
@@ -603,14 +606,20 @@ func ListUpstreamCalls(accountID int64, limit int, product string) ([]struct {
 		where += ` AND (path LIKE '%tg-cdk%' OR path LIKE '%tg-direct%')`
 	case "x":
 		where += ` AND path NOT LIKE '%tg-cdk%' AND path NOT LIKE '%tg-direct%'`
+	case "fail":
+		where += ` AND (status = 0 OR status >= 400)`
 	}
-	args = append(args, limit)
+	var total int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM x_upstream_calls WHERE `+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	qargs := append(append([]any{}, args...), limit, offset)
 	rows, err := DB.Query(`
 		SELECT method, path, status, detail, COALESCE(created_at,'')
-		FROM x_upstream_calls WHERE `+where+` ORDER BY id DESC LIMIT ?
-	`, args...)
+		FROM x_upstream_calls WHERE `+where+` ORDER BY id DESC LIMIT ? OFFSET ?
+	`, qargs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []struct {
@@ -623,11 +632,11 @@ func ListUpstreamCalls(accountID int64, limit int, product string) ([]struct {
 			Status                   int
 		}
 		if err := rows.Scan(&row.Method, &row.Path, &row.Status, &row.Detail, &row.At); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, row)
 	}
-	return out, rows.Err()
+	return out, total, rows.Err()
 }
 
 func GetXBatch(id int64) (XBatch, error) {
@@ -645,6 +654,11 @@ func GetXBatch(id int64) (XBatch, error) {
 
 func SaveXBatchState(id int64, status, requestJSON string) error {
 	_, err := DB.Exec(`UPDATE x_batches SET status = ?, request_json = ? WHERE id = ?`, status, requestJSON, id)
+	return err
+}
+
+func SaveXBatchAttempt(id int64, status, idem, requestJSON string) error {
+	_, err := DB.Exec(`UPDATE x_batches SET status = ?, idempotency_key = ?, request_json = ? WHERE id = ?`, status, idem, requestJSON, id)
 	return err
 }
 

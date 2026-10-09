@@ -43,6 +43,21 @@ func TestPayFieldsExistingFallsBackToNewCard(t *testing.T) {
 	}
 }
 
+func TestCandidateCardsSkipLowBalanceAndLimitTries(t *testing.T) {
+	cards := []Card{
+		{ID: 1, Status: "active", Balance: "0.10"},
+		{ID: 2, Status: "active", Balance: "20"},
+		{ID: 3, Status: "active", Balance: "8"},
+		{ID: 4, Status: "active", Balance: "6"},
+	}
+	ids := CandidateCardIDs(PayPlan{Mode: "existing", ExtraTries: 1, MinBalance: "1", Order: []CardPref{
+		{ID: 1, Enabled: true}, {ID: 2, Enabled: true}, {ID: 3, Enabled: true}, {ID: 4, Enabled: true},
+	}}, cards)
+	if len(ids) != 2 || ids[0] != 2 || ids[1] != 3 {
+		t.Fatalf("want 2 then 3, got %v", ids)
+	}
+}
+
 func TestPayFieldsFixedAndNew(t *testing.T) {
 	fixed, err := PayFields(PayPlan{Mode: "fixed", CardID: 8}, nil)
 	if err != nil || fixed["cardId"] != int64(8) {

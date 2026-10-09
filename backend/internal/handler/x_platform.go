@@ -101,12 +101,13 @@ func AdminXCalls(c *gin.Context) {
 	if _, ok := loadXAccount(c, id); !ok {
 		return
 	}
-	rows, err := db.ListUpstreamCalls(id, 40, c.Query("product"))
+	page, pageSize := pageQuery(c, 20)
+	rows, total, err := db.ListUpstreamCalls(id, pageSize, (page-1)*pageSize, c.Query("product"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"calls": rows})
+	c.JSON(http.StatusOK, gin.H{"calls": rows, "total": total, "page": page, "page_size": pageSize})
 }
 
 // AdminReorderCardPlatforms POST /api/v1/admin/card-platforms/reorder

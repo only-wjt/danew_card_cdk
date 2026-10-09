@@ -248,22 +248,54 @@ func issueBatch(ctx context.Context, ch db.XChannel, acc db.CardPlatformAccount,
 		return nil, err
 	}
 	client := clientFor(acc)
-	gen, err := client.GenerateTGCDKs(ctx, idem, body)
-	noteCall(acc.ID, "POST", "/tg-direct/cdks/generate", err)
-	if callUncertain(err) {
-		return nil, fmt.Errorf("上游发码结果还没确认。请在最近批次里重试第 %d 批，不要重新生成", batchID)
-	}
+	gen, idem, saved, err := generateTGWithFallback(ctx, client, acc.ID, batchID, idem, body, ch)
 	if err != nil {
-		_ = db.SaveTGBatchState(batchID, "failed", string(raw))
-		return nil, fmt.Errorf("上游发码失败：%w", err)
+		return nil, err
 	}
 	fillIssued(ctx, client, gen.List)
 	codes, err := insertLocal(limit, ch, acc.ID, batchID, idem, note, by, gen.List)
 	if err != nil {
 		return codes, err
 	}
-	_ = db.SaveTGBatchState(batchID, "issued", string(raw))
+	_ = db.SaveTGBatchState(batchID, "issued", saved)
 	return codes, nil
+}
+
+func generateTGWithFallback(ctx context.Context, client *avanfinity.Client, accountID, batchID int64, idem string, body map[string]any, ch db.XChannel) (*avanfinity.GenerateResult, string, string, error) {
+	ids, err := xmember.CDKTryIDs(ctx, client, ch)
+	buf, _ := json.Marshal(body)
+	raw := string(buf)
+	if err != nil {
+		return nil, idem, raw, err
+	}
+	var last error
+	for i, id := range ids {
+		if i > 0 {
+			idem = newUUID()
+			body["cardId"] = id
+			delete(body, "autoCard")
+			buf, _ = json.Marshal(body)
+			raw = string(buf)
+		}
+		_ = db.SaveTGBatchAttempt(batchID, "pending", idem, raw)
+		gen, callErr := client.GenerateTGCDKs(ctx, idem, body)
+		noteCall(accountID, "POST", "/tg-direct/cdks/generate", callErr)
+		if callErr == nil {
+			return gen, idem, raw, nil
+		}
+		last = callErr
+		if callUncertain(callErr) || !xmember.CardRefused(callErr) || i == len(ids)-1 {
+			break
+		}
+	}
+	if callUncertain(last) {
+		return nil, idem, raw, fmt.Errorf("上游发码结果还没确认。请在最近批次里重试第 %d 批，不要重新生成", batchID)
+	}
+	_ = db.SaveTGBatchAttempt(batchID, "failed", idem, raw)
+	if last == nil {
+		last = fmt.Errorf("没有发出去")
+	}
+	return nil, idem, raw, fmt.Errorf("上游发码失败：%w", last)
 }
 
 func RetryIssue(ctx context.Context, batchID int64) ([]string, error) {

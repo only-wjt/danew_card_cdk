@@ -184,7 +184,23 @@
             <div v-if="payMode === 'existing'" class="card space-y-2" style="border-color: #b9e3c6; background: #e7f6ec">
               <div class="text-xs text-muted">下一笔</div>
               <div class="font-semibold">{{ nextPayId ? cardLabel(payRow(nextPayId)) : '现在没有参与的卡，下一笔会停住' }}</div>
-              <p class="text-xs text-muted">顺序里第一张「参与」、状态正常、余额大于 0 的卡。后面的等这一张不够再轮到。</p>
+              <p class="text-xs text-muted">顺序里第一张「参与」、状态正常、余额达到下限的卡。后面的等这一张不够再轮到。</p>
+              <div class="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div class="text-xs text-muted">余额低于（美元）就跳过</div>
+                  <el-input v-model="payMinBalance" placeholder="0 表示不看余额" />
+                </div>
+                <div>
+                  <div class="text-xs text-muted">这张被拒后，再试后面几张</div>
+                  <el-select v-model="payExtraTries" class="w-full">
+                    <el-option :value="0" label="不换，停在这张" />
+                    <el-option :value="1" label="再试 1 张" />
+                    <el-option :value="2" label="再试 2 张" />
+                    <el-option :value="3" label="再试 3 张" />
+                  </el-select>
+                </div>
+              </div>
+              <p class="text-xs text-muted">只在发码时换卡。上游明确拒绝这张卡，才会改试后面的。超时或结果不确定不换卡，避免同一笔付两次。码发出去之后就钉在那张卡上，兑换途中不能改。</p>
               <div class="flex items-center gap-2 text-sm">
                 <el-switch v-model="payFallback" />
                 <span>{{ payFallback ? '这些都不能用时，才按下面的卡种开一张新卡。' : '这些都不能用时就停止，不开新卡。' }}</span>
@@ -220,7 +236,7 @@
             <div v-if="payMode === 'existing'" class="card overflow-x-auto">
               <div class="mb-2 flex items-center justify-between">
                 <div class="font-semibold">会按这个顺序用</div>
-                <span class="text-xs text-muted">{{ payQueue.length }} 张 · 第 1 张就是下一笔</span>
+                <span class="text-xs text-muted">{{ payQueue.length }} 张 · 标成下一笔的那张先用</span>
               </div>
               <table class="data-table">
                 <thead><tr><th>#</th><th>参与</th><th>卡</th><th>余额</th><th>状态</th><th></th></tr></thead>
@@ -230,8 +246,8 @@
                     <td><el-switch :model-value="true" @change="setPayEnabled(row.id, false)" /></td>
                     <td>
                       <span class="mono">{{ cardLabel(row) }}</span>
-                      <el-tag v-if="i === 0 && cardSpendable(row)" size="small" type="success" class="ml-2">下一笔</el-tag>
-                      <el-tag v-else-if="!cardSpendable(row)" size="small" type="warning" class="ml-2">余额 0，会跳过</el-tag>
+                      <el-tag v-if="nextPayId === row.id" size="small" type="success" class="ml-2">下一笔</el-tag>
+                      <el-tag v-else-if="!cardSpendable(row)" size="small" type="warning" class="ml-2">余额不够，会跳过</el-tag>
                     </td>
                     <td>{{ row.balance || '—' }}</td>
                     <td>{{ row.status || '未知' }}</td>
@@ -341,7 +357,7 @@
                 <div class="font-semibold">调用记录</div>
                 <p class="text-xs text-muted">X 和 Telegram 没有回调。白名单失败会在两边同时出现，因为是同一套 AppId。</p>
               </div>
-              <el-radio-group v-model="callProduct" size="small" @change="loadCalls">
+              <el-radio-group v-model="callProduct" size="small" @change="onCallFilter">
                 <el-radio-button value="">全部</el-radio-button>
                 <el-radio-button value="x">X</el-radio-button>
                 <el-radio-button value="tg">TG</el-radio-button>
@@ -364,6 +380,18 @@
                   <tr v-if="!shownCalls.length"><td colspan="6" class="text-muted">这一筛下还没有调用</td></tr>
                 </tbody>
               </table>
+            </div>
+            <div class="flex justify-end">
+              <el-pagination
+                background
+                layout="total, prev, pager, next, sizes"
+                :total="callTotal"
+                :page-size="callPageSize"
+                :current-page="callPage"
+                :page-sizes="[20, 50, 100]"
+                @current-change="(p: number) => { callPage = p; loadCalls() }"
+                @size-change="(s: number) => { callPageSize = s; callPage = 1; loadCalls() }"
+              />
             </div>
           </div>
 
@@ -762,6 +790,11 @@ type CredDraft = { name: string; site_base: string; cred_public: string; cred_se
 const credDrafts = reactive<Record<number, CredDraft>>({})
 const payMode = ref<'existing' | 'fixed' | 'new'>('existing')
 const payFallback = ref(false)
+const payExtraTries = ref(2)
+const payMinBalance = ref('')
+const callPage = ref(1)
+const callPageSize = ref(20)
+const callTotal = ref(0)
 const fixedCardId = ref(0)
 const cardPrefs = ref<{ id: number; enabled: boolean }[]>([])
 const autoCard = reactive({ product: '', first: '', last: '' })
@@ -778,10 +811,7 @@ const nextPayId = computed(() => {
   const row = payQueue.value.find((r) => cardSpendable(r))
   return row ? Number(row.id) : 0
 })
-const shownCalls = computed(() => {
-  if (callProduct.value !== 'fail') return calls.value
-  return calls.value.filter((row) => Number(row.Status) >= 400)
-})
+const shownCalls = computed(() => calls.value)
 const paySummary = computed(() => {
   if (payMode.value === 'new') return '下一笔会新开一张卡。'
   if (payMode.value === 'fixed') {
@@ -1319,8 +1349,15 @@ function cardOk(card: any) {
   return !['frozen', 'closed', 'deleted', 'disabled'].some((w) => st.includes(w))
 }
 function cardSpendable(card: any) {
-  const n = Number(String(card?.balance ?? '').replace(/[^0-9.]/g, ''))
-  return cardOk(card) && Number.isFinite(n) && n > 0
+  if (!cardOk(card)) return false
+  const raw = String(card?.balance ?? '').replace(/[^0-9.]/g, '')
+  if (!raw) return true
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return true
+  const min = Number(String(payMinBalance.value || '').trim())
+  const floor = Number.isFinite(min) && min > 0 ? min : 0
+  if (floor > 0) return n + 1e-9 >= floor
+  return n > 0
 }
 function cardLabel(card: any) {
   if (!card) return '—'
@@ -1368,6 +1405,8 @@ async function loadXPay() {
   }
   cardPrefs.value = prefs
   payFallback.value = !!row?.pay_fallback
+  payExtraTries.value = [0, 1, 2, 3].includes(Number(row?.pay_extra_tries)) ? Number(row.pay_extra_tries) : 2
+  payMinBalance.value = row?.pay_min_balance || ''
   fixedCardId.value = Number(row?.card_id) || 0
   if (row?.pay_mode === 'new' || row?.pay_mode === 'fixed' || row?.pay_mode === 'existing') payMode.value = row.pay_mode
   else if (row?.auto_card) payMode.value = 'new'
@@ -1440,6 +1479,8 @@ async function savePayCard() {
         enabled: true,
         pay_mode: payMode.value,
         pay_fallback: payFallback.value,
+        pay_extra_tries: payExtraTries.value,
+        pay_min_balance: payMinBalance.value.trim(),
         card_order: cardPrefs.value,
         card_id: payMode.value === 'fixed' ? fixedCardId.value : 0,
         auto_card: payMode.value === 'new',
@@ -1511,14 +1552,23 @@ async function saveSwap() {
 }
 
 watch(current, () => fillEdit())
+function onCallFilter() {
+  callPage.value = 1
+  void loadCalls()
+}
 async function loadCalls() {
   const a = xAccount()
   if (!a) return
-  const prod = callProduct.value === 'fail' ? '' : callProduct.value
-  const q = prod ? '&product=' + prod : ''
-  const r = await authFetch('/api/v1/admin/card-platforms/x-calls?id=' + a.id + q)
+  const params = new URLSearchParams({
+    id: String(a.id),
+    page: String(callPage.value),
+    page_size: String(callPageSize.value),
+  })
+  if (callProduct.value) params.set('product', callProduct.value)
+  const r = await authFetch('/api/v1/admin/card-platforms/x-calls?' + params.toString())
   const d = await r.json().catch(() => ({}))
   calls.value = d.calls || []
+  callTotal.value = Number(d.total || 0)
 }
 async function loadXStrip() {
   const r = await authFetch('/api/v1/admin/x/overview')
