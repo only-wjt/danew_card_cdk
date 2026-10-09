@@ -189,11 +189,11 @@ page('ops-x', {
     const running = S.xCodes.filter((c) => c.group === 'running').length
     const todo = S.xCodes.filter((c) => c.group === 'todo').length
     const unused = S.xCodes.filter((c) => c.status === 'unused').length
-    const strip = (name, d, tags, lines, act) => `<div class="card stack"><div class="row">${dot(d)}<b>${name}</b>${tags}</div>${lines}<div>${btn('在卡台查看', 'openPlat', act, 'sm')}</div></div>`
+    const strip = (name, d, tags, lines, act, go) => `<div class="card stack"><div class="row">${dot(d)}<b>${name}</b>${tags}</div>${lines}<div>${btn(go, 'openPlat', act, 'sm')}</div></div>`
     return `<div class="page-head"><div><h2>X 会员</h2><p>每个套餐只从一家卡台出码，在「供货设置」里二选一。卡台凭证在「卡台」页改。</p></div>${btn('刷新', 'toastMsg', '已刷新')}</div>
     <div class="grid g2" style="margin-bottom:8px">
-      ${strip('SpaceX', srcState('spacex'), tag(nSx ? `供 ${nSx} 个套餐` : '没有套餐走这里', nSx ? 'ok' : ''), `<p class="small">主台 A（现网）（GPT 主台，同一套凭证）</p><p class="small muted">发码时锁定付款地区，客户兑换时填 X Cookie。</p>`, 'spacex:x')}
-      ${strip('Avanfinity X', srcState('avan_cdk') === 'err' ? 'warn' : 'ok', tag('已启用', 'ok') + tag(nAv ? `供 ${nAv} 个套餐` : '没有套餐走这里', nAv ? 'ok' : ''), `<p class="small">avanfinity · X</p><p class="small muted">钱包 ${usd(av.x.wallet)} · 未兑负债 ${usd(av.x.liability)} · ${av.x.unusedCdk} 张未兑</p>${srcState('avan_cdk') === 'err' ? `<p class="small" style="color:var(--warn)">${esc(plat('avan').conns[1].error)}</p>` : ''}`, 'avan:x')}
+      ${strip('SpaceX', srcState('spacex'), tag(nSx ? `供 ${nSx} 个套餐` : '没有套餐走这里', nSx ? 'ok' : ''), `<p class="small">主台 A（现网）（GPT 主台，同一套凭证）</p><p class="small muted">发码时锁定付款地区，客户兑换时填 X Cookie。</p>`, 'spacex:overview', '在卡台查看')}
+      ${strip('Avanfinity X', srcState('avan_cdk') === 'err' ? 'warn' : 'ok', tag('已启用', 'ok') + tag(nAv ? `供 ${nAv} 个套餐` : '没有套餐走这里', nAv ? 'ok' : ''), `<p class="small">avanfinity · X 和 TG 共用钱包</p><p class="small muted">钱包 ${usd(av.x.wallet)} · 未兑负债 ${usd(av.x.liability)} · ${av.x.unusedCdk} 张未兑</p>${srcState('avan_cdk') === 'err' ? `<p class="small" style="color:var(--warn)">${esc(plat('avan').conns[1].error)}</p>` : ''}`, 'avan:pay', '查看付款卡')}
     </div>
     <div class="statline">今日开通 ${today} · 进行中 ${running} · 待处理 ${todo} · 未兑 ${unused}</div>
     <div class="row" style="margin-bottom:12px">${seg([['issue', '发码'], ['records', '兑换记录'], ['supply', '供货设置'], ['limits', '上限与告警']], S.ui.xTab, 'xTab')}</div>

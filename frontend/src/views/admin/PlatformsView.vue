@@ -68,7 +68,330 @@
       </aside>
 
       <section class="min-w-0">
-        <div v-if="current" class="space-y-4">
+        <div v-if="current && isAvanHouse" class="space-y-4">
+          <div class="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <h3 class="text-lg font-semibold text-ink">{{ houseName }}</h3>
+                <el-tag effect="plain">GPT 备台</el-tag>
+                <el-tag v-if="xPart" effect="plain">X / TG 共用付款卡</el-tag>
+              </div>
+              <p class="mt-1 text-xs text-muted">始终是这一家。概览、GPT 备台、付款卡、调用记录、凭证来回点，不会切到另一个账户。</p>
+            </div>
+            <div class="flex gap-2">
+              <el-button v-if="gptPart" :loading="pinging" @click="pingOpenAI">检测 GPT</el-button>
+              <el-button v-if="xPart" type="primary" :loading="probing" @click="probeX">测试会员连接</el-button>
+            </div>
+          </div>
+          <el-alert v-if="gptPart?.last_error" type="warning" :closable="false" :title="gptPart.last_error" />
+          <el-alert v-if="xPart?.last_error" type="error" :closable="false" :title="xPart.last_error" />
+
+          <el-radio-group v-model="tab" size="small">
+            <el-radio-button value="overview">概览</el-radio-button>
+            <el-radio-button v-if="gptPart" value="gpt">GPT 备台</el-radio-button>
+            <el-radio-button v-if="xPart" value="cards">付款卡</el-radio-button>
+            <el-radio-button v-if="xPart" value="calls">调用记录</el-radio-button>
+            <el-radio-button value="credentials">凭证</el-radio-button>
+          </el-radio-group>
+
+          <div v-if="tab === 'overview'" class="space-y-3">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div class="card">
+                <div class="text-xs text-muted">GPT 可消费余额</div>
+                <div class="mt-1 text-lg font-semibold">{{ gptPart ? (openaiSpendable ? '$' + openaiSpendable : '—') : '没有 GPT 备台' }}</div>
+                <div class="text-xs text-muted">已扣除风控锁定和重试预留</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">会员钱包</div>
+                <div class="mt-1 text-lg font-semibold">{{ xStrip?.wallet_usd ? '$' + xStrip.wallet_usd : '—' }}</div>
+                <div class="text-xs text-muted">X 和 Telegram 共用，只记一次</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">下一笔付款</div>
+                <div class="mt-1 text-sm">{{ xPart ? paySummary : '还没接会员 CDK' }}</div>
+              </div>
+            </div>
+            <p class="text-xs text-muted">GPT 不在这里选卡。指定卡、按顺序自动选、每笔开新卡都在「付款卡」。</p>
+          </div>
+
+          <div v-else-if="tab === 'gpt' && gptPart" class="space-y-3">
+            <div class="grid gap-3 sm:grid-cols-3">
+              <div class="card">
+                <div class="text-xs text-muted">可消费余额</div>
+                <div class="mt-1 text-lg font-semibold">{{ openaiSpendable ? '$' + openaiSpendable : '—' }}</div>
+                <div v-if="balanceErr" class="text-xs text-amber-600">{{ balanceErr }}</div>
+                <div v-else class="text-xs text-muted">已扣除风控锁定和重试预留</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">套餐价格 · 库存</div>
+                <template v-if="offers.length">
+                  <div v-for="o in offers" :key="o.plan" class="mt-1 flex justify-between gap-2 text-sm">
+                    <span>{{ o.plan }}</span>
+                    <span :class="offerOk(o) ? '' : 'text-amber-600'">{{ offerText(o) }}</span>
+                  </div>
+                </template>
+                <div v-else class="mt-1 text-sm">{{ plansErr || '点检测 GPT 读取' }}</div>
+              </div>
+              <div class="card">
+                <div class="text-xs text-muted">连通</div>
+                <div class="mt-1 text-sm">熔断 {{ gptPart.circuit_state === 'open' ? '已打开' : '关闭' }}</div>
+                <div class="text-xs text-muted">最近成功 {{ gptPart.last_ok_at || '—' }}</div>
+              </div>
+            </div>
+            <p v-if="pingMsg" class="text-sm text-muted">{{ pingMsg }}</p>
+            <p class="text-xs text-muted">这是 GPT 备台。Avan 的 OpenAI 接口不提供选卡。付款卡在旁边的页签，还是这一家。</p>
+            <div class="flex flex-wrap gap-2">
+              <el-button type="primary" :loading="pinging" @click="pingOpenAI">一键检测</el-button>
+              <el-button v-if="gptPart.circuit_state === 'open'" type="warning" plain @click="resetCircuit">复位熔断</el-button>
+            </div>
+            <div class="card space-y-3">
+              <div class="font-semibold">GPT 回调</div>
+              <p class="text-xs text-muted">只影响 GPT 订单。X 和 Telegram 没有回调，调用记在「调用记录」。</p>
+              <el-alert v-if="!gptPart.has_webhook_secret" type="warning" :closable="false" title="还没填 Webhook Secret。把地址贴到这台的开发者页，再把 whsec_… 填回来。" />
+              <el-input :model-value="gptPart.webhook_url || ''" readonly />
+              <div class="flex gap-2">
+                <el-button @click="copyText(gptPart.webhook_url || '')">复制地址</el-button>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <el-input v-model="webhookUrlDraft" class="!max-w-xl" placeholder="要改回调路径时再改这里" />
+                <el-button :loading="savingHook" @click="saveWebhookUrl">保存地址</el-button>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <el-input v-model="webhookSecret" class="!max-w-md" type="password" show-password :placeholder="gptPart.has_webhook_secret ? '已配置，留空不改' : 'whsec_…'" />
+                <el-button type="primary" :loading="savingHook" @click="saveWebhookSecret">保存 Secret</el-button>
+              </div>
+              <WebhookEvents embedded :fixed-account-id="gptPart.id" />
+            </div>
+          </div>
+
+          <div v-else-if="tab === 'cards' && xPart" class="space-y-4">
+            <p class="text-sm text-muted">X 和 Telegram 共用这一池卡、同一个顺序。发码不扣钱，客户兑换时才从这里付。</p>
+            <div class="grid gap-3 md:grid-cols-3">
+              <button type="button" class="card text-left" :class="{ 'pay-on': payMode === 'existing' }" @click="payMode = 'existing'">
+                <div class="font-semibold">按顺序用已有卡</div>
+                <div class="mt-1 text-xs text-muted">{{ nextPayId ? '下一笔 ' + cardLabel(payRow(nextPayId)) : '还没有能用的卡' }}</div>
+              </button>
+              <button type="button" class="card text-left" :class="{ 'pay-on': payMode === 'fixed' }" @click="payMode = 'fixed'">
+                <div class="font-semibold">固定一张</div>
+                <div class="mt-1 text-xs text-muted">{{ fixedCardId ? '当前 ' + cardLabel(payRow(fixedCardId)) : '还没指定' }}</div>
+              </button>
+              <button type="button" class="card text-left" :class="{ 'pay-on': payMode === 'new' }" @click="payMode = 'new'">
+                <div class="font-semibold">每笔开新卡</div>
+                <div class="mt-1 text-xs text-muted">开卡费每笔都扣</div>
+              </button>
+            </div>
+
+            <div v-if="payMode === 'existing'" class="card space-y-2" style="border-color: #b9e3c6; background: #e7f6ec">
+              <div class="text-xs text-muted">下一笔</div>
+              <div class="font-semibold">{{ nextPayId ? cardLabel(payRow(nextPayId)) : '现在没有参与的卡，下一笔会停住' }}</div>
+              <p class="text-xs text-muted">顺序里第一张「参与」、状态正常、余额大于 0 的卡。后面的等这一张不够再轮到。</p>
+              <div class="flex items-center gap-2 text-sm">
+                <el-switch v-model="payFallback" />
+                <span>{{ payFallback ? '这些都不能用时，才按下面的卡种开一张新卡。' : '这些都不能用时就停止，不开新卡。' }}</span>
+              </div>
+            </div>
+            <div v-else-if="payMode === 'fixed'" class="card space-y-1" style="border-color: #b9e3c6; background: #e7f6ec">
+              <div class="text-xs text-muted">固定使用</div>
+              <div class="font-semibold">{{ fixedCardId ? cardLabel(payRow(fixedCardId)) : '还没指定' }}</div>
+              <p class="text-xs text-muted">这张冻结、删掉或余额不够时，X 和 Telegram 一起停，不会改去别的卡。</p>
+            </div>
+            <div v-else class="card space-y-2">
+              <div class="font-semibold">每笔都新开一张卡</div>
+              <p class="text-sm text-amber-700">开卡费每笔都扣。下面已有的卡这次不用。</p>
+              <div class="grid gap-2 sm:grid-cols-3">
+                <el-select v-if="xProducts.length" v-model="autoCard.product" filterable allow-create placeholder="选卡种">
+                  <el-option v-for="p in xProducts" :key="p.productCode" :value="p.productCode" :label="productLabel(p)" />
+                </el-select>
+                <el-input v-else v-model="autoCard.product" placeholder="卡种编码（productCode）" />
+                <el-input v-model="autoCard.first" placeholder="名，例如 San" />
+                <el-input v-model="autoCard.last" placeholder="姓，例如 Zhang" />
+              </div>
+            </div>
+
+            <div v-if="payMode === 'existing' && payFallback" class="grid gap-2 sm:grid-cols-3">
+              <el-select v-if="xProducts.length" v-model="autoCard.product" filterable allow-create placeholder="没卡时开哪种">
+                <el-option v-for="p in xProducts" :key="p.productCode" :value="p.productCode" :label="productLabel(p)" />
+              </el-select>
+              <el-input v-else v-model="autoCard.product" placeholder="卡种编码（productCode）" />
+              <el-input v-model="autoCard.first" placeholder="名" />
+              <el-input v-model="autoCard.last" placeholder="姓" />
+            </div>
+
+            <div v-if="payMode === 'existing'" class="card overflow-x-auto">
+              <div class="mb-2 flex items-center justify-between">
+                <div class="font-semibold">会按这个顺序用</div>
+                <span class="text-xs text-muted">{{ payQueue.length }} 张 · 第 1 张就是下一笔</span>
+              </div>
+              <table class="data-table">
+                <thead><tr><th>#</th><th>参与</th><th>卡</th><th>余额</th><th>状态</th><th></th></tr></thead>
+                <tbody>
+                  <tr v-for="(row, i) in payQueue" :key="row.id">
+                    <td>{{ i + 1 }}</td>
+                    <td><el-switch :model-value="true" @change="setPayEnabled(row.id, false)" /></td>
+                    <td>
+                      <span class="mono">{{ cardLabel(row) }}</span>
+                      <el-tag v-if="i === 0 && cardSpendable(row)" size="small" type="success" class="ml-2">下一笔</el-tag>
+                      <el-tag v-else-if="!cardSpendable(row)" size="small" type="warning" class="ml-2">余额 0，会跳过</el-tag>
+                    </td>
+                    <td>{{ row.balance || '—' }}</td>
+                    <td>{{ row.status || '未知' }}</td>
+                    <td class="text-right">
+                      <el-button link :disabled="i === 0" @click="moveQueue(row.id, -1)">上移</el-button>
+                      <el-button link :disabled="i === payQueue.length - 1" @click="moveQueue(row.id, 1)">下移</el-button>
+                    </td>
+                  </tr>
+                  <tr v-if="!payQueue.length"><td colspan="6" class="text-muted">没有参与的卡。到「先不用」里打开一张，或改成每笔开新卡。</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div v-if="payMode === 'fixed'" class="card overflow-x-auto">
+              <div class="mb-2 font-semibold">选一张钉死</div>
+              <p class="mb-2 text-xs text-muted">点「用这张」。已删除、冻结、关闭的不在这里。</p>
+              <table class="data-table">
+                <thead><tr><th></th><th>卡</th><th>余额</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in payLive" :key="row.id">
+                    <td><el-button link @click="useFixed(row.id)">用这张</el-button></td>
+                    <td>
+                      <span class="mono">{{ cardLabel(row) }}</span>
+                      <el-tag v-if="fixedCardId === row.id" size="small" class="ml-2">固定</el-tag>
+                    </td>
+                    <td>{{ row.balance || '—' }}</td>
+                    <td>{{ row.status || '未知' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div v-if="payMode === 'existing'" class="card">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold">先不用</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted">{{ payParked.length }} 张</span>
+                  <el-button link @click="payFold.parked = !payFold.parked">{{ payFold.parked ? '收起' : '展开' }}</el-button>
+                </div>
+              </div>
+              <table v-if="payFold.parked" class="data-table mt-2">
+                <thead><tr><th>参与</th><th>卡</th><th>余额</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in payParked" :key="row.id">
+                    <td><el-switch :model-value="false" @change="setPayEnabled(row.id, true)" /></td>
+                    <td class="mono">{{ cardLabel(row) }}</td>
+                    <td>{{ row.balance || '—' }}</td>
+                    <td>{{ row.status || '未知' }}</td>
+                  </tr>
+                  <tr v-if="!payParked.length"><td colspan="4" class="text-muted">没有</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div v-if="payMode !== 'new'" class="card">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold">不能用</div>
+                <div class="flex items-center gap-2">
+                  <span class="text-xs text-muted">{{ payDeadRows.length }} 张</span>
+                  <el-button link @click="payFold.dead = !payFold.dead">{{ payFold.dead ? '收起' : '展开' }}</el-button>
+                </div>
+              </div>
+              <template v-if="payFold.dead">
+                <table class="data-table mt-2">
+                  <thead><tr><th>卡</th><th>余额</th><th>状态</th></tr></thead>
+                  <tbody>
+                    <tr v-for="row in payDeadRows" :key="row.id">
+                      <td class="mono">{{ cardLabel(row) }}</td>
+                      <td>{{ row.balance || '—' }}</td>
+                      <td>{{ row.status || '未知' }}</td>
+                    </tr>
+                    <tr v-if="!payDeadRows.length"><td colspan="3" class="text-muted">没有</td></tr>
+                  </tbody>
+                </table>
+                <p class="mt-2 text-xs text-muted">已删除、冻结、关闭的卡不能再参与。</p>
+              </template>
+            </div>
+
+            <div v-if="payMode === 'new'" class="card">
+              <div class="flex items-center justify-between">
+                <div class="font-semibold">这些已有卡这次不用</div>
+                <el-button link @click="payFold.parked = !payFold.parked">{{ payFold.parked ? '收起' : '展开' }} · {{ payRows.length }} 张</el-button>
+              </div>
+              <table v-if="payFold.parked" class="data-table mt-2">
+                <thead><tr><th>卡</th><th>余额</th><th>状态</th></tr></thead>
+                <tbody>
+                  <tr v-for="row in payRows" :key="row.id">
+                    <td class="mono">{{ cardLabel(row) }}</td>
+                    <td>{{ row.balance || '—' }}</td>
+                    <td>{{ row.status || '未知' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <el-button type="primary" :loading="savingChannel" @click="savePayCard">保存</el-button>
+              <span v-if="channelRow?.enabled && xPart && channelRow?.account_id === xPart.id" class="text-sm" style="color: var(--ok, #16a34a)">通道已启用，X 和 TG 都走这里</span>
+              <button type="button" class="app-link text-sm" @click="router.push({ name: 'XMember', query: { tab: 'settings' } })">去填 X 套餐上限</button>
+              <button type="button" class="app-link text-sm" @click="router.push({ name: 'TGMember', query: { tab: 'limits' } })">去填 TG 套餐上限</button>
+            </div>
+          </div>
+
+          <div v-else-if="tab === 'calls'" class="card space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div class="font-semibold">调用记录</div>
+                <p class="text-xs text-muted">X 和 Telegram 没有回调。白名单失败会在两边同时出现，因为是同一套 AppId。</p>
+              </div>
+              <el-radio-group v-model="callProduct" size="small" @change="loadCalls">
+                <el-radio-button value="">全部</el-radio-button>
+                <el-radio-button value="x">X</el-radio-button>
+                <el-radio-button value="tg">TG</el-radio-button>
+                <el-radio-button value="fail">只看失败</el-radio-button>
+              </el-radio-group>
+            </div>
+            <p class="text-xs text-muted">「接口不存在」是查了一条上游没有的单，不是这张卡付失败。</p>
+            <div class="overflow-x-auto">
+              <table class="data-table">
+                <thead><tr><th>时间</th><th>产品</th><th>方法</th><th>路径</th><th>状态</th><th>说明</th></tr></thead>
+                <tbody>
+                  <tr v-for="(row, i) in shownCalls" :key="i">
+                    <td>{{ row.At }}</td>
+                    <td>{{ callProd(row) }}</td>
+                    <td>{{ row.Method }}</td>
+                    <td class="mono">{{ row.Path }}</td>
+                    <td :class="Number(row.Status) >= 400 ? 'text-red-600' : ''">{{ row.Status }}</td>
+                    <td class="text-muted">{{ row.Detail }}</td>
+                  </tr>
+                  <tr v-if="!shownCalls.length"><td colspan="6" class="text-muted">这一筛下还没有调用</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div v-else class="space-y-3">
+            <div v-for="part in houseParts" :key="part.id" class="card space-y-3">
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="font-semibold">{{ part.serves_openai ? 'GPT 备台 · OpenAI' : '会员 CDK · X 和 TG' }}</div>
+                <div class="flex gap-2">
+                  <el-button size="small" :type="part.status === 'active' ? 'danger' : 'success'" plain @click="togglePart(part)">{{ part.status === 'active' ? '停用' : '启用' }}</el-button>
+                  <el-button size="small" type="danger" link :loading="deleting" @click="deletePart(part)">删除</el-button>
+                </div>
+              </div>
+              <el-form v-if="credDrafts[part.id]" label-position="top">
+                <el-form-item label="名称"><el-input v-model="credDrafts[part.id].name" /></el-form-item>
+                <el-form-item label="卡台地址"><el-input v-model="credDrafts[part.id].site_base" /></el-form-item>
+                <el-form-item label="App ID"><el-input v-model="credDrafts[part.id].cred_public" /></el-form-item>
+                <el-form-item label="App Secret"><el-input v-model="credDrafts[part.id].cred_secret" type="password" show-password placeholder="留空不修改" /></el-form-item>
+                <template v-if="!part.serves_openai">
+                  <el-checkbox v-model="credDrafts[part.id].xCdk">X CDK</el-checkbox>
+                  <p class="text-xs text-muted mt-1">Telegram Premium 用同一套 AppId 和同一个钱包，不用再加一条连接。</p>
+                </template>
+              </el-form>
+              <el-button type="primary" :loading="saving" @click="saveHouseCred(part)">保存</el-button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="current" class="space-y-4">
           <div class="flex flex-wrap items-center gap-2">
             <h3 class="text-lg font-semibold text-ink">{{ current.name }}</h3>
             <el-tag :type="healthOf(current) === 'ok' ? 'success' : healthOf(current) === 'bad' ? 'danger' : 'warning'" effect="plain">
@@ -85,14 +408,6 @@
               <el-button type="danger" link :loading="deleting" @click="deleteAccount">删除</el-button>
             </div>
           </div>
-          <div v-if="sibling" class="flex flex-wrap items-center gap-2">
-            <span class="text-xs text-muted">同一套凭证，GPT 和 X 分开启停：</span>
-            <el-radio-group :model-value="sel" size="small" @change="(v: any) => openAccount(Number(v), partOpensCards(Number(v)) ? 'cards' : 'overview')">
-              <el-radio-button v-for="p in partsOf(current)" :key="p.id" :value="String(p.id)">
-                {{ p.serves_openai ? 'GPT' : 'X / TG 付款卡' }} · {{ brief(p) }}
-              </el-radio-button>
-            </el-radio-group>
-          </div>
           <el-alert v-if="current.last_error" :type="current.serves_openai ? 'warning' : 'error'" :closable="false" :title="current.last_error" />
 
           <el-radio-group v-model="tab" size="small">
@@ -102,7 +417,6 @@
             <el-radio-button v-if="!current.serves_openai" value="calls">调用记录</el-radio-button>
             <el-radio-button value="credentials">凭证</el-radio-button>
           </el-radio-group>
-          <el-button v-if="xPaySibling && current.serves_openai" size="small" class="ml-2" @click="openAccount(xPaySibling.id, 'cards')">X / TG 付款卡</el-button>
 
           <div v-if="tab === 'overview' && current.serves_openai" class="space-y-3">
             <div class="grid gap-3 sm:grid-cols-3">
@@ -133,10 +447,7 @@
               </div>
             </div>
             <p v-if="pingMsg" class="text-sm text-muted">{{ pingMsg }}</p>
-            <p v-if="isAvanGpt" class="text-xs text-muted">
-              这是 GPT 备台，Avan 开放接口不提供选卡。X 和 Telegram 指定卡、自动选卡在旁边的「付款卡」。
-              <button v-if="xPaySibling" type="button" class="app-link" @click="openAccount(xPaySibling.id, 'cards')">打开付款卡</button>
-            </p>
+            <p v-if="isAvanGpt" class="text-xs text-muted">这是 GPT 备台，Avan 开放接口不提供选卡。</p>
             <div class="flex flex-wrap gap-2">
               <el-button type="primary" :loading="pinging" @click="pingOpenAI">一键检测</el-button>
               <el-button v-if="!isAvanGpt" :loading="syncingCards" @click="syncOpenAICards">同步套餐</el-button>
@@ -445,6 +756,10 @@ function productLabel(p: any) {
 }
 const calls = ref<any[]>([])
 const callProduct = ref('')
+const xStrip = ref<any>(null)
+const payFold = reactive({ parked: false, dead: false })
+type CredDraft = { name: string; site_base: string; cred_public: string; cred_secret: string; xCdk: boolean; xDirect: boolean }
+const credDrafts = reactive<Record<number, CredDraft>>({})
 const payMode = ref<'existing' | 'fixed' | 'new'>('existing')
 const payFallback = ref(false)
 const fixedCardId = ref(0)
@@ -454,10 +769,18 @@ const payRows = computed(() => cardPrefs.value.map((pref) => {
   const card = xCards.value.find((c) => Number(c.id) === pref.id) || { id: pref.id }
   return { ...card, id: pref.id, enabled: pref.enabled }
 }))
+const payQueue = computed(() => payRows.value.filter((r) => r.enabled && cardOk(r)))
+const payParked = computed(() => payRows.value.filter((r) => !r.enabled && cardOk(r)))
+const payDeadRows = computed(() => payRows.value.filter((r) => !cardOk(r)))
+const payLive = computed(() => payRows.value.filter((r) => cardOk(r)))
 const nextPayId = computed(() => {
   if (payMode.value !== 'existing') return 0
-  const row = payRows.value.find((r) => r.enabled && cardOk(r))
+  const row = payQueue.value.find((r) => cardSpendable(r))
   return row ? Number(row.id) : 0
+})
+const shownCalls = computed(() => {
+  if (callProduct.value !== 'fail') return calls.value
+  return calls.value.filter((row) => Number(row.Status) >= 400)
 })
 const paySummary = computed(() => {
   if (payMode.value === 'new') return '下一笔会新开一张卡。'
@@ -525,16 +848,25 @@ function partsOf(a: Acc | null): Acc[] {
   return allItems.value.find((i) => i.parts.some((p) => p.id === a.id))?.parts || [a]
 }
 const sibling = computed(() => partsOf(current.value).length > 1)
-const xPaySibling = computed(() => partsOf(current.value).find((p) => !p.serves_openai && (X_DIRECT_UI || hasCap(p, 'x_cdk'))) || null)
-function partOpensCards(id: number) {
-  const p = partsOf(current.value).find((x) => x.id === id)
-  return !!p && !p.serves_openai && (X_DIRECT_UI || hasCap(p, 'x_cdk'))
+const houseParts = computed(() => partsOf(current.value))
+const gptPart = computed(() => houseParts.value.find((p) => p.serves_openai) || null)
+const xPart = computed(() => houseParts.value.find((p) => !p.serves_openai && (X_DIRECT_UI || hasCap(p, 'x_cdk') || hasCap(p, 'x_direct'))) || null)
+const isAvanHouse = computed(() => houseParts.value.some((p) => vendorOf(p.protocol) === 'avan'))
+const houseName = computed(() => houseParts.value[0]?.name || current.value?.name || '')
+function gptAccount() {
+  if (isAvanHouse.value) return gptPart.value
+  return current.value?.serves_openai ? current.value : null
+}
+function xAccount() {
+  if (isAvanHouse.value) return xPart.value
+  return current.value && !current.value.serves_openai ? current.value : null
 }
 const healthRank: Record<string, number> = { ok: 0, off: 1, warn: 2, bad: 3 }
 function itemHealth(item: SideItem) {
   return item.parts.map(healthOf).reduce((w, h) => (healthRank[h] > healthRank[w] ? h : w), 'ok')
 }
 function itemBrief(item: SideItem) {
+  if (item.parts.length > 1 && item.parts.some((p) => vendorOf(p.protocol) === 'avan')) return 'GPT 备台 · X / TG 付款卡'
   if (item.parts.length === 1) return brief(item.parts[0])
   return item.parts.map((p) => `${p.serves_openai ? 'GPT' : 'X'} ${brief(p)}`).join(' · ')
 }
@@ -653,9 +985,16 @@ async function loadSwap() {
   swapSet.value = !!d.agent_swap_password_configured
 }
 
+function normalizeTab(id: number, nextTab: string) {
+  const a = accounts.value.find((x) => x.id === id)
+  if (!a) return nextTab || 'overview'
+  const avan = partsOf(a).some((p) => vendorOf(p.protocol) === 'avan')
+  if (avan && nextTab === 'webhook') return 'gpt'
+  return nextTab || 'overview'
+}
 function openAccount(id: number, nextTab: string) {
   sel.value = String(id)
-  tab.value = nextTab
+  tab.value = normalizeTab(id, nextTab)
   probeSteps.value = []
   pingMsg.value = ''
   openaiSpendable.value = ''
@@ -667,8 +1006,8 @@ function openAccount(id: number, nextTab: string) {
 }
 
 async function loadOpenAIOverview() {
-  const a = current.value
-  if (!a?.serves_openai) return
+  const a = gptAccount()
+  if (!a) return
   const r = await authFetch('/api/v1/admin/card-platforms/ping', { method: 'POST', body: JSON.stringify({ id: a.id }) })
   const d = await r.json().catch(() => ({}))
   if (!r.ok) {
@@ -698,8 +1037,20 @@ function fillEdit() {
   edit.cred_secret = ''
   edit.xCdk = hasCap(a, 'x_cdk')
   edit.xDirect = hasCap(a, 'x_direct')
-  webhookUrlDraft.value = a.webhook_url || ''
+  const hook = gptAccount() || a
+  webhookUrlDraft.value = hook.webhook_url || ''
   webhookSecret.value = ''
+  for (const p of partsOf(a)) {
+    const prev = credDrafts[p.id]
+    credDrafts[p.id] = {
+      name: p.name,
+      site_base: p.site_base,
+      cred_public: p.app_id,
+      cred_secret: prev?.cred_secret || '',
+      xCdk: hasCap(p, 'x_cdk'),
+      xDirect: hasCap(p, 'x_direct'),
+    }
+  }
 }
 
 function openCreate() {
@@ -762,6 +1113,41 @@ async function createAccount() {
   }
 }
 
+async function saveHouseCred(part: Acc) {
+  const draft = credDrafts[part.id]
+  if (!draft) return
+  saving.value = true
+  try {
+    const body: any = {
+      id: part.id,
+      name: draft.name.trim(),
+      site_base: draft.site_base.trim(),
+      protocol: part.protocol,
+      cred_secret: draft.cred_secret.trim(),
+      status: part.status,
+      priority: part.priority,
+      is_primary_default: part.is_primary_default,
+    }
+    if (!part.serves_openai) {
+      body.cred_public = draft.cred_public.trim()
+      body.capabilities = capsOf(draft.xCdk, draft.xDirect)
+    } else if (part.protocol === 'avanfinity-2026-08') {
+      body.cred_public = draft.cred_public.trim()
+    }
+    const r = await authFetch('/api/v1/admin/card-platforms/upsert', { method: 'POST', body: JSON.stringify(body) })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '保存失败', 'err')
+      return
+    }
+    draft.cred_secret = ''
+    await load()
+    dialog.toast('已保存', 'ok')
+  } finally {
+    saving.value = false
+  }
+}
+
 async function saveEdit() {
   const a = current.value
   if (!a) return
@@ -796,9 +1182,7 @@ async function saveEdit() {
   }
 }
 
-async function toggleStatus() {
-  const a = current.value
-  if (!a) return
+async function togglePart(a: Acc) {
   const status = a.status === 'active' ? 'disabled' : 'active'
   if (status === 'disabled' && a.serves_openai && gptRoleOf(a, openaiAccounts.value) === 'primary') {
     dialog.toast('这是 GPT 主台，不能直接停用。先到「GPT 发码策略」把别的卡台调到第一位。', 'err')
@@ -814,9 +1198,10 @@ async function toggleStatus() {
 }
 
 const deleting = ref(false)
-async function deleteAccount() {
-  const a = current.value
-  if (!a) return
+function toggleStatus() {
+  if (current.value) void togglePart(current.value)
+}
+async function deletePart(a: Acc) {
   const what = sibling.value ? `「${a.name}」的 ${a.serves_openai ? 'GPT' : 'X 会员'} 部分` : `卡台「${a.name}」`
   const ok = await dialog.confirm(`确定删除${what}吗？删除后凭证一起清掉，不能恢复。`)
   if (!ok) return
@@ -838,8 +1223,11 @@ async function deleteAccount() {
   }
 }
 
+function deleteAccount() {
+  if (current.value) void deletePart(current.value)
+}
 async function pingOpenAI() {
-  const a = current.value
+  const a = gptAccount()
   if (!a) return
   pinging.value = true
   try {
@@ -856,7 +1244,7 @@ async function pingOpenAI() {
 }
 
 async function probeX() {
-  const a = current.value
+  const a = xAccount()
   if (!a) return
   probing.value = true
   try {
@@ -877,14 +1265,14 @@ async function probeX() {
 }
 
 async function resetCircuit() {
-  const a = current.value
+  const a = gptAccount()
   if (!a) return
   await authFetch('/api/v1/admin/card-platforms/reset-circuit', { method: 'POST', body: JSON.stringify({ id: a.id }) })
   await load()
 }
 
 async function saveWebhookUrl() {
-  const a = current.value
+  const a = gptAccount()
   if (!a) return
   savingHook.value = true
   try {
@@ -905,7 +1293,7 @@ async function saveWebhookUrl() {
 }
 
 async function saveWebhookSecret() {
-  const a = current.value
+  const a = gptAccount()
   if (!a || !webhookSecret.value.trim()) return
   savingHook.value = true
   try {
@@ -928,12 +1316,28 @@ async function saveWebhookSecret() {
 
 function cardOk(card: any) {
   const st = String(card.status || '').toLowerCase()
-  return !st.includes('frozen') && !st.includes('closed') && !st.includes('disabled')
+  return !['frozen', 'closed', 'deleted', 'disabled'].some((w) => st.includes(w))
+}
+function cardSpendable(card: any) {
+  const n = Number(String(card?.balance ?? '').replace(/[^0-9.]/g, ''))
+  return cardOk(card) && Number.isFinite(n) && n > 0
+}
+function cardLabel(card: any) {
+  if (!card) return '—'
+  const no = card.cardNumberMasked || ('卡 ' + card.id)
+  return `${no}${card.productCode ? ' · ' + card.productCode : ''}`
+}
+function payRow(id: number) {
+  return payRows.value.find((r) => Number(r.id) === Number(id))
+}
+function callProd(row: any) {
+  const p = String(row?.Path || '').toLowerCase()
+  return p.includes('tg') ? 'TG' : 'X'
 }
 
 async function loadXPay() {
-  const a = current.value
-  if (!a || a.serves_openai) return
+  const a = xAccount()
+  if (!a) return
   const [cardsRes, cfgRes] = await Promise.all([
     authFetch(`/api/v1/admin/card-platforms/x-cards?id=${a.id}`),
     authFetch('/api/v1/admin/x/config'),
@@ -988,9 +1392,28 @@ function movePay(index: number, dir: number) {
   copy[next] = tmp
   cardPrefs.value = copy
 }
+function moveQueue(id: number, dir: number) {
+  const ids = payQueue.value.map((r) => Number(r.id))
+  const i = ids.indexOf(id)
+  const j = i + dir
+  if (i < 0 || j < 0 || j >= ids.length) return
+  const copy = cardPrefs.value.slice()
+  const a = copy.findIndex((p) => p.id === ids[i])
+  const b = copy.findIndex((p) => p.id === ids[j])
+  if (a < 0 || b < 0) return
+  const tmp = copy[a]
+  copy[a] = copy[b]
+  copy[b] = tmp
+  cardPrefs.value = copy
+}
+function useFixed(id: number) {
+  setPayEnabled(id, true)
+  fixedCardId.value = id
+  payMode.value = 'fixed'
+}
 
 async function savePayCard() {
-  const a = current.value
+  const a = xAccount()
   if (!a) return
   const channel = hasCap(a, 'x_direct') && !hasCap(a, 'x_cdk') ? 'x_direct' : hasCap(a, 'x_cdk') ? 'x_cdk' : 'x_direct'
   const bound = channelRow.value
@@ -1089,16 +1512,26 @@ async function saveSwap() {
 
 watch(current, () => fillEdit())
 async function loadCalls() {
-  const a = current.value
+  const a = xAccount()
   if (!a) return
-  const q = callProduct.value ? '&product=' + callProduct.value : ''
+  const prod = callProduct.value === 'fail' ? '' : callProduct.value
+  const q = prod ? '&product=' + prod : ''
   const r = await authFetch('/api/v1/admin/card-platforms/x-calls?id=' + a.id + q)
   const d = await r.json().catch(() => ({}))
   calls.value = d.calls || []
 }
+async function loadXStrip() {
+  const r = await authFetch('/api/v1/admin/x/overview')
+  const d = await r.json().catch(() => ({}))
+  xStrip.value = (d.strips || []).find((s: any) => s.channel === 'x_cdk') || null
+}
 watch(tab, (v) => {
-  if (v === 'cards' && current.value && !current.value.serves_openai) loadXPay()
-  if (v === 'calls') loadCalls()
+  if (v === 'cards') void loadXPay()
+  if (v === 'calls') void loadCalls()
+  if (v === 'overview' && isAvanHouse.value) {
+    void loadXStrip()
+    void loadXPay()
+  }
 })
 
 async function syncOpenAICards() {
@@ -1144,7 +1577,12 @@ onMounted(async () => {
 })
 
 watch([sel, tab], () => {
-  if (tab.value === 'overview' && current.value?.serves_openai) void loadOpenAIOverview()
+  if ((tab.value === 'overview' || tab.value === 'gpt') && gptAccount()) void loadOpenAIOverview()
+  if (tab.value === 'overview' && isAvanHouse.value) {
+    void loadXStrip()
+    void loadXPay()
+  }
+  if (tab.value === 'cards') void loadXPay()
   if (['policy', 'supply', 'orphan', 'swap'].includes(sel.value)) {
     router.replace({ query: { panel: sel.value } })
     return
@@ -1175,6 +1613,7 @@ watch([sel, tab], () => {
 .dot.warn { background: #ca8a04; }
 .dot.bad { background: #dc2626; }
 .dot.off { background: #a3a3a3; }
+.pay-on { border-color: var(--primary, #4f46e5); box-shadow: inset 0 0 0 1px var(--primary, #4f46e5); }
 .role-tag {
   font-size: 11px;
   line-height: 16px;
