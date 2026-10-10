@@ -89,26 +89,21 @@ func CardPlatformWebhook(c *gin.Context) {
 	var payload map[string]interface{}
 	_ = json.Unmarshal(raw, &payload)
 
-	eventType := ""
-	if v, ok := payload["event"].(string); ok {
-		eventType = v
-	}
-	if v, ok := payload["type"].(string); ok && eventType == "" {
-		eventType = v
-	}
-	// 幂等键
+	eventType := webhookEventType(payload)
 	idem := webhookIdemKey(payload, eventType)
 	if avID := strings.TrimSpace(c.GetHeader("X-Avanfinity-Webhook-Id")); avID != "" {
 		idem = "avanfinity|" + avID
 	}
 	err = db.InsertWebhookEvent(matchedAccountID, eventType, idem, string(raw))
+	fresh := err == nil
 	if err != nil {
-		// 唯一冲突视为已处理（幂等）
 		if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "unique") {
 			log.Printf("webhook store: %v", err)
 		}
 	} else if eventType == "gpt_direct.completed" {
 		db.WriteAudit("webhook", "gpt_direct.completed", idem, c.ClientIP())
+	}
+	if fresh && isGPTDirectCompleted(eventType) {
 		notifyChatGPTCompleted(payload)
 	}
 	// 本站 CDK 状态：兑换完成 → consumed（避免列表仍显示「未使用」）
@@ -168,7 +163,37 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string,
 	_ = db.UpdateCardplatformCDKStatus(cdkID, st)
 }
 
+func webhookEventType(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+	if v, ok := payload["type"].(string); ok && strings.TrimSpace(v) != "" {
+		return strings.TrimSpace(v)
+	}
+	if v, ok := payload["event"].(string); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+func isGPTDirectCompleted(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "gpt_direct.completed", "openai.direct.completed":
+		return true
+	default:
+		return false
+	}
+}
+
 func webhookIdemKey(p map[string]interface{}, eventType string) string {
+	if id := strings.TrimSpace(strAny(p["id"])); strings.HasPrefix(id, "evt_") {
+		return eventType + "|evt|" + id
+	}
+	obj := webhookDataObject(p)
+	orderID := firstNonEmpty(strAny(obj["orderId"]), strAny(obj["order_id"]), nestedStr(obj, "order", "id"), strAny(p["order_id"]))
+	if isGPTDirectCompleted(eventType) && orderID != "" {
+		return "gpt-completed|" + orderID
+	}
 	str := func(k string) string {
 		if v, ok := p[k]; ok {
 			switch t := v.(type) {
@@ -193,7 +218,6 @@ func webhookIdemKey(p map[string]interface{}, eventType string) string {
 			return "gpt_direct.completed|client|" + id
 		}
 	}
-	// fallback
 	h := sha256.Sum256([]byte(str("auth_id") + str("order_id") + str("operation_id") + eventType + time.Now().UTC().Format(time.RFC3339Nano)))
 	return hex.EncodeToString(h[:16])
 }

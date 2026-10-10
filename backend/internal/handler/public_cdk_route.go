@@ -259,16 +259,49 @@ func notifyChatGPTCompleted(payload map[string]any) {
 	if payload == nil {
 		return
 	}
-	orderID := strAny(payload["order_id"])
-	if orderID == "" {
-		orderID = strAny(payload["client_request_id"])
+	obj := webhookDataObject(payload)
+	order, _ := obj["order"].(map[string]any)
+	if order == nil {
+		order = map[string]any{}
 	}
+	orderID := firstNonEmpty(strAny(obj["orderId"]), strAny(obj["order_id"]), strAny(order["id"]), strAny(payload["order_id"]), strAny(payload["client_request_id"]))
 	if orderID == "" || !noticeOnce("gpt:"+orderID) {
 		return
 	}
-	email := strAny(payload["account_email"])
-	region := notify.RegionLabel(countryFromCurrency(strAny(payload["currency"])))
-	notify.ChatGPTRedeemed(gptPlanLabel(strAny(payload["plan"])), email, region)
+	email := firstNonEmpty(strAny(order["email"]), strAny(order["account_email"]), strAny(obj["email"]), strAny(payload["account_email"]))
+	plan := firstNonEmpty(strAny(order["plan"]), strAny(obj["plan"]), strAny(payload["plan"]))
+	currency := firstNonEmpty(strAny(order["currency"]), strAny(payload["currency"]))
+	log.Printf("telegram: chatgpt completed order=%s plan=%s", orderID, plan)
+	notify.ChatGPTRedeemed(gptPlanLabel(plan), email, notify.RegionLabel(countryFromCurrency(currency)))
+}
+
+func webhookDataObject(payload map[string]any) map[string]any {
+	data, _ := payload["data"].(map[string]any)
+	if data == nil {
+		return payload
+	}
+	obj, _ := data["object"].(map[string]any)
+	if obj == nil {
+		return payload
+	}
+	return obj
+}
+
+func nestedStr(obj map[string]any, key, child string) string {
+	inner, _ := obj[key].(map[string]any)
+	if inner == nil {
+		return ""
+	}
+	return strAny(inner[child])
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func countryFromCurrency(currency string) *string {
