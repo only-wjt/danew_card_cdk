@@ -168,22 +168,22 @@ func FormatRedeemed(product, plan, who, amount string) string {
 	)
 }
 
-// ChatGPTRedeemed 通知 ChatGPT 已经开通。不带卡密。地区用「菲区」「美区」这种说法。
-func ChatGPTRedeemed(plan, email, region string) {
-	SendText(formatChatGPTRedeemed(plan, email, region))
+// ChatGPTRedeemed 通知 ChatGPT 已经开通。地区用「菲区」「美区」这种说法。
+func ChatGPTRedeemed(plan, email, code, region string) {
+	SendText(formatChatGPTRedeemed(plan, email, code, region))
 }
 
 // EnqueueChatGPTRedeemed persists the formatted message without HTTP delivery.
-func EnqueueChatGPTRedeemed(key, plan, email, region string) error {
-	return db.EnqueueTelegramNotification(key, formatChatGPTRedeemed(plan, email, region))
+func EnqueueChatGPTRedeemed(key, plan, email, code, region string) error {
+	return db.EnqueueTelegramNotification(key, formatChatGPTRedeemed(plan, email, code, region))
 }
 
 // EnqueueChatGPTRedeemedAliases persists one notification for related business keys without HTTP delivery.
-func EnqueueChatGPTRedeemedAliases(keys []string, plan, email, region string) error {
-	return db.EnqueueTelegramNotificationAliases(keys, formatChatGPTRedeemed(plan, email, region))
+func EnqueueChatGPTRedeemedAliases(keys []string, plan, email, code, region string) error {
+	return db.EnqueueTelegramNotificationAliases(keys, formatChatGPTRedeemed(plan, email, code, region))
 }
 
-func formatChatGPTRedeemed(plan, email, region string) string {
+func formatChatGPTRedeemed(plan, email, code, region string) string {
 	email = strings.TrimSpace(email)
 	if email == "" {
 		email = "—"
@@ -191,6 +191,10 @@ func formatChatGPTRedeemed(plan, email, region string) string {
 	plan = strings.TrimSpace(plan)
 	if plan == "" {
 		plan = "—"
+	}
+	code = strings.TrimSpace(code)
+	if code == "" {
+		code = "—"
 	}
 	region = strings.TrimSpace(region)
 	if region == "" {
@@ -201,9 +205,10 @@ func formatChatGPTRedeemed(plan, email, region string) string {
 		"✅ <b>ChatGPT 开通成功</b>\n"+
 			"套餐: %s\n"+
 			"账号: %s\n"+
+			"卡密: <code>%s</code>\n"+
 			"地区: %s\n"+
 			"🕐 %s",
-		escapeHTML(plan), escapeHTML(email), escapeHTML(region), now,
+		escapeHTML(plan), escapeHTML(email), escapeHTML(code), escapeHTML(region), now,
 	)
 	return text
 }

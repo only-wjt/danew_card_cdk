@@ -55,19 +55,19 @@ func TestEnqueueChatGPTRedeemedAliases(t *testing.T) {
 	queueDB(t)
 	// A configured sender still must not send HTTP from an enqueue wrapper.
 	configure(t)
-	if err := EnqueueChatGPTRedeemedAliases([]string{"gpt-order", "gpt-redemption"}, " <Plus> ", " person&test@example.test ", ""); err != nil {
+	if err := EnqueueChatGPTRedeemedAliases([]string{"gpt-order", "gpt-redemption"}, " <Plus> ", " person&test@example.test ", " CDK&1 ", ""); err != nil {
 		t.Fatal(err)
 	}
 	var original string
 	if err := db.DB.QueryRow(`SELECT text FROM telegram_notifications WHERE business_key = 'gpt-order'`).Scan(&original); err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"ChatGPT", "套餐: &lt;Plus&gt;", "账号: person&amp;test@example.test", "地区: 待同步"} {
+	for _, part := range []string{"ChatGPT", "套餐: &lt;Plus&gt;", "账号: person&amp;test@example.test", "卡密: <code>CDK&amp;1</code>", "地区: 待同步"} {
 		if !strings.Contains(original, part) {
 			t.Fatalf("formatted message missing %q", part)
 		}
 	}
-	if err := EnqueueChatGPTRedeemedAliases([]string{"gpt-redemption", "gpt-poll"}, "different", "different", "US"); err != nil {
+	if err := EnqueueChatGPTRedeemedAliases([]string{"gpt-redemption", "gpt-poll"}, "different", "different", "different", "US"); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -78,7 +78,7 @@ func TestEnqueueChatGPTRedeemedAliases(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT text FROM telegram_notifications WHERE business_key = 'gpt-order'`).Scan(&retained); err != nil || retained != original {
 		t.Fatalf("original message changed: err=%v", err)
 	}
-	if err := EnqueueChatGPTRedeemedAliases(nil, "Plus", "email", "region"); err == nil {
+	if err := EnqueueChatGPTRedeemedAliases(nil, "Plus", "email", "code", "region"); err == nil {
 		t.Fatal("expected DB validation error to propagate")
 	}
 }

@@ -470,10 +470,21 @@ func notifyGPTSuccess(accountID int64, code, email string, payload map[string]an
 			country = &v
 		}
 	}
+	displayCode := strings.TrimSpace(code)
+	if displayCode == "" {
+		displayCode = strings.TrimSpace(aliasCode)
+	}
 	if email == "" {
 		email = gptResultEmail(payload)
 	}
-	if err := notify.EnqueueChatGPTRedeemedAliases(keys, gptPlanLabel(plan), email, notify.RegionLabel(country)); err != nil {
+	if email == "" && displayCode != "" {
+		sess, sessErr := db.GetSessionByCDK(displayCode)
+		if sessErr != nil {
+			return sessErr
+		}
+		email = extractEmailFromSession(sess)
+	}
+	if err := notify.EnqueueChatGPTRedeemedAliases(keys, gptPlanLabel(plan), email, displayCode, notify.RegionLabel(country)); err != nil {
 		return err
 	}
 	if code != "" {

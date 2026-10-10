@@ -170,7 +170,7 @@ func due(t *testing.T, key string) {
 
 func TestQueueRetriesConfigRecoveryAndDedupe(t *testing.T) {
 	queueDB(t)
-	if err := EnqueueChatGPTRedeemed("event", "Plus", "person@example.test", "美区"); err != nil {
+	if err := EnqueueChatGPTRedeemed("event", "Plus", "person@example.test", "", "美区"); err != nil {
 		t.Fatal(err)
 	}
 	if err := EnqueueRedeemed("event", "X", "Premium", "different", "1"); err != nil {

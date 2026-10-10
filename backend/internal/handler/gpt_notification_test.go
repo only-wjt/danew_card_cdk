@@ -218,8 +218,33 @@ func TestGPTMetadataClaimDoesNotLoseQueue(t *testing.T) {
 	if err := db.DB.QueryRow(`SELECT text FROM telegram_notifications`).Scan(&text); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(text, "Plus") || !strings.Contains(text, "日区") || strings.Contains(text, code) {
+	if !strings.Contains(text, "Plus") || !strings.Contains(text, "日区") || !strings.Contains(text, code) {
 		t.Fatalf("metadata text=%s", text)
+	}
+}
+
+func TestGPTNoticeUsesSessionEmailAndCode(t *testing.T) {
+	openHandlerTestDB(t)
+	code := "GPT-SESSION-EMAIL"
+	if err := db.SaveCardplatformCDKCode(101, code, "GPT", "plus", 100); err != nil {
+		t.Fatal(err)
+	}
+	sess := `{"sessionToken":"st","user":{"email":"buyer@example.com"}}`
+	if err := db.BindCDKSession(code, "tok", sess); err != nil {
+		t.Fatal(err)
+	}
+	payload := gptTestPayload(t, `{"data":{"order":{"id":"ord_sess","status":"completed","plan":"plus"}}}`)
+	if err := notifyGPTSuccess(101, code, "", payload); err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	if err := db.DB.QueryRow(`SELECT text FROM telegram_notifications`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []string{"buyer@example.com", "卡密: <code>" + code + "</code>", "Plus"} {
+		if !strings.Contains(text, part) {
+			t.Fatalf("missing %s in %s", part, text)
+		}
 	}
 }
 

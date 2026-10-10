@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,23 +24,75 @@ func accounthubBaseURL() string {
 	return "http://localhost:8788"
 }
 
-// extractEmailFromSession 从 session JSON 提取 user.email。
+// extractEmailFromSession 从兑换时保存的 Session 里取出账号邮箱。
+// 回包里的 order.email 经常是空的，通知只能靠这份凭证。
 func extractEmailFromSession(raw string) string {
 	s := strings.TrimSpace(raw)
 	if !strings.HasPrefix(s, "{") {
-		return ""
+		return emailFromJWT(s)
 	}
-	var data map[string]interface{}
+	var data map[string]any
 	if json.Unmarshal([]byte(s), &data) != nil {
 		return ""
 	}
-	if user, ok := data["user"].(map[string]interface{}); ok {
-		if email, ok := user["email"].(string); ok {
-			return strings.TrimSpace(email)
+	if user, ok := data["user"].(map[string]any); ok {
+		if email := sessionEmail(user["email"]); email != "" {
+			return email
 		}
 	}
-	if email, ok := data["email"].(string); ok {
-		return strings.TrimSpace(email)
+	if email := sessionEmail(data["email"]); email != "" {
+		return email
+	}
+	if account, ok := data["account"].(map[string]any); ok {
+		if email := sessionEmail(account["email"]); email != "" {
+			return email
+		}
+	}
+	if cred, ok := data["credentials"].(map[string]any); ok {
+		if email := sessionEmail(cred["email"]); email != "" {
+			return email
+		}
+	}
+	for _, key := range []string{"accessToken", "access_token", "idToken", "id_token"} {
+		if email := emailFromJWT(strAny(data[key])); email != "" {
+			return email
+		}
+	}
+	return ""
+}
+
+func sessionEmail(v any) string {
+	s, _ := v.(string)
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, "@") && !strings.ContainsAny(s, " \t\r\n") {
+		return s
+	}
+	return ""
+}
+
+func emailFromJWT(token string) string {
+	token = strings.TrimSpace(token)
+	parts := strings.Split(token, ".")
+	if len(parts) < 2 || !strings.HasPrefix(token, "eyJ") {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		if payload, err = base64.URLEncoding.DecodeString(parts[1]); err != nil {
+			return ""
+		}
+	}
+	var claims map[string]any
+	if json.Unmarshal(payload, &claims) != nil {
+		return ""
+	}
+	if email := sessionEmail(claims["email"]); email != "" {
+		return email
+	}
+	if profile, ok := claims["https://api.openai.com/profile"].(map[string]any); ok {
+		if email := sessionEmail(profile["email"]); email != "" {
+			return email
+		}
 	}
 	return ""
 }
