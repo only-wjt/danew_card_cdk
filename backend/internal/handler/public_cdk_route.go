@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/danew/cdk-recharge-system/internal/provider"
 )
 
@@ -152,6 +153,9 @@ func isTerminalRedeemSuccess(payload map[string]any) bool {
 	if data, ok := payload["data"].(map[string]any); ok {
 		cands = append(cands, data["status"], data["order_status"], data["state"])
 	}
+	if order, ok := payload["order"].(map[string]any); ok {
+		cands = append(cands, order["status"])
+	}
 	for _, v := range cands {
 		switch strings.ToLower(str(v)) {
 		case "completed", "success", "succeeded", "done":
@@ -159,4 +163,62 @@ func isTerminalRedeemSuccess(payload map[string]any) bool {
 		}
 	}
 	return false
+}
+
+func gptResultEmail(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if order, ok := payload["order"].(map[string]any); ok {
+		if email := strAny(order["account_email"]); email != "" {
+			return email
+		}
+	}
+	return strAny(payload["account_email"])
+}
+
+func gptPlanLabel(plan string) string {
+	switch strings.ToLower(strings.TrimSpace(plan)) {
+	case "plus":
+		return "Plus"
+	case "pro_5x":
+		return "Pro 5x"
+	case "pro_20x":
+		return "Pro"
+	case "pro_25x":
+		return "Pro 25x"
+	case "pro_50x":
+		return "Pro 50x"
+	case "go":
+		return "Go"
+	case "credit250":
+		return "Codex 点数 250"
+	case "credit500":
+		return "Codex 点数 500"
+	case "credit1000":
+		return "Codex 点数 1000"
+	case "credit2500":
+		return "Codex 点数 2500"
+	case "credit5000":
+		return "Codex 点数 5000"
+	case "credit25000":
+		return "Codex 点数 25000"
+	default:
+		if plan == "" {
+			return "—"
+		}
+		return plan
+	}
+}
+
+func notifyGPTSuccess(code, email string) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return
+	}
+	plan, country, ok := db.ClaimCDKSuccessNotice(code)
+	if !ok {
+		return
+	}
+	notify.ChatGPTRedeemed(gptPlanLabel(plan), email, code, notify.RegionLabel(country))
 }

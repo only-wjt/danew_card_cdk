@@ -15,6 +15,7 @@ import (
 
 	"github.com/danew/cdk-recharge-system/internal/avanfinity"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/danew/cdk-recharge-system/internal/xmember"
 	"github.com/danew/cdk-recharge-system/internal/xmember/xlogic"
 )
@@ -717,12 +718,16 @@ func applyPublic(code *db.TGCode, red *db.TGRedemption, pub *avanfinity.PublicCD
 }
 
 func mapStatus(code *db.TGCode, red *db.TGRedemption, upstream string, canRetry *bool) {
+	prev := code.Status
 	d := xlogic.DecideStatus(code.Status, upstream, red.PaymentAttempted, red.FundingDispatched, canRetry)
 	if d.CodeStatus != "" {
 		code.Status = d.CodeStatus
 	}
 	if strings.TrimSpace(upstream) != "" {
 		red.UpstreamStatus = strings.ToLower(strings.TrimSpace(upstream))
+	}
+	if prev != "completed" && code.Status == "completed" {
+		notifyRedeemed(code, red)
 	}
 	if d.Release {
 		appendEvent(red, "未动钱，卡密放回可用")
@@ -737,6 +742,18 @@ func mapStatus(code *db.TGCode, red *db.TGRedemption, upstream string, canRetry 
 		return
 	}
 	red.NextPollAt = ""
+}
+
+func notifyRedeemed(code *db.TGCode, red *db.TGRedemption) {
+	who := red.Recipient
+	if who != "" && !strings.HasPrefix(who, "@") {
+		who = "@" + who
+	}
+	amount := ""
+	if red.AmountMinor > 0 {
+		amount = fmt.Sprintf("%d %s", red.AmountMinor, strings.ToUpper(red.Currency))
+	}
+	notify.Redeemed("Telegram", PlanLabel(code.Plan), who, code.Code, amount)
 }
 
 func schedule(code *db.TGCode, red *db.TGRedemption) {
@@ -959,9 +976,13 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 	if err != nil {
 		return err
 	}
+	wasDone := code.Status == "completed"
 	switch outcome {
 	case "completed":
 		code.Status = "completed"
+		if !wasDone {
+			notifyRedeemed(&code, &red)
+		}
 		red.FinishedAt = now()
 		red.ResolvedAt = now()
 		red.ResolvedNote = note

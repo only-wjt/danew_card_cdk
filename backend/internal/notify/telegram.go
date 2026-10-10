@@ -68,6 +68,87 @@ func NotifyNewOrder(taskID, cdkCode, sessionJSON string) {
 	SendText(text)
 }
 
+// Redeemed 通知一笔会员已经开通。调用方只在状态第一次变成已开通时调用。
+func Redeemed(product, plan, who, code, amount string) {
+	who = strings.TrimSpace(who)
+	if who == "" {
+		who = "—"
+	}
+	amount = strings.TrimSpace(amount)
+	if amount == "" {
+		amount = "—"
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	text := fmt.Sprintf(
+		"✅ <b>%s开通成功</b>\n"+
+			"套餐: %s\n"+
+			"账号: %s\n"+
+			"卡密: <code>%s</code>\n"+
+			"金额: %s\n"+
+			"🕐 %s",
+		escapeHTML(product), escapeHTML(plan), escapeHTML(who), escapeHTML(code), escapeHTML(amount), now,
+	)
+	SendText(text)
+}
+
+// ChatGPTRedeemed 通知一张 ChatGPT 卡密已经开通。地区用「菲区」「美区」这种说法。
+func ChatGPTRedeemed(plan, email, code, region string) {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		email = "—"
+	}
+	plan = strings.TrimSpace(plan)
+	if plan == "" {
+		plan = "—"
+	}
+	region = strings.TrimSpace(region)
+	if region == "" {
+		region = "待同步"
+	}
+	now := time.Now().Format("2006-01-02 15:04:05")
+	text := fmt.Sprintf(
+		"✅ <b>ChatGPT 开通成功</b>\n"+
+			"套餐: %s\n"+
+			"账号: %s\n"+
+			"卡密: <code>%s</code>\n"+
+			"地区: %s\n"+
+			"🕐 %s",
+		escapeHTML(plan), escapeHTML(email), escapeHTML(code), escapeHTML(region), now,
+	)
+	SendText(text)
+}
+
+// RegionLabel 把付款地区码说成运营能看懂的区。空字符串是发码时的默认菲律宾；还没同步到的不要猜。
+func RegionLabel(country *string) string {
+	if country == nil {
+		return "待同步"
+	}
+	switch strings.ToUpper(strings.TrimSpace(*country)) {
+	case "":
+		return "菲区"
+	case "PH":
+		return "菲区"
+	case "US":
+		return "美区"
+	case "JP":
+		return "日区"
+	case "KR":
+		return "韩区"
+	case "CL":
+		return "智利"
+	case "EG":
+		return "埃及"
+	case "IN":
+		return "印度"
+	case "NG":
+		return "尼日利亚"
+	case "TR":
+		return "土耳其"
+	default:
+		return strings.ToUpper(strings.TrimSpace(*country))
+	}
+}
+
 // extractAccountEmail best-effort parses an account email from a ChatGPT session JSON blob.
 func extractAccountEmail(sessionJSON string) string {
 	sessionJSON = strings.TrimSpace(sessionJSON)

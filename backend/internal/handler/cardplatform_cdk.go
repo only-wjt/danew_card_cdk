@@ -1279,6 +1279,7 @@ func PublicCDKResult(c *gin.Context) {
 				// 异步兑换可能到 result 才终态成功，这里也要退役兄弟码。
 				if isTerminalRedeemSuccess(payload) {
 					go provider.MarkConsumed(context.Background(), route)
+					notifyGPTSuccess(boundCode, gptResultEmail(payload))
 				}
 				go observeFromPublicResult(context.Background(), payload, boundCode)
 			}
@@ -1299,6 +1300,9 @@ func PublicCDKResult(c *gin.Context) {
 			cdkCode := ""
 			if found, err := db.FindCodeByRedemptionToken(token); err == nil {
 				cdkCode = found
+			}
+			if isTerminalRedeemSuccess(payload) {
+				notifyGPTSuccess(cdkCode, gptResultEmail(payload))
 			}
 			go observeFromPublicResult(context.Background(), payload, cdkCode)
 		}
@@ -1368,7 +1372,11 @@ func PublicCDKResultByCode(c *gin.Context) {
 		}
 	}
 	if orderStatus == "completed" {
-		email := ""
+		email := gptResultEmail(payload)
+		if email == "" && strings.TrimSpace(bind.SessionPayload) != "" {
+			email = extractEmailFromSession(bind.SessionPayload)
+		}
+		notifyGPTSuccess(bind.CDKCode, email)
 		if order, ok := payload["order"].(map[string]any); ok {
 			email = strAny(order["account_email"])
 		}

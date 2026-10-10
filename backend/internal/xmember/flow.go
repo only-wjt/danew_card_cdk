@@ -1098,12 +1098,16 @@ func applyDirect(code *db.XCode, red *db.XRedemption, order *avanfinity.DirectOr
 }
 
 func mapStatus(code *db.XCode, red *db.XRedemption, upstream string, canRetry *bool) {
+	prev := code.Status
 	d := xlogic.DecideStatus(code.Status, upstream, red.PaymentAttempted, red.FundingDispatched, canRetry)
 	if d.CodeStatus != "" {
 		code.Status = d.CodeStatus
 	}
 	if strings.TrimSpace(upstream) != "" {
 		red.UpstreamStatus = strings.ToLower(strings.TrimSpace(upstream))
+	}
+	if prev != "completed" && code.Status == "completed" {
+		notifyRedeemed(code, red)
 	}
 	if d.Release {
 		appendEvent(red, "未动钱，卡密放回可用")
@@ -1118,6 +1122,18 @@ func mapStatus(code *db.XCode, red *db.XRedemption, upstream string, canRetry *b
 		return
 	}
 	red.NextPollAt = ""
+}
+
+func notifyRedeemed(code *db.XCode, red *db.XRedemption) {
+	who := red.Recipient
+	if who != "" && !strings.HasPrefix(who, "@") {
+		who = "@" + who
+	}
+	amount := ""
+	if red.AmountMinor > 0 {
+		amount = fmt.Sprintf("%d %s", red.AmountMinor, strings.ToUpper(red.Currency))
+	}
+	notify.Redeemed("X 会员", planLabel(code.Plan), who, code.Code, amount)
 }
 
 func schedule(code *db.XCode, red *db.XRedemption) {
@@ -1343,10 +1359,14 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 		return err
 	}
 	stamp := now()
+	wasDone := code.Status == "completed"
 	switch outcome {
 	case "completed":
 		code.Status = "completed"
 		appendEvent(&red, "人工标记已开通："+note)
+		if !wasDone {
+			notifyRedeemed(&code, &red)
+		}
 	case "release":
 		if moneyMoved(red) {
 			return fmt.Errorf("已经动过钱，不能放回未使用")

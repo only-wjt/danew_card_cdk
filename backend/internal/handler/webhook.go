@@ -149,6 +149,7 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string,
 	}
 	if binding, ok := db.FindSiteBindingByRemote(accountID, strconv.FormatInt(cdkID, 10)); ok {
 		if st == "consumed" {
+			notifyGPTSuccess(binding.SiteCode, strAny(payload["account_email"]))
 			_ = db.UpdateBindingStatus(binding.ID, db.BindingStatusConsumed, "")
 			_ = db.UpdateCardplatformCDKStatusByRowID(binding.SiteCodeID, st)
 			_ = db.MarkSiteCDKFulfilled(binding.SiteCodeID, accountID, binding.Provider, !binding.IsPrimary, "webhook")
@@ -164,6 +165,11 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string,
 		legacy, _ := db.LegacyCardPlatformAccount()
 		if accountID > 0 && legacy.ID != accountID {
 			return
+		}
+	}
+	if st == "consumed" {
+		if code, ok := db.LookupCardplatformCDKCode(cdkID, strAny(payload["code_prefix"])); ok {
+			notifyGPTSuccess(code, strAny(payload["account_email"]))
 		}
 	}
 	_ = db.UpdateCardplatformCDKStatus(cdkID, st)
