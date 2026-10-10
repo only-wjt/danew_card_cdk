@@ -1192,7 +1192,7 @@ func PublicCDKPreflight(c *gin.Context) {
 	sess := extractCredentialSession(body["credential"])
 	if sess != "" && (code != "" || tok != "") {
 		if err := db.BindCDKSession(code, tok, sess); err != nil {
-			log.Printf("[cdk-preflight] bind session failed code=%s tok=%s: %v", code, shortTok(tok), err)
+			log.Printf("[cdk-preflight] bind session failed tok=%s: %v", shortTok(tok), err)
 		}
 	} else if st >= 200 && st < 300 {
 		log.Printf("[cdk-preflight] no session to bind (mode may be mailbox) tok=%s", shortTok(tok))
@@ -1249,6 +1249,9 @@ func PublicCDKRedeem(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	if enqueueImmediateGPTResult(c, accountID, redeemCode, body, st, raw) {
+		return
+	}
 	proxyPublicJSON(c, st, raw)
 }
 
@@ -1260,7 +1263,11 @@ func PublicCDKResult(c *gin.Context) {
 		return
 	}
 	// token 是 preview 时选定那台发的，必须回同一台查，否则查无此单。
-	boundCode, _ := db.FindCodeByRedemptionToken(token)
+	boundCode, bindErr := db.FindCodeByRedemptionToken(token)
+	if bindErr != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "redemption binding unavailable; retry"})
+		return
+	}
 	if provider.IsSiteCode(boundCode) {
 		route, rerr := provider.ResolveSticky(boundCode)
 		if rerr != nil {
@@ -1275,16 +1282,27 @@ func PublicCDKResult(c *gin.Context) {
 		raw = maskUpstreamCode(raw, route.RemoteCode, boundCode)
 		if st >= 200 && st < 300 {
 			var payload map[string]any
-			if json.Unmarshal(raw, &payload) == nil {
+			if json.Unmarshal(raw, &payload) != nil || payload == nil {
+				c.JSON(http.StatusBadGateway, gin.H{"error": "invalid upstream result; retry"})
+				return
+			} else {
 				// 异步兑换可能到 result 才终态成功，这里也要退役兄弟码。
 				if isTerminalRedeemSuccess(payload) {
 					go provider.MarkConsumed(context.Background(), route)
-					notifyGPTSuccess(boundCode, gptResultEmail(payload), payload)
+					if err := notifyGPTSuccess(route.Account.ID, boundCode, gptResultEmail(payload), payload); err != nil {
+						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
+						return
+					}
 				}
 				go observeFromPublicResult(context.Background(), payload, boundCode)
 			}
 		}
 		proxyPublicJSON(c, st, raw)
+		return
+	}
+	notificationAccount, aerr := notificationAccountID(0, boundCode)
+	if aerr != nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification account unavailable"})
 		return
 	}
 	cli := legacyCardClientForCode(boundCode)
@@ -1296,13 +1314,16 @@ func PublicCDKResult(c *gin.Context) {
 	// 卡健康观察（best-effort，不阻断用户）
 	if st >= 200 && st < 300 {
 		var payload map[string]any
-		if json.Unmarshal(raw, &payload) == nil {
-			cdkCode := ""
-			if found, err := db.FindCodeByRedemptionToken(token); err == nil {
-				cdkCode = found
-			}
+		if json.Unmarshal(raw, &payload) != nil || payload == nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "invalid upstream result; retry"})
+			return
+		} else {
+			cdkCode := boundCode
 			if isTerminalRedeemSuccess(payload) {
-				notifyGPTSuccess(cdkCode, gptResultEmail(payload), payload)
+				if err := notifyGPTSuccess(notificationAccount, cdkCode, gptResultEmail(payload), payload); err != nil {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
+					return
+				}
 			}
 			go observeFromPublicResult(context.Background(), payload, cdkCode)
 		}
@@ -1334,15 +1355,22 @@ func PublicCDKResultByCode(c *gin.Context) {
 	}
 	var st int
 	var raw []byte
+	var notificationAccount int64
 	if provider.IsSiteCode(code) {
 		route, rerr := provider.ResolveSticky(code)
 		if rerr != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": rerr.Error()})
 			return
 		}
+		notificationAccount = route.Account.ID
 		st, raw, err = route.Provider.Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
 		raw = maskUpstreamCode(raw, route.RemoteCode, code)
 	} else {
+		notificationAccount, err = notificationAccountID(0, code)
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification account unavailable"})
+			return
+		}
 		st, raw, err = legacyCardClientForCode(code).Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
 	}
 	if err != nil {
@@ -1352,6 +1380,10 @@ func PublicCDKResultByCode(c *gin.Context) {
 	// 附带本站元信息，前端可恢复轮询 token
 	var payload map[string]any
 	if json.Unmarshal(raw, &payload) != nil || payload == nil {
+		if st >= 200 && st < 300 {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "invalid upstream result; retry"})
+			return
+		}
 		proxyPublicJSON(c, st, raw)
 		return
 	}
@@ -1365,26 +1397,14 @@ func PublicCDKResultByCode(c *gin.Context) {
 	}
 
 	// 已完成的订单：从 accounthub 获取账单 URL
-	orderStatus := strAny(payload["status"])
-	if orderStatus == "" {
-		if order, ok := payload["order"].(map[string]any); ok {
-			orderStatus = strAny(order["status"])
-		}
-	}
-	if orderStatus == "completed" {
+	if st >= 200 && st < 300 && isTerminalRedeemSuccess(payload) {
 		email := gptResultEmail(payload)
 		if email == "" && strings.TrimSpace(bind.SessionPayload) != "" {
 			email = extractEmailFromSession(bind.SessionPayload)
 		}
-		notifyGPTSuccess(bind.CDKCode, email, payload)
-		if order, ok := payload["order"].(map[string]any); ok {
-			email = strAny(order["account_email"])
-		}
-		if email == "" {
-			email = strAny(payload["account_email"])
-		}
-		if email == "" && strings.TrimSpace(bind.SessionPayload) != "" {
-			email = extractEmailFromSession(bind.SessionPayload)
+		if err := notifyGPTSuccess(notificationAccount, bind.CDKCode, email, payload); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
+			return
 		}
 		if email != "" {
 			if inv, err := queryAccounthubInvoices(email); err == nil {

@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -43,26 +45,76 @@ func SendText(text string) {
 
 // SendNow 立刻发送，并把失败原因返回给调用方。未配置时返回错误。
 func SendNow(text string) error {
+	return sendNow(context.Background(), text)
+}
+
+var errorURL = regexp.MustCompile(`(?i)https?://[^\s<>"']+`)
+
+// Sanitize before truncating: neither transport URLs nor echoed credentials may
+// reach logs, the test endpoint, or the durable queue's last_error column.
+func safeTelegramError(message, token string) string {
+	if token != "" {
+		for _, secret := range []string{token, url.QueryEscape(token), url.PathEscape(token)} {
+			message = strings.ReplaceAll(message, secret, "[redacted]")
+		}
+	}
+	message = errorURL.ReplaceAllString(message, "[url redacted]")
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > 300 {
+		message = message[:300]
+	}
+	return message
+}
+
+func sendNow(ctx context.Context, text string) error {
 	token, chatID, ok := enabled()
 	if !ok {
 		return fmt.Errorf("telegram not configured")
 	}
+	fail := func(message string) error { return fmt.Errorf("%s", safeTelegramError(message, token)) }
 	api := "https://api.telegram.org/bot" + token + "/sendMessage"
 	form := url.Values{}
 	form.Set("chat_id", chatID)
 	form.Set("text", text)
 	form.Set("parse_mode", "HTML")
 	form.Set("disable_web_page_preview", "true")
-	resp, err := httpClient.PostForm(api, form)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, api, strings.NewReader(form.Encode()))
 	if err != nil {
-		return err
+		return fmt.Errorf("telegram request could not be created")
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	client := *httpClient
+	// Never forward a credential-bearing request to a redirect destination.
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := client.Do(req)
+	if err != nil {
+		// Transport errors can embed arbitrary URLs and escaped credentials.
+		// Keep a useful category without exposing their untrusted detail.
+		if ctx.Err() != nil {
+			return fmt.Errorf("telegram request canceled or timed out")
+		}
+		return fmt.Errorf("telegram network request failed")
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("telegram %d", resp.StatusCode)
+	const maxBody = 64 * 1024
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil {
+		return fmt.Errorf("telegram HTTP %d response read failed", resp.StatusCode)
 	}
-	_ = body
+	if len(body) > maxBody {
+		return fmt.Errorf("telegram HTTP %d response too large", resp.StatusCode)
+	}
+	var result struct {
+		OK          bool   `json:"ok"`
+		Code        int    `json:"error_code"`
+		Description string `json:"description"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return fmt.Errorf("telegram HTTP %d invalid JSON response", resp.StatusCode)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || !result.OK {
+		return fail(fmt.Sprintf("telegram HTTP %d code %d: %s", resp.StatusCode, result.Code, result.Description))
+	}
 	return nil
 }
 
@@ -89,6 +141,16 @@ func NotifyNewOrder(taskID, cdkCode, sessionJSON string) {
 
 // Redeemed 通知一笔会员已经开通。不带卡密。调用方只在状态第一次变成已开通时调用。
 func Redeemed(product, plan, who, amount string) {
+	SendText(FormatRedeemed(product, plan, who, amount) + "\n" + time.Now().Format("2006-01-02 15:04:05"))
+}
+
+// EnqueueRedeemed persists a success notification; it never sends HTTP.
+func EnqueueRedeemed(key, product, plan, who, amount string) error {
+	return db.EnqueueTelegramNotification(key, FormatRedeemed(product, plan, who, amount))
+}
+
+// FormatRedeemed is pure, so callers can enqueue its text inside their own transaction.
+func FormatRedeemed(product, plan, who, amount string) string {
 	who = strings.TrimSpace(who)
 	if who == "" {
 		who = "—"
@@ -97,20 +159,31 @@ func Redeemed(product, plan, who, amount string) {
 	if amount == "" {
 		amount = "—"
 	}
-	now := time.Now().Format("2006-01-02 15:04:05")
-	text := fmt.Sprintf(
+	return fmt.Sprintf(
 		"✅ <b>%s开通成功</b>\n"+
 			"套餐: %s\n"+
 			"账号: %s\n"+
-			"金额: %s\n"+
-			"🕐 %s",
-		escapeHTML(product), escapeHTML(plan), escapeHTML(who), escapeHTML(amount), now,
+			"金额: %s",
+		escapeHTML(product), escapeHTML(plan), escapeHTML(who), escapeHTML(amount),
 	)
-	SendText(text)
 }
 
 // ChatGPTRedeemed 通知 ChatGPT 已经开通。不带卡密。地区用「菲区」「美区」这种说法。
 func ChatGPTRedeemed(plan, email, region string) {
+	SendText(formatChatGPTRedeemed(plan, email, region))
+}
+
+// EnqueueChatGPTRedeemed persists the formatted message without HTTP delivery.
+func EnqueueChatGPTRedeemed(key, plan, email, region string) error {
+	return db.EnqueueTelegramNotification(key, formatChatGPTRedeemed(plan, email, region))
+}
+
+// EnqueueChatGPTRedeemedAliases persists one notification for related business keys without HTTP delivery.
+func EnqueueChatGPTRedeemedAliases(keys []string, plan, email, region string) error {
+	return db.EnqueueTelegramNotificationAliases(keys, formatChatGPTRedeemed(plan, email, region))
+}
+
+func formatChatGPTRedeemed(plan, email, region string) string {
 	email = strings.TrimSpace(email)
 	if email == "" {
 		email = "—"
@@ -132,7 +205,7 @@ func ChatGPTRedeemed(plan, email, region string) {
 			"🕐 %s",
 		escapeHTML(plan), escapeHTML(email), escapeHTML(region), now,
 	)
-	SendText(text)
+	return text
 }
 
 // RegionLabel 把付款地区码说成运营能看懂的区。空字符串是发码时的默认菲律宾；还没同步到的不要猜。

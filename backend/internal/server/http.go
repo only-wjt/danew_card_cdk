@@ -13,6 +13,7 @@ import (
 	"github.com/danew/cdk-recharge-system/internal/config"
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/handler"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/danew/cdk-recharge-system/internal/plansync"
 	"github.com/danew/cdk-recharge-system/internal/tgmember"
 	"github.com/danew/cdk-recharge-system/internal/xmember"
@@ -34,6 +35,7 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	if err := db.Init(&cfg.Database); err != nil {
 		return nil, err
 	}
+	notify.Start(ctx)
 
 	engine := gin.Default()
 

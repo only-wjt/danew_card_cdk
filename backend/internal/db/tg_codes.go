@@ -460,7 +460,13 @@ func GetTGRedemption(id int64) (TGRedemption, error) {
 }
 
 func SaveTGRedemption(r TGRedemption) error {
-	_, err := DB.Exec(`
+	return saveTGRedemption(DB, r)
+}
+
+func saveTGRedemption(exec interface {
+	Exec(string, ...any) (sql.Result, error)
+}, r TGRedemption) error {
+	_, err := exec.Exec(`
 		UPDATE tg_redemptions SET
 			recipient = ?, upstream_status = ?, amount_minor = ?, currency = ?, service_fee_e4 = ?,
 			funding_dispatched = ?, payment_dispatched = ?, payment_attempted = ?, can_retry_preflight = ?,
@@ -591,4 +597,42 @@ func TGOverview() (map[string]any, error) {
 	_ = DB.QueryRow(`SELECT COUNT(*) FROM tg_codes WHERE status IN ('uncertain','review_required','requires_action')`).Scan(&todo)
 	_ = DB.QueryRow(`SELECT COUNT(*) FROM tg_codes WHERE status = 'completed' AND created_at >= date('now')`).Scan(&done)
 	return map[string]any{"unused": unused, "running": running, "todo": todo, "done_today": done}, nil
+}
+
+// CompleteTGRedemption atomically persists completion and its notification.
+// Persisted code status gates new events; historical successes are not replayed.
+// Redemption IDs identify attempts independently of upstream account/code names.
+func CompleteTGRedemption(r TGRedemption, text string) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRow(`SELECT c.status FROM tg_codes c
+		JOIN tg_redemptions r ON r.tg_code_id = c.id AND r.account_id = c.account_id
+		WHERE c.id = ? AND r.id = ? AND c.account_id = ?`, r.TGCodeID, r.ID, r.AccountID).Scan(&status); err != nil {
+		return err
+	}
+	if status == "completed" {
+		// Keep requery/manual-resolution metadata updates compatible, without
+		// manufacturing a notification for an already-completed code.
+		if err := saveTGRedemption(tx, r); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`UPDATE tg_codes SET status = 'completed' WHERE id = ?`, r.TGCodeID); err != nil {
+		return err
+	}
+	if err := saveTGRedemption(tx, r); err != nil {
+		return err
+	}
+	if err := EnqueueTelegramNotificationTx(tx, fmt.Sprintf("tg:redemption:%d", r.ID), text); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -327,7 +327,13 @@ func scanRedemption(q string, arg any) (XRedemption, error) {
 }
 
 func SaveXRedemption(r XRedemption) error {
-	_, err := DB.Exec(`
+	return saveXRedemption(DB, r)
+}
+
+func saveXRedemption(exec interface {
+	Exec(string, ...any) (sql.Result, error)
+}, r XRedemption) error {
+	_, err := exec.Exec(`
 		UPDATE x_redemptions SET
 			recipient = ?, upstream_order_id = ?, upstream_status = ?, amount_minor = ?, currency = ?,
 			estimated_usd_e4 = ?, service_fee_e4 = ?, pricing_version = ?,
@@ -725,4 +731,42 @@ func ListLatestQuoteSamples() ([]XQuoteSample, error) {
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// CompleteXRedemption atomically persists completion and its notification.
+// Persisted code status gates new events; historical successes are not replayed.
+// Redemption IDs identify attempts independently of upstream account/code names.
+func CompleteXRedemption(r XRedemption, text string) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var status string
+	if err := tx.QueryRow(`SELECT c.status FROM x_codes c
+		JOIN x_redemptions r ON r.x_code_id = c.id AND r.account_id = c.account_id
+		WHERE c.id = ? AND r.id = ? AND c.account_id = ?`, r.XCodeID, r.ID, r.AccountID).Scan(&status); err != nil {
+		return err
+	}
+	if status == "completed" {
+		// Keep requery/manual-resolution metadata updates compatible, without
+		// manufacturing a notification for an already-completed code.
+		if err := saveXRedemption(tx, r); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	if _, err := tx.Exec(`UPDATE x_codes SET status = 'completed' WHERE id = ?`, r.XCodeID); err != nil {
+		return err
+	}
+	if err := saveXRedemption(tx, r); err != nil {
+		return err
+	}
+	if err := EnqueueTelegramNotificationTx(tx, fmt.Sprintf("x:redemption:%d", r.ID), text); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

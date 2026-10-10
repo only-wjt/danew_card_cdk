@@ -3,7 +3,11 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -85,7 +89,7 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 	}
 	if sess := extractCredentialSession(body["credential"]); sess != "" {
 		if berr := db.BindCDKSession(siteCode, tok, sess); berr != nil {
-			log.Printf("[cdk-preflight] bind session failed code=%s: %v", siteCode, berr)
+			log.Printf("[cdk-preflight] bind session failed: %v", berr)
 		}
 	}
 	proxyPublicJSON(c, st, raw)
@@ -102,6 +106,12 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 		return
 	}
 	body["code"] = route.RemoteCode
+	clientIDs := []string{firstNonEmpty(strAny(body["clientRequestId"]), strAny(body["client_request_id"]))}
+	if route.Provider.Protocol() == provider.ProtocolAvanfinity202608 {
+		effectiveID := provider.AvanfinityRedeemClientRequestID(clientIDs[0])
+		body["clientRequestId"] = effectiveID
+		clientIDs = append(clientIDs, effectiveID)
+	}
 	st, raw, err := route.Provider.Redeem(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
 		// 请求都没打出去，码没被消耗，放回去让用户重试同一台。
@@ -122,7 +132,69 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 		// 绝不能因此切到另一台，那会变成两台各扣一次。
 		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusRedeeming, upstreamErrText(raw))
 	}
+	// Notification errors are local, not an upstream rejection: never release
+	// the binding or invite another recharge submission after acceptance.
+	if enqueueImmediateGPTResult(c, route.Account.ID, siteCode, body, st, raw, clientIDs...) {
+		return
+	}
 	proxyPublicJSON(c, st, raw)
+}
+
+// A redeem HTTP success/envelope success only acknowledges acceptance. Notify
+// here only for an explicit terminal order state; otherwise polling owns it.
+func enqueueImmediateGPTResult(c *gin.Context, accountID int64, code string, body map[string]any, st int, raw []byte, extraClientIDs ...string) bool {
+	if st < 200 || st >= 300 {
+		return false
+	}
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil || payload == nil {
+		writeGPTAcceptedRetry(c)
+		return true
+	}
+	status, explicit := gptOrderStatus(payload)
+	if !explicit || !gptSuccessStatus(status) {
+		return false
+	}
+	// A flat envelope "success" is only acceptance; aliases such as success,
+	// succeeded and done are terminal only on an explicit order/object state.
+	if status != "completed" && !gptExplicitOrderSuccess(payload) {
+		return false
+	}
+	clientIDs := append([]string{strAny(body["client_request_id"]), strAny(body["clientRequestId"])}, extraClientIDs...)
+	if err := notifyGPTSuccess(accountID, code, gptResultEmail(payload), payload, clientIDs...); err != nil {
+		writeGPTAcceptedRetry(c)
+		return true
+	}
+	return false
+}
+
+func gptExplicitOrderSuccess(payload map[string]any) bool {
+	data, _ := payload["data"].(map[string]any)
+	obj, _ := data["object"].(map[string]any)
+	rootObj, _ := payload["object"].(map[string]any)
+	for _, container := range []map[string]any{obj, data, rootObj, payload} {
+		if order, ok := container["order"].(map[string]any); ok {
+			if status, explicit := gptOrderStatus(order); explicit {
+				return gptSuccessStatus(status)
+			}
+		}
+	}
+	for _, object := range []map[string]any{obj, rootObj} {
+		if status, explicit := gptOrderStatus(object); explicit {
+			return gptSuccessStatus(status)
+		}
+	}
+	return false
+}
+
+func writeGPTAcceptedRetry(c *gin.Context) {
+	// Do not echo the completed order: existing clients apply response state
+	// before checking HTTP status and would stop polling on that terminal state.
+	c.JSON(http.StatusServiceUnavailable, gin.H{
+		"error":      "兑换已受理，通知保存暂时失败；请查询结果，勿重新提交兑换",
+		"error_code": "GPT_NOTIFICATION_RETRY_RESULT",
+		"status":     "queued", "redeem_accepted": true, "retry_action": "result",
+	})
 }
 
 func upstreamErrText(raw []byte) string {
@@ -145,36 +217,95 @@ func upstreamErrText(raw []byte) string {
 }
 
 // isTerminalRedeemSuccess result 回包是否表示已成功终态（异步兑换的成功点在这里）。
+// 兑换页读的是 data.order.status，这里必须看同一层，否则页面已成功也不会发通知。
 func isTerminalRedeemSuccess(payload map[string]any) bool {
-	if payload == nil {
-		return false
+	status, explicit := gptOrderStatus(payload)
+	if explicit {
+		return gptSuccessStatus(status)
 	}
-	cands := []any{payload["status"], payload["order_status"], payload["state"]}
-	if data, ok := payload["data"].(map[string]any); ok {
-		cands = append(cands, data["status"], data["order_status"], data["state"])
-	}
-	if order, ok := payload["order"].(map[string]any); ok {
-		cands = append(cands, order["status"])
-	}
-	for _, v := range cands {
-		switch strings.ToLower(str(v)) {
-		case "completed", "success", "succeeded", "done":
-			return true
+	return isGPTDirectCompleted(webhookEventType(payload))
+}
+
+// Ordered from the actual order out to its response/event envelope. An explicit
+// inner state always wins, including pending/failed under an envelope success.
+func gptPayloadScopes(payload map[string]any) []map[string]any {
+	data, _ := payload["data"].(map[string]any)
+	obj, _ := data["object"].(map[string]any)
+	rootObj, _ := payload["object"].(map[string]any)
+	scopes := []map[string]any{}
+	for _, container := range []map[string]any{obj, data, rootObj, payload} {
+		if order, ok := container["order"].(map[string]any); ok {
+			scopes = append(scopes, order)
 		}
+	}
+	return append(scopes, obj, rootObj, data, payload)
+}
+
+func gptOrderStatus(payload map[string]any) (string, bool) {
+	for _, scope := range gptPayloadScopes(payload) {
+		status := ""
+		for _, key := range []string{"status", "order_status", "state"} {
+			if v := strings.ToLower(strings.TrimSpace(strAny(scope[key]))); v != "" {
+				// Contradictory aliases in one order are not proof of completion.
+				if !gptSuccessStatus(v) {
+					return v, true
+				}
+				status = v
+			}
+		}
+		if status != "" {
+			return status, true
+		}
+	}
+	return "", false
+}
+
+func gptSuccessStatus(status string) bool {
+	switch status {
+	case "completed", "success", "succeeded", "done":
+		return true
 	}
 	return false
 }
 
-func gptResultEmail(payload map[string]any) string {
-	if payload == nil {
-		return ""
-	}
-	if order, ok := payload["order"].(map[string]any); ok {
-		if email := strAny(order["account_email"]); email != "" {
-			return email
+func gptOrderFromPayload(payload map[string]any) map[string]any {
+	for _, scope := range gptPayloadScopes(payload) {
+		if scope != nil {
+			return scope
 		}
 	}
-	return strAny(payload["account_email"])
+	return nil
+}
+
+func gptPayloadField(payload map[string]any, keys ...string) string {
+	for _, scope := range gptPayloadScopes(payload) {
+		for _, key := range keys {
+			if v := strings.TrimSpace(strAny(scope[key])); v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+func gptOrderID(payload map[string]any) string {
+	scopes := gptPayloadScopes(payload)
+	for i, scope := range scopes {
+		if id := firstNonEmpty(strAny(scope["orderId"]), strAny(scope["order_id"])); id != "" {
+			return id
+		}
+		// The root event id is not an order id. Nested order/object ids and
+		// legacy polling root ids are safe; client_request_id is not canonical.
+		if id := strings.TrimSpace(strAny(scope["id"])); id != "" && !strings.HasPrefix(id, "evt_") &&
+			(i != len(scopes)-1 || webhookEventType(payload) == "") {
+			return id
+		}
+	}
+	return ""
+}
+
+func gptResultEmail(payload map[string]any) string {
+	return gptPayloadField(payload, "account_email", "email")
 }
 
 func gptPlanLabel(plan string) string {
@@ -211,80 +342,162 @@ func gptPlanLabel(plan string) string {
 	}
 }
 
-func notifyGPTSuccess(code, email string, payload map[string]any) {
-	orderID := ""
-	if payload != nil {
-		orderID = strAny(payload["order_id"])
-		if orderID == "" {
-			orderID = strAny(payload["client_request_id"])
+// notificationAccountID only resolves when the caller has no explicit route.
+// A known site code must never silently acquire the legacy/default namespace.
+func notificationAccountID(accountID int64, code string) (int64, error) {
+	if accountID > 0 {
+		return accountID, nil
+	}
+	if db.DB == nil {
+		return 0, errors.New("notification database unavailable")
+	}
+	if provider.IsSiteCode(code) {
+		route, err := provider.ResolveSticky(code)
+		if err != nil {
+			return 0, err
 		}
-		if email == "" {
-			email = gptResultEmail(payload)
+		return route.Account.ID, nil
+	}
+	if strings.TrimSpace(code) != "" {
+		var owner int64
+		err := db.DB.QueryRow(`SELECT COALESCE(fulfilled_account_id,0) FROM cardplatform_cdk_codes
+			WHERE code = ? COLLATE NOCASE AND code_kind = 'legacy' LIMIT 1`, strings.TrimSpace(code)).Scan(&owner)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return 0, err
+		}
+		if owner > 0 {
+			return owner, nil
 		}
 	}
-	key := orderID
-	if key == "" {
-		key = strings.ToUpper(strings.TrimSpace(code))
+	// Distinguish missing legacy configuration from a failed account read.
+	if _, err := db.ListCardPlatformAccounts(); err != nil {
+		return 0, err
 	}
-	if key == "" || !noticeOnce("gpt:"+key) {
-		return
+	if acc, err := db.LegacyCardPlatformAccount(); err == nil {
+		return acc.ID, nil
 	}
-	plan := ""
-	var country *string
+	return 0, nil // genuinely unknown legacy owner
+}
+
+func gptNotificationKey(accountID int64, orderID string) string {
+	return fmt.Sprintf("gpt:account:%d:order:%s", accountID, strings.TrimSpace(orderID))
+}
+
+// All observed identities travel together so a richer observation learns the
+// canonical order alias without queuing another delivery for an earlier fallback.
+func gptNotificationKeys(accountID int64, code string, payload map[string]any, extraClientIDs ...string) []string {
+	keys := []string{}
+	if orderID := gptOrderID(payload); orderID != "" {
+		keys = append(keys, gptNotificationKey(accountID, orderID))
+	}
+	clientIDs := append([]string{gptPayloadField(payload, "client_request_id", "clientRequestId")}, extraClientIDs...)
+	seenClients := map[string]bool{}
+	for _, clientID := range clientIDs {
+		clientID = strings.TrimSpace(clientID)
+		if clientID == "" || seenClients[clientID] {
+			continue
+		}
+		seenClients[clientID] = true
+		keys = append(keys, fmt.Sprintf("gpt:account:%d:client:%s", accountID, clientID))
+	}
+	if normalized := strings.ToUpper(strings.TrimSpace(code)); normalized != "" {
+		// Keep full CDKs out of persisted queue identity strings as well as logs.
+		hash := sha256.Sum256([]byte(normalized))
+		keys = append(keys, fmt.Sprintf("gpt:account:%d:code:%x", accountID, hash))
+	}
+	return keys
+}
+
+// A webhook may echo a site's remote code; polling uses the public site code.
+// Resolve that exact account-qualified binding before deriving a code alias.
+func gptNotificationCode(accountID int64, payload map[string]any) (string, error) {
+	code := gptPayloadField(payload, "cdk_code", "cdkCode", "code")
+	if code == "" || db.DB == nil {
+		return code, nil
+	}
+	var siteCode string
+	err := db.DB.QueryRow(`SELECT site_code FROM site_cdk_bindings
+		WHERE account_id = ? AND remote_code = ? COLLATE NOCASE LIMIT 1`, accountID, strings.TrimSpace(code)).Scan(&siteCode)
+	if err == nil {
+		return siteCode, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	return code, nil
+}
+
+func notifyGPTSuccess(accountID int64, code, email string, payload map[string]any, extraClientIDs ...string) error {
+	if !isTerminalRedeemSuccess(payload) {
+		return nil
+	}
+	accountID, err := notificationAccountID(accountID, code)
+	if err != nil {
+		return err
+	}
+	aliasCode := code
+	if aliasCode == "" {
+		aliasCode, err = gptNotificationCode(accountID, payload)
+		if err != nil {
+			return err
+		}
+	}
+	// Only route-bound caller codes may mutate local CDK state; a webhook's
+	// echoed code is an identity alias, not authority for a metadata claim.
+	keys := gptNotificationKeys(accountID, aliasCode, payload, extraClientIDs...)
+	if len(keys) == 0 {
+		return errors.New("completed GPT order missing order, client or code identity")
+	}
+	plan := gptPayloadField(payload, "plan")
+	country := countryFromCurrency(gptPayloadField(payload, "currency"))
+	// Read metadata independently of the old consumed/notice claim flag. Never
+	// mutate that flag before the durable queue insert has succeeded.
 	if code != "" {
-		if p, c, ok := db.ClaimCDKSuccessNotice(code); ok {
-			plan, country = p, c
+		if db.DB == nil {
+			return errors.New("notification database unavailable")
+		}
+		var storedPlan string
+		var storedCountry sql.NullString
+		err := db.DB.QueryRow("SELECT COALESCE(plan,''), payment_country FROM cardplatform_cdk_codes WHERE code = ? COLLATE NOCASE LIMIT 1", strings.TrimSpace(code)).Scan(&storedPlan, &storedCountry)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if storedPlan != "" {
+			plan = storedPlan
+		}
+		if storedCountry.Valid {
+			v := storedCountry.String
+			country = &v
 		}
 	}
-	if plan == "" && payload != nil {
-		plan = strAny(payload["plan"])
+	if email == "" {
+		email = gptResultEmail(payload)
 	}
-	if country == nil && payload != nil {
-		country = countryFromCurrency(strAny(payload["currency"]))
+	if err := notify.EnqueueChatGPTRedeemedAliases(keys, gptPlanLabel(plan), email, notify.RegionLabel(country)); err != nil {
+		return err
 	}
-	notify.ChatGPTRedeemed(gptPlanLabel(plan), email, notify.RegionLabel(country))
+	if code != "" {
+		db.ClaimCDKSuccessNotice(code)
+	}
+	return nil
 }
 
-// ClaimNoticeOnce 同一笔开通只发一次。回调重试和结果轮询共用这把锁。
-func noticeOnce(key string) bool {
-	key = strings.TrimSpace(key)
-	if key == "" {
-		return false
-	}
-	err := db.InsertWebhookEvent(0, "redeem_notice", "notice|"+key, "{}")
-	return err == nil
-}
-
-func notifyChatGPTCompleted(payload map[string]any) {
-	if payload == nil {
-		return
-	}
-	obj := webhookDataObject(payload)
-	order, _ := obj["order"].(map[string]any)
-	if order == nil {
-		order = map[string]any{}
-	}
-	orderID := firstNonEmpty(strAny(obj["orderId"]), strAny(obj["order_id"]), strAny(order["id"]), strAny(payload["order_id"]), strAny(payload["client_request_id"]))
-	if orderID == "" || !noticeOnce("gpt:"+orderID) {
-		return
-	}
-	email := firstNonEmpty(strAny(order["email"]), strAny(order["account_email"]), strAny(obj["email"]), strAny(payload["account_email"]))
-	plan := firstNonEmpty(strAny(order["plan"]), strAny(obj["plan"]), strAny(payload["plan"]))
-	currency := firstNonEmpty(strAny(order["currency"]), strAny(payload["currency"]))
-	log.Printf("telegram: chatgpt completed order=%s plan=%s", orderID, plan)
-	notify.ChatGPTRedeemed(gptPlanLabel(plan), email, notify.RegionLabel(countryFromCurrency(currency)))
+func notifyChatGPTCompleted(accountID int64, payload map[string]any) error {
+	return notifyGPTSuccess(accountID, "", gptResultEmail(payload), payload)
 }
 
 func webhookDataObject(payload map[string]any) map[string]any {
 	data, _ := payload["data"].(map[string]any)
-	if data == nil {
-		return payload
+	if obj, ok := data["object"].(map[string]any); ok {
+		return obj
 	}
-	obj, _ := data["object"].(map[string]any)
-	if obj == nil {
-		return payload
+	if obj, ok := payload["object"].(map[string]any); ok {
+		return obj
 	}
-	return obj
+	if data != nil {
+		return data
+	}
+	return payload
 }
 
 func nestedStr(obj map[string]any, key, child string) string {

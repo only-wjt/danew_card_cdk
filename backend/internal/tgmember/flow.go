@@ -565,21 +565,17 @@ func runQuote(ctx context.Context, code *db.TGCode, red *db.TGRedemption) error 
 		return hold(ctx, "quote", code, red, err)
 	}
 	if err := applyPublic(code, red, pub, false); err != nil {
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return err
 	}
 	if code.MaxOfficialAmountMinor > 0 && red.AmountMinor > code.MaxOfficialAmountMinor {
 		code.Status = "unused"
 		red.FinishedAt = now()
 		red.Message = "报价超过发码时锁定的上限，没有扣款"
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return fmt.Errorf("报价已变化，请联系客服")
 	}
-	_ = db.SaveTGRedemption(*red)
-	_ = db.UpdateTGCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func Confirm(ctx context.Context, raw string) (PublicState, error) {
@@ -617,8 +613,7 @@ func runConfirm(ctx context.Context, code *db.TGCode, red *db.TGRedemption) erro
 		return hold(ctx, "pay", code, red, err)
 	}
 	if err := applyPublic(code, red, pub, true); err != nil {
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return err
 	}
 	if xlogic.ShouldSecondRedeem(channel, code.Status, red.PaymentDispatched) {
@@ -626,9 +621,7 @@ func runConfirm(ctx context.Context, code *db.TGCode, red *db.TGRedemption) erro
 			return err
 		}
 	}
-	_ = db.SaveTGRedemption(*red)
-	_ = db.UpdateTGCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func pay(ctx context.Context, client *avanfinity.Client, code *db.TGCode, red *db.TGRedemption, plain string) error {
@@ -656,13 +649,10 @@ func pay(ctx context.Context, client *avanfinity.Client, code *db.TGCode, red *d
 	}
 	red.PaymentDispatched = true
 	if err := applyPublic(code, red, pub, true); err != nil {
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return err
 	}
-	_ = db.SaveTGRedemption(*red)
-	_ = db.UpdateTGCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func applyPublic(code *db.TGCode, red *db.TGRedemption, pub *avanfinity.PublicCDK, fromRedeem bool) error {
@@ -718,16 +708,12 @@ func applyPublic(code *db.TGCode, red *db.TGRedemption, pub *avanfinity.PublicCD
 }
 
 func mapStatus(code *db.TGCode, red *db.TGRedemption, upstream string, canRetry *bool) {
-	prev := code.Status
 	d := xlogic.DecideStatus(code.Status, upstream, red.PaymentAttempted, red.FundingDispatched, canRetry)
 	if d.CodeStatus != "" {
 		code.Status = d.CodeStatus
 	}
 	if strings.TrimSpace(upstream) != "" {
 		red.UpstreamStatus = strings.ToLower(strings.TrimSpace(upstream))
-	}
-	if prev != "completed" && code.Status == "completed" {
-		notifyRedeemed(code, red)
 	}
 	if d.Release {
 		appendEvent(red, "未动钱，卡密放回可用")
@@ -744,7 +730,7 @@ func mapStatus(code *db.TGCode, red *db.TGRedemption, upstream string, canRetry 
 	red.NextPollAt = ""
 }
 
-func notifyRedeemed(code *db.TGCode, red *db.TGRedemption) {
+func redeemedText(code *db.TGCode, red *db.TGRedemption) string {
 	who := red.Recipient
 	if who != "" && !strings.HasPrefix(who, "@") {
 		who = "@" + who
@@ -753,7 +739,7 @@ func notifyRedeemed(code *db.TGCode, red *db.TGRedemption) {
 	if red.AmountMinor > 0 {
 		amount = fmt.Sprintf("%d %s", red.AmountMinor, strings.ToUpper(red.Currency))
 	}
-	notify.Redeemed("Telegram", PlanLabel(code.Plan), who, amount)
+	return notify.FormatRedeemed("Telegram", PlanLabel(code.Plan), who, amount)
 }
 
 func schedule(code *db.TGCode, red *db.TGRedemption) {
@@ -808,9 +794,7 @@ func hold(ctx context.Context, stage string, code *db.TGCode, red *db.TGRedempti
 		red.ErrorCode = "SPENDABLE_BALANCE_INSUFFICIENT"
 		red.Message = "钱包余额不足，充值后会用原请求继续"
 		schedule(code, red)
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
-		return nil
+		return saveState(code, red)
 	case xlogic.FailStale:
 		return err
 	case xlogic.FailUncertain:
@@ -821,9 +805,7 @@ func hold(ctx context.Context, stage string, code *db.TGCode, red *db.TGRedempti
 		red.Message = "付款结果还没确认，卡密已锁定，不会重新支付"
 		appendEvent(red, "付款结果不确定，改为只查询")
 		schedule(code, red)
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
-		return nil
+		return saveState(code, red)
 	default:
 		return err
 	}
@@ -851,8 +833,7 @@ func refresh(ctx context.Context, code *db.TGCode, red *db.TGRedemption) error {
 		return hold(ctx, "read", code, red, err)
 	}
 	if err := applyPublic(code, red, pub, false); err != nil {
-		_ = db.SaveTGRedemption(*red)
-		_ = db.UpdateTGCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return err
 	}
 	if wasUnknown && code.Status != "uncertain" && red.ErrorCode == "PAY_UNKNOWN" {
@@ -864,9 +845,7 @@ func refresh(ctx context.Context, code *db.TGCode, red *db.TGRedemption) error {
 			return err
 		}
 	}
-	_ = db.SaveTGRedemption(*red)
-	_ = db.UpdateTGCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func PollDue(ctx context.Context) {
@@ -895,8 +874,7 @@ func PollDue(ctx context.Context) {
 			default:
 				red.NextPollAt = ""
 			}
-			_ = db.SaveTGRedemption(red)
-			_ = db.UpdateTGCodeStatus(code.ID, code.Status)
+			_ = saveState(&code, &red)
 		}()
 	}
 }
@@ -976,13 +954,9 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 	if err != nil {
 		return err
 	}
-	wasDone := code.Status == "completed"
 	switch outcome {
 	case "completed":
 		code.Status = "completed"
-		if !wasDone {
-			notifyRedeemed(&code, &red)
-		}
 		red.FinishedAt = now()
 		red.ResolvedAt = now()
 		red.ResolvedNote = note
@@ -1007,7 +981,24 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 	default:
 		return fmt.Errorf("未知处理结果")
 	}
-	if err := db.SaveTGRedemption(red); err != nil {
+	return saveState(&code, &red)
+}
+
+// saveState is the completion persistence boundary. Reload durable state on
+// failure so poll tails cannot independently persist an in-memory terminal result.
+func saveState(code *db.TGCode, red *db.TGRedemption) error {
+	if code.Status == "completed" {
+		if err := db.CompleteTGRedemption(*red, redeemedText(code, red)); err != nil {
+			persistedCode, codeErr := db.GetTGCode(code.ID)
+			persistedRed, redErr := db.GetTGRedemption(red.ID)
+			if codeErr == nil && redErr == nil {
+				*code, *red = persistedCode, persistedRed
+			}
+			return err
+		}
+		return nil
+	}
+	if err := db.SaveTGRedemption(*red); err != nil {
 		return err
 	}
 	return db.UpdateTGCodeStatus(code.ID, code.Status)

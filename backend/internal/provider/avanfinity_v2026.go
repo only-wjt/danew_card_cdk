@@ -301,8 +301,11 @@ func (p *avanfinityV2026) RecoverSubscription(context.Context, map[string]any, s
 	return http.StatusNotImplemented, raw, nil
 }
 
-func (p *avanfinityV2026) Redeem(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
-	reqID := pickStr(body, "clientRequestId", "client_request_id")
+// AvanfinityRedeemClientRequestID exposes the exact wire identity so callers can
+// associate their original request id with the provider's UUID. Callers with an
+// empty id must retain the generated UUID and pass it back in clientRequestId.
+func AvanfinityRedeemClientRequestID(reqID string) string {
+	reqID = strings.TrimSpace(reqID)
 	if !uuidRe.MatchString(reqID) {
 		if reqID != "" {
 			// 前端的 web-xxxx-时间戳 不是 UUID；按内容推导，重试仍是同一个请求。
@@ -312,6 +315,11 @@ func (p *avanfinityV2026) Redeem(ctx context.Context, body map[string]any, devic
 			reqID = newUUID4()
 		}
 	}
+	return reqID
+}
+
+func (p *avanfinityV2026) Redeem(ctx context.Context, body map[string]any, device string) (int, []byte, error) {
+	reqID := AvanfinityRedeemClientRequestID(pickStr(body, "clientRequestId", "client_request_id"))
 	return p.public(ctx, "redeem", map[string]any{
 		"redemptionToken": pickStr(body, "redemptionToken", "redemption_token", "token"),
 		"preflightToken":  pickStr(body, "preflightToken", "preflight_token"),

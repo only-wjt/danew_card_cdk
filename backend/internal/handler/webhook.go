@@ -25,7 +25,11 @@ func CardPlatformWebhook(c *gin.Context) {
 		return
 	}
 	wantAccountID := resolveWebhookAccountID(c)
-	accounts, _ := db.ListCardPlatformAccounts()
+	accounts, err := db.ListCardPlatformAccounts()
+	if err != nil {
+		c.Status(http.StatusServiceUnavailable)
+		return
+	}
 	type webhookCredential struct {
 		accountID int64
 		secret    string
@@ -85,9 +89,12 @@ func CardPlatformWebhook(c *gin.Context) {
 		}
 	}
 
-	// 尽快 200；入库 best-effort
+	// Invalid payloads must not occupy an event id and poison subsequent retries.
 	var payload map[string]interface{}
-	_ = json.Unmarshal(raw, &payload)
+	if json.Unmarshal(raw, &payload) != nil || payload == nil {
+		c.Status(http.StatusBadRequest)
+		return
+	}
 
 	eventType := webhookEventType(payload)
 	idem := webhookIdemKey(payload, eventType)
@@ -95,16 +102,22 @@ func CardPlatformWebhook(c *gin.Context) {
 		idem = "avanfinity|" + avID
 	}
 	err = db.InsertWebhookEvent(matchedAccountID, eventType, idem, string(raw))
-	fresh := err == nil
-	if err != nil {
-		if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "unique") {
-			log.Printf("webhook store: %v", err)
-		}
-	} else if eventType == "gpt_direct.completed" {
-		db.WriteAudit("webhook", "gpt_direct.completed", idem, c.ClientIP())
+	if err != nil && !db.IsUniqueConstraintError(err) {
+		log.Printf("webhook store: %v", err)
+		c.Status(http.StatusServiceUnavailable)
+		return
 	}
-	if fresh && isGPTDirectCompleted(eventType) {
-		notifyChatGPTCompleted(payload)
+	if err == nil && isGPTDirectCompleted(eventType) {
+		db.WriteAudit("webhook", eventType, idem, c.ClientIP())
+	}
+	// Received-event deduplication is not delivery deduplication. A retry must
+	// still attempt the stable queue key even if the event was already stored.
+	if isGPTDirectCompleted(eventType) {
+		if err := notifyChatGPTCompleted(matchedAccountID, payload); err != nil {
+			log.Printf("webhook notification enqueue account=%d: %v", matchedAccountID, err)
+			c.Status(http.StatusServiceUnavailable)
+			return
+		}
 	}
 	// 本站 CDK 状态：兑换完成 → consumed（避免列表仍显示「未使用」）
 	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
@@ -189,8 +202,7 @@ func webhookIdemKey(p map[string]interface{}, eventType string) string {
 	if id := strings.TrimSpace(strAny(p["id"])); strings.HasPrefix(id, "evt_") {
 		return eventType + "|evt|" + id
 	}
-	obj := webhookDataObject(p)
-	orderID := firstNonEmpty(strAny(obj["orderId"]), strAny(obj["order_id"]), nestedStr(obj, "order", "id"), strAny(p["order_id"]))
+	orderID := gptOrderID(p)
 	if isGPTDirectCompleted(eventType) && orderID != "" {
 		return "gpt-completed|" + orderID
 	}

@@ -641,8 +641,7 @@ func retireQuote(ctx context.Context, code *db.XCode, red *db.XRedemption) error
 			red.Message = "取消旧报价的结果还没确认，不会另建订单"
 			red.ErrorCode = "PAY_UNKNOWN"
 			schedule(code, red)
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return fmt.Errorf("取消旧报价的结果还没确认，卡密已锁定")
 		}
 	}
@@ -689,8 +688,7 @@ func runQuote(ctx context.Context, code *db.XCode, red *db.XRedemption, allowReq
 			return holdOrQueue(ctx, "quote", code, red, err)
 		}
 		if err := applyPublic(code, red, pub, false); err != nil {
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return err
 		}
 	} else {
@@ -718,24 +716,19 @@ func runQuote(ctx context.Context, code *db.XCode, red *db.XRedemption, allowReq
 				red.FinishedAt = now()
 				red.UpstreamStatus = "cancelled"
 				red.Message = "报价账号不一致，已取消"
-				_ = db.SaveXRedemption(*red)
-				_ = db.UpdateXCodeStatus(code.ID, code.Status)
+				_ = saveState(code, red)
 				return fmt.Errorf("报价账号不一致，已取消")
 			}
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return err
 		}
 		if err := enforceDirectCap(ctx, client, code, red, order); err != nil {
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return err
 		}
 	}
 	_ = db.InsertQuoteSample(code.Channel, code.Plan, red.Currency, "redeem", red.AmountMinor, red.EstimatedUSDE4, red.ServiceFeeE4, red.PricingVersion)
-	_ = db.SaveXRedemption(*red)
-	_ = db.UpdateXCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func enforceDirectCap(ctx context.Context, client *avanfinity.Client, code *db.XCode, red *db.XRedemption, order *avanfinity.DirectOrder) error {
@@ -826,16 +819,14 @@ func runConfirm(ctx context.Context, code *db.XCode, red *db.XRedemption) error 
 					code.Status = "unused"
 					red.FinishedAt = now()
 					red.Message = "订单账号和当前填写的不一致，已取消"
-					_ = db.SaveXRedemption(*red)
-					_ = db.UpdateXCodeStatus(code.ID, code.Status)
+					_ = saveState(code, red)
 					return fmt.Errorf("订单账号不一致，已取消，请重新报价")
 				}
 				code.Status = "uncertain"
 				red.PaymentAttempted = true
 				red.Message = "订单账号不一致，已停止付款"
 				schedule(code, red)
-				_ = db.SaveXRedemption(*red)
-				_ = db.UpdateXCodeStatus(code.ID, code.Status)
+				_ = saveState(code, red)
 				return fmt.Errorf("订单账号不一致，已停止付款")
 			}
 		}
@@ -851,8 +842,7 @@ func runConfirm(ctx context.Context, code *db.XCode, red *db.XRedemption) error 
 			return requote(ctx, code, red)
 		}
 		if err := applyDirect(code, red, order); err != nil {
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return err
 		}
 	} else {
@@ -863,8 +853,7 @@ func runConfirm(ctx context.Context, code *db.XCode, red *db.XRedemption) error 
 			return holdOrQueue(ctx, "pay", code, red, err)
 		}
 		if err := applyPublic(code, red, pub, true); err != nil {
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return err
 		}
 		if xlogic.ShouldSecondRedeem(code.Channel, code.Status, red.PaymentDispatched) {
@@ -873,9 +862,7 @@ func runConfirm(ctx context.Context, code *db.XCode, red *db.XRedemption) error 
 			}
 		}
 	}
-	_ = db.SaveXRedemption(*red)
-	_ = db.UpdateXCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func payCDK(ctx context.Context, client *avanfinity.Client, code *db.XCode, red *db.XRedemption, plain string) error {
@@ -903,13 +890,10 @@ func payCDK(ctx context.Context, client *avanfinity.Client, code *db.XCode, red 
 	}
 	red.PaymentDispatched = true
 	if err := applyPublic(code, red, pub, true); err != nil {
-		_ = db.SaveXRedemption(*red)
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return err
 	}
-	_ = db.SaveXRedemption(*red)
-	_ = db.UpdateXCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func requote(ctx context.Context, code *db.XCode, red *db.XRedemption) error {
@@ -918,9 +902,7 @@ func requote(ctx context.Context, code *db.XCode, red *db.XRedemption) error {
 		red.Message = "报价已过期，但付款可能已经发出，只查询不重下单"
 		red.ErrorCode = "PAY_UNKNOWN"
 		schedule(code, red)
-		_ = db.SaveXRedemption(*red)
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
-		return nil
+		return saveState(code, red)
 	}
 	recipient := red.Recipient
 	if err := retireQuote(ctx, code, red); err != nil {
@@ -976,9 +958,7 @@ func holdOrQueue(ctx context.Context, stage string, code *db.XCode, red *db.XRed
 		red.ErrorCode = "SPENDABLE_BALANCE_INSUFFICIENT"
 		red.Message = "钱包余额不足，充值后会用原请求继续"
 		schedule(code, red)
-		_ = db.SaveXRedemption(*red)
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
-		return nil
+		return saveState(code, red)
 	case xlogic.FailStale:
 		return err
 	case xlogic.FailUncertain:
@@ -991,9 +971,7 @@ func holdOrQueue(ctx context.Context, stage string, code *db.XCode, red *db.XRed
 		red.Message = "付款结果还没确认，卡密已锁定，不会重新支付"
 		appendEvent(red, "付款结果不确定，改为只查询")
 		schedule(code, red)
-		_ = db.SaveXRedemption(*red)
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
-		return nil
+		return saveState(code, red)
 	default:
 		return err
 	}
@@ -1098,16 +1076,12 @@ func applyDirect(code *db.XCode, red *db.XRedemption, order *avanfinity.DirectOr
 }
 
 func mapStatus(code *db.XCode, red *db.XRedemption, upstream string, canRetry *bool) {
-	prev := code.Status
 	d := xlogic.DecideStatus(code.Status, upstream, red.PaymentAttempted, red.FundingDispatched, canRetry)
 	if d.CodeStatus != "" {
 		code.Status = d.CodeStatus
 	}
 	if strings.TrimSpace(upstream) != "" {
 		red.UpstreamStatus = strings.ToLower(strings.TrimSpace(upstream))
-	}
-	if prev != "completed" && code.Status == "completed" {
-		notifyRedeemed(code, red)
 	}
 	if d.Release {
 		appendEvent(red, "未动钱，卡密放回可用")
@@ -1124,7 +1098,7 @@ func mapStatus(code *db.XCode, red *db.XRedemption, upstream string, canRetry *b
 	red.NextPollAt = ""
 }
 
-func notifyRedeemed(code *db.XCode, red *db.XRedemption) {
+func redeemedText(code *db.XCode, red *db.XRedemption) string {
 	who := red.Recipient
 	if who != "" && !strings.HasPrefix(who, "@") {
 		who = "@" + who
@@ -1133,7 +1107,7 @@ func notifyRedeemed(code *db.XCode, red *db.XRedemption) {
 	if red.AmountMinor > 0 {
 		amount = fmt.Sprintf("%d %s", red.AmountMinor, strings.ToUpper(red.Currency))
 	}
-	notify.Redeemed("X 会员", planLabel(code.Plan), who, amount)
+	return notify.FormatRedeemed("X 会员", planLabel(code.Plan), who, amount)
 }
 
 func schedule(code *db.XCode, red *db.XRedemption) {
@@ -1214,8 +1188,7 @@ func PollDue(ctx context.Context) {
 				red.NextPollAt = ""
 			}
 			maybeEscalate(&code, &red)
-			_ = db.SaveXRedemption(red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(&code, &red)
 		}()
 	}
 }
@@ -1239,13 +1212,10 @@ func refresh(ctx context.Context, code *db.XCode, red *db.XRedemption) error {
 			return requote(ctx, code, red)
 		}
 		if err := applyDirect(code, red, order); err != nil {
-			_ = db.SaveXRedemption(*red)
-			_ = db.UpdateXCodeStatus(code.ID, code.Status)
+			_ = saveState(code, red)
 			return err
 		}
-		_ = db.SaveXRedemption(*red)
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
-		return nil
+		return saveState(code, red)
 	}
 	plain := openSeal(code.UpstreamCodeEnc)
 	wasUnknown := red.ErrorCode == "PAY_UNKNOWN"
@@ -1255,8 +1225,7 @@ func refresh(ctx context.Context, code *db.XCode, red *db.XRedemption) error {
 		return holdOrQueue(ctx, "read", code, red, err)
 	}
 	if err := applyPublic(code, red, pub, false); err != nil {
-		_ = db.SaveXRedemption(*red)
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
+		_ = saveState(code, red)
 		return err
 	}
 	if wasUnknown && code.Status != "uncertain" && red.ErrorCode == "PAY_UNKNOWN" {
@@ -1265,9 +1234,7 @@ func refresh(ctx context.Context, code *db.XCode, red *db.XRedemption) error {
 	if xlogic.ShouldSecondRedeem(code.Channel, code.Status, red.PaymentDispatched) && red.ErrorCode != "PAY_UNKNOWN" {
 		return payCDK(ctx, client, code, red, plain)
 	}
-	_ = db.SaveXRedemption(*red)
-	_ = db.UpdateXCodeStatus(code.ID, code.Status)
-	return nil
+	return saveState(code, red)
 }
 
 func maybeEscalate(code *db.XCode, red *db.XRedemption) {
@@ -1334,14 +1301,10 @@ func Requery(ctx context.Context, redemptionID int64) error {
 	}
 	red.NextPollAt = now()
 	if err := refresh(ctx, &code, &red); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		_ = db.UpdateXCodeStatus(code.ID, code.Status)
-		_ = db.SaveXRedemption(red)
+		_ = saveState(&code, &red)
 		return err
 	}
-	if err := db.UpdateXCodeStatus(code.ID, code.Status); err != nil {
-		return err
-	}
-	return db.SaveXRedemption(red)
+	return saveState(&code, &red)
 }
 
 // Resolve 人工处理必须带结果：开通、放回未使用，或作废。只写备注不会让客户一直锁着。
@@ -1359,14 +1322,10 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 		return err
 	}
 	stamp := now()
-	wasDone := code.Status == "completed"
 	switch outcome {
 	case "completed":
 		code.Status = "completed"
 		appendEvent(&red, "人工标记已开通："+note)
-		if !wasDone {
-			notifyRedeemed(&code, &red)
-		}
 	case "release":
 		if moneyMoved(red) {
 			return fmt.Errorf("已经动过钱，不能放回未使用")
@@ -1386,7 +1345,24 @@ func Resolve(ctx context.Context, id int64, outcome, note string) error {
 	red.ResolvedAt = stamp
 	red.ResolvedNote = note
 	red.NextPollAt = ""
-	if err := db.SaveXRedemption(red); err != nil {
+	return saveState(&code, &red)
+}
+
+// saveState is the completion persistence boundary. Reload durable state on
+// failure so poll tails cannot independently persist an in-memory terminal result.
+func saveState(code *db.XCode, red *db.XRedemption) error {
+	if code.Status == "completed" {
+		if err := db.CompleteXRedemption(*red, redeemedText(code, red)); err != nil {
+			persistedCode, codeErr := db.GetXCode(code.ID)
+			persistedRed, redErr := db.GetXRedemption(red.ID)
+			if codeErr == nil && redErr == nil {
+				*code, *red = persistedCode, persistedRed
+			}
+			return err
+		}
+		return nil
+	}
+	if err := db.SaveXRedemption(*red); err != nil {
 		return err
 	}
 	return db.UpdateXCodeStatus(code.ID, code.Status)

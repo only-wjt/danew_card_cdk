@@ -88,6 +88,11 @@ func currentJournalMode(db *sql.DB) (string, error) {
 }
 
 func createTables() error {
+	// Unlike legacy best-effort migrations, the durable notification queue must
+	// be available before startup succeeds. No historical notices are replayed.
+	if err := createTelegramNotificationTables(); err != nil {
+		return fmt.Errorf("create telegram notification queue: %w", err)
+	}
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS cd_keys (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -155,3 +155,30 @@ func TestAvanfinityV2026BalanceAndRefund(t *testing.T) {
 		t.Fatal("reclaim must be unsupported")
 	}
 }
+
+func TestAvanfinityRedeemClientRequestIDMatchesWire(t *testing.T) {
+	for _, input := range []string{"web-abc-1", "  web-abc-1  ", "550E8400-E29B-41D4-A716-446655440000", ""} {
+		t.Run(input, func(t *testing.T) {
+			effective := AvanfinityRedeemClientRequestID(input)
+			if !uuidRe.MatchString(effective) {
+				t.Fatalf("effective=%q", effective)
+			}
+			if input != "" && effective != AvanfinityRedeemClientRequestID(input) {
+				t.Fatal("normalization not deterministic")
+			}
+			srv, got := newAvanServer(t, func(string) (int, string) { return 200, `{"data":{"order":{"status":"completed"}}}` })
+			p := NewAvanfinityV2026(avanAccount(srv.URL))
+			// Retain generated identity in the request when no original was supplied.
+			wireInput := input
+			if input == "" {
+				wireInput = effective
+			}
+			if _, _, err := p.Redeem(context.Background(), map[string]any{"clientRequestId": wireInput}, "device"); err != nil {
+				t.Fatal(err)
+			}
+			if wire := (*got)[0].body["clientRequestId"]; wire != effective {
+				t.Fatalf("wire=%v helper=%s", wire, effective)
+			}
+		})
+	}
+}
