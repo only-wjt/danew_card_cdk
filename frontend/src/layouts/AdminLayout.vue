@@ -137,6 +137,7 @@ const navItems = [
   { path: '/ops/orders', label: '兑换对账', icon: 'Document' },
   { path: '/ops/platforms', label: '卡台', icon: 'Link' },
   { path: '/ops/appearance', label: '外观', icon: 'Brush' },
+  { path: '/ops/notify', label: '通知', icon: 'Bell' },
   { path: '/ops/audit', label: '审计', icon: 'List' },
 ]
 

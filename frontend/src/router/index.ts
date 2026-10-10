@@ -132,6 +132,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'batch-recharge', name: 'BatchRecharge', component: () => import('../views/admin/BatchRechargeView.vue') },
       { path: 'orders', name: 'OrderReconcile', component: () => import('../views/admin/OrderReconcile.vue') },
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
+      { path: 'notify', name: 'NotifySettings', component: () => import('../views/admin/NotifySettings.vue') },
       { path: 'platforms', name: 'Platforms', component: () => import('../views/admin/PlatformsView.vue') },
       { path: 'x', name: 'XMember', component: () => import('../views/admin/XMemberView.vue') },
       { path: 'tg', name: 'TGMember', component: () => import('../views/admin/TgMemberView.vue') },

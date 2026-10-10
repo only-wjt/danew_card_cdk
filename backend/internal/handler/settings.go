@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/gin-gonic/gin"
 )
 
@@ -189,6 +190,20 @@ func AdminPutSettings(c *gin.Context) {
 
 	auditAdmin(c, "update_settings", "site settings")
 	AdminGetSettings(c)
+}
+
+// AdminTelegramTest POST /api/v1/admin/settings/telegram-test
+func AdminTelegramTest(c *gin.Context) {
+	err := notify.SendNow("✅ 通知测试\n这是后台发出的一条测试消息。开通成功也会发到这个聊天。")
+	if err != nil {
+		if err.Error() == "telegram not configured" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "还没配好机器人 Token 和聊天 ID"})
+			return
+		}
+		c.JSON(http.StatusBadGateway, gin.H{"error": "发送失败，请核对 Token 和聊天 ID"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func settingOr(key, def string) string {

@@ -10,41 +10,60 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-// enabled reports whether Telegram notification is configured.
+func settingOrEnv(key, env string) string {
+	if db.DB != nil {
+		if v, _ := db.GetSetting(key); strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return strings.TrimSpace(os.Getenv(env))
+}
+
+// enabled 后台保存的配置优先，没填才用服务器环境变量。
 func enabled() (token, chatID string, ok bool) {
-	token = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
-	chatID = strings.TrimSpace(os.Getenv("TELEGRAM_CHAT_ID"))
+	token = settingOrEnv("telegram_token", "TELEGRAM_BOT_TOKEN")
+	chatID = settingOrEnv("telegram_chat_id", "TELEGRAM_CHAT_ID")
 	return token, chatID, token != "" && chatID != ""
 }
 
 // SendText sends a Telegram message asynchronously. No-op if not configured.
 func SendText(text string) {
-	token, chatID, ok := enabled()
-	if !ok {
-		return
-	}
 	go func() {
-		api := "https://api.telegram.org/bot" + token + "/sendMessage"
-		form := url.Values{}
-		form.Set("chat_id", chatID)
-		form.Set("text", text)
-		form.Set("parse_mode", "HTML")
-		form.Set("disable_web_page_preview", "true")
-		resp, err := httpClient.PostForm(api, form)
-		if err != nil {
+		if err := SendNow(text); err != nil && err.Error() != "telegram not configured" {
 			log.Printf("[telegram] send failed: %v", err)
-			return
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			log.Printf("[telegram] non-200: %d %s", resp.StatusCode, string(body))
 		}
 	}()
+}
+
+// SendNow 立刻发送，并把失败原因返回给调用方。未配置时返回错误。
+func SendNow(text string) error {
+	token, chatID, ok := enabled()
+	if !ok {
+		return fmt.Errorf("telegram not configured")
+	}
+	api := "https://api.telegram.org/bot" + token + "/sendMessage"
+	form := url.Values{}
+	form.Set("chat_id", chatID)
+	form.Set("text", text)
+	form.Set("parse_mode", "HTML")
+	form.Set("disable_web_page_preview", "true")
+	resp, err := httpClient.PostForm(api, form)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("telegram %d", resp.StatusCode)
+	}
+	_ = body
+	return nil
 }
 
 // NotifyNewOrder formats and sends a "new order" notification.
