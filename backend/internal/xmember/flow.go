@@ -1133,7 +1133,7 @@ func notifyRedeemed(code *db.XCode, red *db.XRedemption) {
 	if red.AmountMinor > 0 {
 		amount = fmt.Sprintf("%d %s", red.AmountMinor, strings.ToUpper(red.Currency))
 	}
-	notify.Redeemed("X 会员", planLabel(code.Plan), who, code.Code, amount)
+	notify.Redeemed("X 会员", planLabel(code.Plan), who, amount)
 }
 
 func schedule(code *db.XCode, red *db.XRedemption) {

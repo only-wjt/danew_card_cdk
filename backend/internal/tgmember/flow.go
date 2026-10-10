@@ -753,7 +753,7 @@ func notifyRedeemed(code *db.TGCode, red *db.TGRedemption) {
 	if red.AmountMinor > 0 {
 		amount = fmt.Sprintf("%d %s", red.AmountMinor, strings.ToUpper(red.Currency))
 	}
-	notify.Redeemed("Telegram", PlanLabel(code.Plan), who, code.Code, amount)
+	notify.Redeemed("Telegram", PlanLabel(code.Plan), who, amount)
 }
 
 func schedule(code *db.TGCode, red *db.TGRedemption) {

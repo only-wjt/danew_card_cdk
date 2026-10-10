@@ -87,8 +87,8 @@ func NotifyNewOrder(taskID, cdkCode, sessionJSON string) {
 	SendText(text)
 }
 
-// Redeemed 通知一笔会员已经开通。调用方只在状态第一次变成已开通时调用。
-func Redeemed(product, plan, who, code, amount string) {
+// Redeemed 通知一笔会员已经开通。不带卡密。调用方只在状态第一次变成已开通时调用。
+func Redeemed(product, plan, who, amount string) {
 	who = strings.TrimSpace(who)
 	if who == "" {
 		who = "—"
@@ -102,16 +102,15 @@ func Redeemed(product, plan, who, code, amount string) {
 		"✅ <b>%s开通成功</b>\n"+
 			"套餐: %s\n"+
 			"账号: %s\n"+
-			"卡密: <code>%s</code>\n"+
 			"金额: %s\n"+
 			"🕐 %s",
-		escapeHTML(product), escapeHTML(plan), escapeHTML(who), escapeHTML(code), escapeHTML(amount), now,
+		escapeHTML(product), escapeHTML(plan), escapeHTML(who), escapeHTML(amount), now,
 	)
 	SendText(text)
 }
 
-// ChatGPTRedeemed 通知一张 ChatGPT 卡密已经开通。地区用「菲区」「美区」这种说法。
-func ChatGPTRedeemed(plan, email, code, region string) {
+// ChatGPTRedeemed 通知 ChatGPT 已经开通。不带卡密。地区用「菲区」「美区」这种说法。
+func ChatGPTRedeemed(plan, email, region string) {
 	email = strings.TrimSpace(email)
 	if email == "" {
 		email = "—"
@@ -129,10 +128,9 @@ func ChatGPTRedeemed(plan, email, code, region string) {
 		"✅ <b>ChatGPT 开通成功</b>\n"+
 			"套餐: %s\n"+
 			"账号: %s\n"+
-			"卡密: <code>%s</code>\n"+
 			"地区: %s\n"+
 			"🕐 %s",
-		escapeHTML(plan), escapeHTML(email), escapeHTML(code), escapeHTML(region), now,
+		escapeHTML(plan), escapeHTML(email), escapeHTML(region), now,
 	)
 	SendText(text)
 }

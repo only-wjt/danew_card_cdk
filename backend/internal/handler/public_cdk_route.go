@@ -211,14 +211,89 @@ func gptPlanLabel(plan string) string {
 	}
 }
 
-func notifyGPTSuccess(code, email string) {
-	code = strings.TrimSpace(code)
-	if code == "" {
+func notifyGPTSuccess(code, email string, payload map[string]any) {
+	orderID := ""
+	if payload != nil {
+		orderID = strAny(payload["order_id"])
+		if orderID == "" {
+			orderID = strAny(payload["client_request_id"])
+		}
+		if email == "" {
+			email = gptResultEmail(payload)
+		}
+	}
+	key := orderID
+	if key == "" {
+		key = strings.ToUpper(strings.TrimSpace(code))
+	}
+	if key == "" || !noticeOnce("gpt:"+key) {
 		return
 	}
-	plan, country, ok := db.ClaimCDKSuccessNotice(code)
-	if !ok {
+	plan := ""
+	var country *string
+	if code != "" {
+		if p, c, ok := db.ClaimCDKSuccessNotice(code); ok {
+			plan, country = p, c
+		}
+	}
+	if plan == "" && payload != nil {
+		plan = strAny(payload["plan"])
+	}
+	if country == nil && payload != nil {
+		country = countryFromCurrency(strAny(payload["currency"]))
+	}
+	notify.ChatGPTRedeemed(gptPlanLabel(plan), email, notify.RegionLabel(country))
+}
+
+// ClaimNoticeOnce 同一笔开通只发一次。回调重试和结果轮询共用这把锁。
+func noticeOnce(key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return false
+	}
+	err := db.InsertWebhookEvent(0, "redeem_notice", "notice|"+key, "{}")
+	return err == nil
+}
+
+func notifyChatGPTCompleted(payload map[string]any) {
+	if payload == nil {
 		return
 	}
-	notify.ChatGPTRedeemed(gptPlanLabel(plan), email, code, notify.RegionLabel(country))
+	orderID := strAny(payload["order_id"])
+	if orderID == "" {
+		orderID = strAny(payload["client_request_id"])
+	}
+	if orderID == "" || !noticeOnce("gpt:"+orderID) {
+		return
+	}
+	email := strAny(payload["account_email"])
+	region := notify.RegionLabel(countryFromCurrency(strAny(payload["currency"])))
+	notify.ChatGPTRedeemed(gptPlanLabel(strAny(payload["plan"])), email, region)
+}
+
+func countryFromCurrency(currency string) *string {
+	var code string
+	switch strings.ToUpper(strings.TrimSpace(currency)) {
+	case "PHP":
+		code = "PH"
+	case "USD":
+		code = "US"
+	case "JPY":
+		code = "JP"
+	case "KRW":
+		code = "KR"
+	case "CLP":
+		code = "CL"
+	case "EGP":
+		code = "EG"
+	case "INR":
+		code = "IN"
+	case "NGN":
+		code = "NG"
+	case "TRY":
+		code = "TR"
+	default:
+		return nil
+	}
+	return &code
 }

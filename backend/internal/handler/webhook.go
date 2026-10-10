@@ -101,16 +101,15 @@ func CardPlatformWebhook(c *gin.Context) {
 	if avID := strings.TrimSpace(c.GetHeader("X-Avanfinity-Webhook-Id")); avID != "" {
 		idem = "avanfinity|" + avID
 	}
-	if err := db.InsertWebhookEvent(matchedAccountID, eventType, idem, string(raw)); err != nil {
+	err = db.InsertWebhookEvent(matchedAccountID, eventType, idem, string(raw))
+	if err != nil {
 		// 唯一冲突视为已处理（幂等）
 		if !strings.Contains(err.Error(), "UNIQUE") && !strings.Contains(err.Error(), "unique") {
 			log.Printf("webhook store: %v", err)
 		}
-	} else {
-		// 若是 GPT 直充完成，可写审计
-		if eventType == "gpt_direct.completed" {
-			db.WriteAudit("webhook", "gpt_direct.completed", idem, c.ClientIP())
-		}
+	} else if eventType == "gpt_direct.completed" {
+		db.WriteAudit("webhook", "gpt_direct.completed", idem, c.ClientIP())
+		notifyChatGPTCompleted(payload)
 	}
 	// 本站 CDK 状态：兑换完成 → consumed（避免列表仍显示「未使用」）
 	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
@@ -149,7 +148,6 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string,
 	}
 	if binding, ok := db.FindSiteBindingByRemote(accountID, strconv.FormatInt(cdkID, 10)); ok {
 		if st == "consumed" {
-			notifyGPTSuccess(binding.SiteCode, strAny(payload["account_email"]))
 			_ = db.UpdateBindingStatus(binding.ID, db.BindingStatusConsumed, "")
 			_ = db.UpdateCardplatformCDKStatusByRowID(binding.SiteCodeID, st)
 			_ = db.MarkSiteCDKFulfilled(binding.SiteCodeID, accountID, binding.Provider, !binding.IsPrimary, "webhook")
@@ -165,11 +163,6 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string,
 		legacy, _ := db.LegacyCardPlatformAccount()
 		if accountID > 0 && legacy.ID != accountID {
 			return
-		}
-	}
-	if st == "consumed" {
-		if code, ok := db.LookupCardplatformCDKCode(cdkID, strAny(payload["code_prefix"])); ok {
-			notifyGPTSuccess(code, strAny(payload["account_email"]))
 		}
 	}
 	_ = db.UpdateCardplatformCDKStatus(cdkID, st)
