@@ -371,6 +371,9 @@ func createTables() error {
 	if err := migrateSiteDualBindSchema(); err != nil {
 		return fmt.Errorf("migrate dual-bind schema: %w", err)
 	}
+	if err := migrateAdminRechargeBatchRegionCol(); err != nil {
+		return fmt.Errorf("migrate batch recharge region: %w", err)
+	}
 	if err := migrateAgentExchangeClaim(); err != nil {
 		return fmt.Errorf("migrate agent exchange claim: %w", err)
 	}
@@ -1964,13 +1967,15 @@ type AdminRechargeBatch struct {
 	AgentName   string `json:"agent_name,omitempty"`
 	Source      string `json:"source,omitempty"`
 	Plan        string `json:"plan"`
-	Total       int    `json:"total"`
-	Success     int    `json:"success"`
-	Failed      int    `json:"failed"`
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// PaymentCountry 自动发码的付款地区；空 = 默认（菲律宾）或代理路径（地区随码）
+	PaymentCountry string `json:"payment_country"`
+	Total          int    `json:"total"`
+	Success        int    `json:"success"`
+	Failed         int    `json:"failed"`
+	Status         string `json:"status"`
+	Message        string `json:"message"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // AdminRechargeItem 批次内一条充值明细。
@@ -2048,9 +2053,9 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`
-		INSERT INTO admin_recharge_batches (batch_id, operator, agent_user_id, source, plan, total, status, fingerprint, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	`, b.BatchID, b.Operator, b.AgentUserID, nullIfEmpty(b.Source), b.Plan, b.Total, b.Status, fingerprint); err != nil {
+		INSERT INTO admin_recharge_batches (batch_id, operator, agent_user_id, source, plan, payment_country, total, status, fingerprint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, b.BatchID, b.Operator, b.AgentUserID, nullIfEmpty(b.Source), b.Plan, b.PaymentCountry, b.Total, b.Status, fingerprint); err != nil {
 		return err
 	}
 	stmt, err := tx.Prepare(`
@@ -2126,10 +2131,10 @@ func GetAdminRechargeBatch(batchID string) (*AdminRechargeBatch, error) {
 	}
 	var b AdminRechargeBatch
 	err := DB.QueryRow(`
-		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), total,
+		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), COALESCE(payment_country,''), total,
 		       COALESCE(status,''), COALESCE(message,''), COALESCE(created_at,''), COALESCE(updated_at,'')
 		FROM admin_recharge_batches WHERE batch_id = ?
-	`, batchID).Scan(&b.BatchID, &b.Operator, &b.Plan, &b.Total, &b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt)
+	`, batchID).Scan(&b.BatchID, &b.Operator, &b.Plan, &b.PaymentCountry, &b.Total, &b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2173,7 +2178,7 @@ func ListAdminRechargeBatches(f AdminBatchFilter) ([]AdminRechargeBatch, error) 
 	rows, err := DB.Query(`
 		SELECT b.batch_id, COALESCE(b.operator,''), COALESCE(b.agent_user_id,0),
 		       COALESCE(a.display_name, a.username, ''),
-		       COALESCE(b.source,''), COALESCE(b.plan,''), b.total,
+		       COALESCE(b.source,''), COALESCE(b.plan,''), COALESCE(b.payment_country,''), b.total,
 		       COALESCE(b.status,''), COALESCE(b.message,''), COALESCE(b.created_at,''), COALESCE(b.updated_at,''),
 		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'success'), 0),
 		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'failed'), 0)
@@ -2189,7 +2194,7 @@ func ListAdminRechargeBatches(f AdminBatchFilter) ([]AdminRechargeBatch, error) 
 	out := make([]AdminRechargeBatch, 0, limit)
 	for rows.Next() {
 		var b AdminRechargeBatch
-		if err := rows.Scan(&b.BatchID, &b.Operator, &b.AgentUserID, &b.AgentName, &b.Source, &b.Plan, &b.Total,
+		if err := rows.Scan(&b.BatchID, &b.Operator, &b.AgentUserID, &b.AgentName, &b.Source, &b.Plan, &b.PaymentCountry, &b.Total,
 			&b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt, &b.Success, &b.Failed); err != nil {
 			return nil, err
 		}

@@ -78,3 +78,19 @@ func ClaimCDKSuccessNotice(code string) (plan string, country *string, ok bool) 
 	}
 	return plan, country, true
 }
+
+// migrateAdminRechargeBatchRegionCol 批量充值批次记录付款地区（旧批次为空 = 默认菲律宾）。
+func migrateAdminRechargeBatchRegionCol() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('admin_recharge_batches') WHERE name='payment_country'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := DB.Exec(`ALTER TABLE admin_recharge_batches ADD COLUMN payment_country TEXT DEFAULT ''`)
+	return err
+}

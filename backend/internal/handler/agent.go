@@ -615,7 +615,7 @@ func submitAgentRecharge(c *gin.Context, operator string, agentID int64, source,
 		return nil, http.StatusBadRequest, fmt.Errorf("缺少 cdk_code")
 	}
 	cleaned := []batchRechargeCredential{cred}
-	fp := batchFingerprint(operator, plan, cleaned)
+	fp := batchFingerprint(operator, plan, "", cleaned)
 	if existing, err := db.FindRecentAdminRechargeBatchByFingerprint(fp, batchRechargeDedupWindowSec); err == nil && existing != "" {
 		crid := existing + "-001"
 		if rec, err := db.GetAgentRechargeItem(agentID, crid); err == nil {
