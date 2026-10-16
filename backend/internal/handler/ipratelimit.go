@@ -194,3 +194,16 @@ func writeUpstreamUnavailable(c *gin.Context, tag string, err error) {
 	log.Printf("[%s] upstream error: %v", tag, err)
 	c.JSON(http.StatusBadGateway, gin.H{"error": "兑换服务暂时不可用，请稍后重试"})
 }
+
+// goSafe 起一个后台协程，并兜住 panic。
+// 这些协程跑在请求之外（已被 gin.Recovery 放弃的路径），一旦 panic 会带崩整个进程。
+func goSafe(tag string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[%s] goroutine panic: %v", tag, r)
+			}
+		}()
+		fn()
+	}()
+}

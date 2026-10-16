@@ -742,6 +742,14 @@ func runBatchRecharge(batchID, plan, operator string, jobs []batchRechargeJob) {
 			go func() {
 				defer wg.Done()
 				defer func() { <-sem }()
+				// 子协程里的 panic 不会被 runBatchRecharge 外层 recover 接住，
+				// 会直接带崩整个进程（在途批次的凭据只在内存里，全丢）。
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[batch-recharge] panic in job seq=%d crid=%s: %v", job.seq, job.clientRequestID, r)
+						patchItem(job.clientRequestID, itemStatusUnknown, "处理异常，结果未知，请与上游核对")
+					}
+				}()
 				if aborted.Load() {
 					patchItem(job.clientRequestID, itemStatusFailed, "批次已中止，未提交")
 					return

@@ -672,8 +672,12 @@ func ReconcileCDKAfterItemTerminal(cdkCode, itemStatus string) {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(itemStatus)) {
-	case "success", "skipped":
+	case "success":
 		_ = ConsumeAgentCDK(code)
+	case "skipped":
+		// 账号已是目标套餐：上游没扣款，卡密也没被消耗，必须放回可重试。
+		// 归到 success 会把代理的码直接烧掉（见 2026-10-16 修复）。
+		_ = ReleaseAgentCDK(code)
 	case "unknown":
 		// 结果不确定：禁止自动释放，避免双花
 	case "failed":

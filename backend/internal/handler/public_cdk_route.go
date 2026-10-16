@@ -123,7 +123,7 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 	switch {
 	case st >= 200 && st < 300:
 		// 兑换成功：另一台那张必须立刻收回，否则同一本站码能兑两次。
-		go provider.MarkConsumed(context.Background(), route)
+		goSafe("mark-consumed", func() { provider.MarkConsumed(context.Background(), route) })
 	case st >= 400 && st < 500:
 		// 业务拒绝（码无效/凭证不对），码没被消耗，允许改参数重试。
 		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusUnused, upstreamErrText(raw))

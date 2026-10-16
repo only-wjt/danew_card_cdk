@@ -1316,13 +1316,13 @@ func PublicCDKResult(c *gin.Context) {
 			} else {
 				// 异步兑换可能到 result 才终态成功，这里也要退役兄弟码。
 				if isTerminalRedeemSuccess(payload) {
-					go provider.MarkConsumed(context.Background(), route)
+					goSafe("mark-consumed", func() { provider.MarkConsumed(context.Background(), route) })
 					if err := notifyGPTSuccess(route.Account.ID, boundCode, gptResultEmail(payload), payload); err != nil {
 						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
 						return
 					}
 				}
-				go observeFromPublicResult(context.Background(), payload, boundCode)
+				goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, boundCode) })
 			}
 		}
 		proxyPublicJSON(c, st, raw)
@@ -1353,7 +1353,7 @@ func PublicCDKResult(c *gin.Context) {
 					return
 				}
 			}
-			go observeFromPublicResult(context.Background(), payload, cdkCode)
+			goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, cdkCode) })
 		}
 	}
 	proxyPublicJSON(c, st, raw)
@@ -1421,7 +1421,7 @@ func PublicCDKResultByCode(c *gin.Context) {
 
 	// 卡健康观察（webhook 未配时靠轮询学）
 	if st >= 200 && st < 300 {
-		go observeFromPublicResult(context.Background(), payload, bind.CDKCode)
+		goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, bind.CDKCode) })
 	}
 
 	// 已完成的订单：从 accounthub 获取账单 URL
