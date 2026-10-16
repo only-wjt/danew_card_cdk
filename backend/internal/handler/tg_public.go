@@ -5,8 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -25,28 +23,9 @@ func customerAPIError(err error) string {
 	return err.Error()
 }
 
-var (
-	tgPubMu   sync.Mutex
-	tgPubHits = map[string][]time.Time{}
-)
-
 func tgPublicAllowed(ip string) bool {
-	tgPubMu.Lock()
-	defer tgPubMu.Unlock()
-	now := time.Now()
-	cut := now.Add(-time.Minute)
-	hits := tgPubHits[ip][:0]
-	for _, t := range tgPubHits[ip] {
-		if t.After(cut) {
-			hits = append(hits, t)
-		}
-	}
-	if len(hits) >= 30 {
-		tgPubHits[ip] = hits
-		return false
-	}
-	tgPubHits[ip] = append(hits, now)
-	return true
+	ok, _ := tgPublicLimiter.allow(ip, 1)
+	return ok
 }
 
 func PublicTGPreview(c *gin.Context) {

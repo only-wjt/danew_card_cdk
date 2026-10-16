@@ -1131,7 +1131,7 @@ func PublicCDKPreview(c *gin.Context) {
 	cli := legacyCardClientForCode(code)
 	st, raw, err := cli.Preview(c.Request.Context(), code, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-preview", err)
 		return
 	}
 	// 成功时记下 code ↔ redemption_token，供后续绑定 session / 账单查卡密
@@ -1154,6 +1154,10 @@ func PublicCDKPreflight(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
+	if credentialIsMailbox(body["credential"]) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "已不支持邮箱密码兑换，请改用 Session"})
+		return
+	}
 	if guardAgentAssignedCDK(c, str(body["code"])) {
 		return
 	}
@@ -1174,11 +1178,11 @@ func PublicCDKPreflight(c *gin.Context) {
 	cli := legacyCardClientForCode(legacyCode)
 	st, raw, err := cli.Preflight(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-preflight", err)
 		return
 	}
-	// 预检成功：把 credential.session 绑到卡密（账单页可凭卡密查）
-	// 即便上游返回非 2xx，只要本地能解析到 session 也尽量落库，方便后续账单查询。
+	// 预检成功才把 credential.session 绑到卡密（账单页可凭卡密查）。
+	// 上游拒绝的请求不落库：否则任何人都能对任意码写入/覆盖绑定。
 	tok := str(body["redemption_token"])
 	if tok == "" {
 		tok = extractJSONString(raw, "redemption_token", "token")
@@ -1189,15 +1193,39 @@ func PublicCDKPreflight(c *gin.Context) {
 			code = found
 		}
 	}
-	sess := extractCredentialSession(body["credential"])
-	if sess != "" && (code != "" || tok != "") {
+	if sess := bindableSession(st, body); sess != "" && (code != "" || tok != "") {
 		if err := db.BindCDKSession(code, tok, sess); err != nil {
 			log.Printf("[cdk-preflight] bind session failed tok=%s: %v", shortTok(tok), err)
 		}
-	} else if st >= 200 && st < 300 {
-		log.Printf("[cdk-preflight] no session to bind (mode may be mailbox) tok=%s", shortTok(tok))
 	}
 	proxyPublicJSON(c, st, raw)
+}
+
+// 单条 session 绑定上限；正常的 ChatGPT session JSON 远小于此。
+const maxBoundSessionBytes = 16 << 10
+
+// bindableSession 仅在上游预检 2xx 时返回可落库的 session。
+func bindableSession(status int, body map[string]any) string {
+	if status < 200 || status >= 300 {
+		return ""
+	}
+	sess := extractCredentialSession(body["credential"])
+	if len(sess) > maxBoundSessionBytes {
+		return ""
+	}
+	return sess
+}
+
+// credentialIsMailbox 邮箱+密码兑换已下线，挡住直接调 API 的请求。
+func credentialIsMailbox(cred any) bool {
+	m, ok := cred.(map[string]any)
+	if !ok {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(str(m["mode"])), "mailbox") {
+		return true
+	}
+	return str(m["password"]) != ""
 }
 
 // PublicCDKRedeem POST /api/v1/public/cdk/redeem
@@ -1246,7 +1274,7 @@ func PublicCDKRedeem(c *gin.Context) {
 	cli := legacyCardClientForCode(redeemCode)
 	st, raw, err := cli.Redeem(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-redeem", err)
 		return
 	}
 	if enqueueImmediateGPTResult(c, accountID, redeemCode, body, st, raw) {
@@ -1276,7 +1304,7 @@ func PublicCDKResult(c *gin.Context) {
 		}
 		st, raw, err := route.Provider.Result(c.Request.Context(), token, deviceFrom(c))
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			writeUpstreamUnavailable(c, "cdk-result", err)
 			return
 		}
 		raw = maskUpstreamCode(raw, route.RemoteCode, boundCode)
@@ -1288,13 +1316,13 @@ func PublicCDKResult(c *gin.Context) {
 			} else {
 				// 异步兑换可能到 result 才终态成功，这里也要退役兄弟码。
 				if isTerminalRedeemSuccess(payload) {
-					go provider.MarkConsumed(context.Background(), route)
+					goSafe("mark-consumed", func() { provider.MarkConsumed(context.Background(), route) })
 					if err := notifyGPTSuccess(route.Account.ID, boundCode, gptResultEmail(payload), payload); err != nil {
 						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
 						return
 					}
 				}
-				go observeFromPublicResult(context.Background(), payload, boundCode)
+				goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, boundCode) })
 			}
 		}
 		proxyPublicJSON(c, st, raw)
@@ -1308,7 +1336,7 @@ func PublicCDKResult(c *gin.Context) {
 	cli := legacyCardClientForCode(boundCode)
 	st, raw, err := cli.Result(c.Request.Context(), token, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-result", err)
 		return
 	}
 	// 卡健康观察（best-effort，不阻断用户）
@@ -1325,7 +1353,7 @@ func PublicCDKResult(c *gin.Context) {
 					return
 				}
 			}
-			go observeFromPublicResult(context.Background(), payload, cdkCode)
+			goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, cdkCode) })
 		}
 	}
 	proxyPublicJSON(c, st, raw)
@@ -1374,7 +1402,7 @@ func PublicCDKResultByCode(c *gin.Context) {
 		st, raw, err = legacyCardClientForCode(code).Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-result-by-code", err)
 		return
 	}
 	// 附带本站元信息，前端可恢复轮询 token
@@ -1393,7 +1421,7 @@ func PublicCDKResultByCode(c *gin.Context) {
 
 	// 卡健康观察（webhook 未配时靠轮询学）
 	if st >= 200 && st < 300 {
-		go observeFromPublicResult(context.Background(), payload, bind.CDKCode)
+		goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, bind.CDKCode) })
 	}
 
 	// 已完成的订单：从 accounthub 获取账单 URL

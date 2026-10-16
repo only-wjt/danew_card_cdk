@@ -21,3 +21,21 @@ func JWTSecret() string {
 	}
 	return secret
 }
+
+// ParseToken 校验 HMAC 签名与有效期，返回声明。
+func ParseToken(tokenStr string) (*CustomClaims, error) {
+	claims := &CustomClaims{}
+	token, err := jwt.ParseWithClaims(tokenStr, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return []byte(JWTSecret()), nil
+	})
+	if err != nil || !token.Valid {
+		if err == nil {
+			err = jwt.ErrTokenInvalidClaims
+		}
+		return nil, err
+	}
+	return claims, nil
+}

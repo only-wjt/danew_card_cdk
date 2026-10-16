@@ -79,7 +79,7 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 	body["code"] = route.RemoteCode
 	st, raw, err := route.Provider.Preflight(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "site-preflight", err)
 		return
 	}
 	raw = maskUpstreamCode(raw, route.RemoteCode, siteCode)
@@ -87,7 +87,7 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 	if tok == "" {
 		tok = extractJSONString(raw, "redemption_token", "token")
 	}
-	if sess := extractCredentialSession(body["credential"]); sess != "" {
+	if sess := bindableSession(st, body); sess != "" {
 		if berr := db.BindCDKSession(siteCode, tok, sess); berr != nil {
 			log.Printf("[cdk-preflight] bind session failed: %v", berr)
 		}
@@ -116,14 +116,14 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 	if err != nil {
 		// 请求都没打出去，码没被消耗，放回去让用户重试同一台。
 		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusUnused, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "site-redeem", err)
 		return
 	}
 	raw = maskUpstreamCode(raw, route.RemoteCode, siteCode)
 	switch {
 	case st >= 200 && st < 300:
 		// 兑换成功：另一台那张必须立刻收回，否则同一本站码能兑两次。
-		go provider.MarkConsumed(context.Background(), route)
+		goSafe("mark-consumed", func() { provider.MarkConsumed(context.Background(), route) })
 	case st >= 400 && st < 500:
 		// 业务拒绝（码无效/凭证不对），码没被消耗，允许改参数重试。
 		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusUnused, upstreamErrText(raw))

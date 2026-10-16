@@ -19,6 +19,7 @@ import (
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/provider"
 	"github.com/danew/cdk-recharge-system/internal/xlsxsheet"
 	"github.com/gin-gonic/gin"
 )
@@ -92,6 +93,8 @@ type batchRechargeCreateReq struct {
 	Plan             string                    `json:"plan"`
 	FundingConfirmed bool                      `json:"funding_confirmed"`
 	Items            []batchRechargeCredential `json:"items"`
+	// PaymentCountry 付款地区（国家码，空 = 卡台默认菲律宾）；只作用于本批自动发出的码
+	PaymentCountry string `json:"payment_country"`
 }
 
 // batchRechargeJob 执行期的一条任务（凭据只存在于 goroutine 内存）。
@@ -99,6 +102,8 @@ type batchRechargeJob struct {
 	seq             int
 	clientRequestID string
 	cred            batchRechargeCredential
+	// paymentCountry 自动发码时的付款地区（代理路径用已有的码，地区随码，留空）
+	paymentCountry string
 	// 提交阶段结束后填充，供轮询阶段使用
 	redemptionToken string
 	terminal        bool
@@ -128,10 +133,13 @@ func credIdentity(c batchRechargeCredential) string {
 	return "session:" + hex.EncodeToString(sum[:])[:16]
 }
 
-// batchFingerprint 同一操作员 + 同一套餐 + 同一批凭据 → 同一指纹，用于 60 秒内去重。
-func batchFingerprint(operator, plan string, items []batchRechargeCredential) string {
+// batchFingerprint 同一操作员 + 同一套餐 + 同一地区 + 同一批凭据 → 同一指纹，用于 60 秒内去重。
+func batchFingerprint(operator, plan, country string, items []batchRechargeCredential) string {
 	h := sha256.New()
 	h.Write([]byte(operator + "|" + plan))
+	if country != "" {
+		h.Write([]byte("|region:" + country))
+	}
 	for _, it := range items {
 		h.Write([]byte("|" + credIdentity(it)))
 	}
@@ -288,11 +296,21 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		cleaned = append(cleaned, it)
 	}
 
+	// 付款地区：与单张发码同一规则——主台不支持地区时不能静默按菲律宾发出去。
+	payCountry := strings.ToUpper(strings.TrimSpace(req.PaymentCountry))
+	if payCountry != "" {
+		acc, err := db.PrimaryCardPlatformAccount()
+		if err != nil || !provider.SupportsPaymentCountry(acc.Protocol) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "当前发码卡台不支持指定付款地区，请改为默认（菲律宾）"})
+			return
+		}
+	}
+
 	uname, _ := c.Get("username")
 	operator, _ := uname.(string)
 
-	// 幂等锁 3/3：60 秒内同操作员 + 同套餐 + 同一批凭据 → 直接返回原批次
-	fp := batchFingerprint(operator, plan, cleaned)
+	// 幂等锁 3/3：60 秒内同操作员 + 同套餐 + 同地区 + 同一批凭据 → 直接返回原批次
+	fp := batchFingerprint(operator, plan, payCountry, cleaned)
 	if existing, err := db.FindRecentAdminRechargeBatchByFingerprint(fp, batchRechargeDedupWindowSec); err == nil && existing != "" {
 		c.JSON(http.StatusOK, gin.H{
 			"batch_id": existing,
@@ -376,16 +394,17 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 			Status:          itemStatusPending,
 			Message:         "等待处理",
 		})
-		jobs = append(jobs, batchRechargeJob{seq: i + 1, clientRequestID: crid, cred: cred})
+		jobs = append(jobs, batchRechargeJob{seq: i + 1, clientRequestID: crid, cred: cred, paymentCountry: payCountry})
 	}
 
 	batch := db.AdminRechargeBatch{
-		BatchID:  batchID,
-		Operator: operator,
-		Source:   "admin",
-		Plan:     plan,
-		Total:    len(items),
-		Status:   batchStatusRunning,
+		BatchID:        batchID,
+		Operator:       operator,
+		Source:         "admin",
+		Plan:           plan,
+		PaymentCountry: payCountry,
+		Total:          len(items),
+		Status:         batchStatusRunning,
 	}
 	if err := db.CreateAdminRechargeBatch(batch, fp, items); err != nil {
 		log.Printf("[batch-recharge] create batch failed: %v", err)
@@ -395,7 +414,7 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 
 	// 审计：只记聚合信息，不含 session / 邮箱密码 / 完整 CDK 码
 	auditAdmin(c, "admin_batch_recharge_create",
-		fmt.Sprintf("batch=%s plan=%s count=%d fee_usd=%.2f", batchID, plan, len(items), needUSD))
+		fmt.Sprintf("batch=%s plan=%s region=%s count=%d fee_usd=%.2f", batchID, plan, regionOrDefault(payCountry), len(items), needUSD))
 
 	go runBatchRecharge(batchID, plan, operator, jobs)
 
@@ -403,6 +422,7 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		"batch_id":          batchID,
 		"total":             len(items),
 		"plan":              plan,
+		"payment_country":   payCountry,
 		"estimated_fee_usd": needUSD,
 		"status":            batchStatusRunning,
 	})
@@ -722,6 +742,14 @@ func runBatchRecharge(batchID, plan, operator string, jobs []batchRechargeJob) {
 			go func() {
 				defer wg.Done()
 				defer func() { <-sem }()
+				// 子协程里的 panic 不会被 runBatchRecharge 外层 recover 接住，
+				// 会直接带崩整个进程（在途批次的凭据只在内存里，全丢）。
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[batch-recharge] panic in job seq=%d crid=%s: %v", job.seq, job.clientRequestID, r)
+						patchItem(job.clientRequestID, itemStatusUnknown, "处理异常，结果未知，请与上游核对")
+					}
+				}()
 				if aborted.Load() {
 					patchItem(job.clientRequestID, itemStatusFailed, "批次已中止，未提交")
 					return
@@ -826,7 +854,7 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 	if code == "" {
 		// 1) 发码：count=1，单次超时最多丢一张码的服务费（管理端路径）
 		patchItem(job.clientRequestID, itemStatusIssuing, "购买内部凭证…")
-		issued, err := cli.IssueCDKs(ctx, plan, 1, "brc-issue-"+job.clientRequestID)
+		issued, err := cli.IssueCDKs(ctx, plan, 1, "brc-issue-"+job.clientRequestID, batchIssuePrefs(job.paymentCountry)...)
 		if err != nil {
 			if errorCodeOf(err) == "INSUFFICIENT_BALANCE" {
 				job.terminal = true
@@ -845,7 +873,7 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 			prefix = code[:14]
 		}
 		// 落本站码库，保证即使本条失败，这张码也能在 CDK 页面被找回复用
-		if err := db.SaveCardplatformCDKCodeForAccount(one.ID, code, prefix, one.Plan, one.FeeAmountMinor, "unused", primaryCardAccountID()); err != nil {
+		if err := db.SaveCardplatformCDKCodeForAccount(one.ID, code, prefix, one.Plan, one.FeeAmountMinor, "unused", primaryCardAccountID(), job.paymentCountry); err != nil {
 			log.Printf("[batch-recharge] save cdk failed seq=%d: %v", job.seq, err)
 		}
 	} else {
@@ -1071,4 +1099,22 @@ func ResumeInFlightBatchRecharges(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// batchIssuePrefs 批量自动发码的偏好：本站选卡配置 + 付款地区，与单张发码路径一致。
+// 没有选卡配置但指定了地区时也必须带上 pref，否则会静默退回菲律宾。
+func batchIssuePrefs(country string) []cardplatform.IssueCardPref {
+	pref, hasSitePref := issuePrefFromSite()
+	if !hasSitePref && country == "" {
+		return nil
+	}
+	pref.PaymentCountry = country
+	return []cardplatform.IssueCardPref{pref}
+}
+
+func regionOrDefault(country string) string {
+	if country == "" {
+		return "default(PH)"
+	}
+	return country
 }

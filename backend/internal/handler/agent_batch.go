@@ -126,7 +126,7 @@ func AgentBatchCreate(c *gin.Context) {
 	// 两种情况都复用 admin_recharge_batches.fingerprint 这一列。
 	operator := fmt.Sprintf("agent:%d", agentID)
 	idemKey := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
-	fp := batchFingerprint(operator, plan, creds)
+	fp := batchFingerprint(operator, plan, "", creds)
 	window := batchRechargeDedupWindowSec
 	if idemKey != "" {
 		sum := sha256.Sum256([]byte(fmt.Sprintf("idem|%d|%s", agentID, idemKey)))

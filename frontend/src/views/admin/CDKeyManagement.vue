@@ -430,6 +430,7 @@ import { copyToClipboard } from '../../lib/clipboard'
 import { useMaxWidth } from '../../lib/media'
 import { isCardAttachPlan } from '../../lib/plan'
 import { AGENT_ENABLED } from '../../lib/features'
+import { parsePaymentRegions, regionLabel, type PaymentRegion } from '../../lib/region'
 
 const RECENT_KEY = 'cdk_recent_issued_v1'
 /** 浏览器兜底缓存（历史本机数据）；主存储已改为服务器 SQLite */
@@ -480,13 +481,7 @@ const form = reactive({
   payment_country: '',
 })
 // 地区清单只认卡台下发的 payment_regions，本站不写死。
-const paymentRegions = ref<Array<{ country: string; currency: string }>>([])
-const REGION_NAMES: Record<string, string> = {
-  PH: '菲律宾', US: '美国', JP: '日本', CL: '智利', EG: '埃及', IN: '印度', KR: '韩国', NG: '尼日利亚', TR: '土耳其',
-}
-function regionLabel(code: string): string {
-  return REGION_NAMES[code] || code
-}
+const paymentRegions = ref<PaymentRegion[]>([])
 function cdkRegionLabel(country: unknown): string {
   if (country == null) return '待同步'
   const code = String(country).trim().toUpperCase()
@@ -1389,11 +1384,7 @@ async function loadMeta() {
       plans.value = d.plans || {}
       // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里拿到什么就显示什么
       planRegistry.value = d.registry || []
-      paymentRegions.value = Array.isArray(d.payment_regions)
-        ? d.payment_regions
-            .map((r: any) => ({ country: String(r.country || ''), currency: String(r.currency || '') }))
-            .filter((r: { country: string; currency: string }) => r.country && r.currency)
-        : []
+      paymentRegions.value = parsePaymentRegions(d.payment_regions)
       // 卡台不再下发某个地区时，把已选中的收回到「默认」。
       if (form.payment_country && !paymentRegions.value.some((r) => r.country === form.payment_country)) {
         form.payment_country = directProduct.value === 'x' ? 'JP' : ''

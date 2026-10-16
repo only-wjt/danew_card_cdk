@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -14,28 +12,9 @@ import (
 	"github.com/danew/cdk-recharge-system/internal/xmember"
 )
 
-var (
-	xPubMu   sync.Mutex
-	xPubHits = map[string][]time.Time{}
-)
-
 func xPublicAllowed(ip string) bool {
-	xPubMu.Lock()
-	defer xPubMu.Unlock()
-	now := time.Now()
-	cut := now.Add(-time.Minute)
-	hits := xPubHits[ip][:0]
-	for _, t := range xPubHits[ip] {
-		if t.After(cut) {
-			hits = append(hits, t)
-		}
-	}
-	if len(hits) >= 30 {
-		xPubHits[ip] = hits
-		return false
-	}
-	xPubHits[ip] = append(hits, now)
-	return true
+	ok, _ := xPublicLimiter.allow(ip, 1)
+	return ok
 }
 
 func PublicXPreview(c *gin.Context) {

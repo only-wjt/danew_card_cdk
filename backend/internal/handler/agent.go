@@ -156,7 +156,7 @@ func AgentLogin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	rateKey := c.ClientIP() + "|agent|" + strings.ToLower(strings.TrimSpace(req.Username))
+	rateKey := loginRateKey(c.ClientIP()+"|agent", req.Username)
 	if ok, wait := loginAllowed(rateKey); !ok {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf("尝试次数过多，请 %d 分钟后再试", int(wait.Minutes())+1),
@@ -615,7 +615,7 @@ func submitAgentRecharge(c *gin.Context, operator string, agentID int64, source,
 		return nil, http.StatusBadRequest, fmt.Errorf("缺少 cdk_code")
 	}
 	cleaned := []batchRechargeCredential{cred}
-	fp := batchFingerprint(operator, plan, cleaned)
+	fp := batchFingerprint(operator, plan, "", cleaned)
 	if existing, err := db.FindRecentAdminRechargeBatchByFingerprint(fp, batchRechargeDedupWindowSec); err == nil && existing != "" {
 		crid := existing + "-001"
 		if rec, err := db.GetAgentRechargeItem(agentID, crid); err == nil {

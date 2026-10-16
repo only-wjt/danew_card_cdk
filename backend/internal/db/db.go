@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -369,6 +370,18 @@ func createTables() error {
 	}
 	if err := migrateSiteDualBindSchema(); err != nil {
 		return fmt.Errorf("migrate dual-bind schema: %w", err)
+	}
+	if err := migrateAdminRechargeBatchRegionCol(); err != nil {
+		return fmt.Errorf("migrate batch recharge region: %w", err)
+	}
+	if err := migrateAgentExchangeClaim(); err != nil {
+		return fmt.Errorf("migrate agent exchange claim: %w", err)
+	}
+	if err := migrateSealCDKSessions(); err != nil {
+		log.Printf("migrateSealCDKSessions: %v", err)
+	}
+	if err := migrateSealAdminRechargeCreds(); err != nil {
+		log.Printf("migrateSealAdminRechargeCreds: %v", err)
 	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
@@ -884,6 +897,10 @@ func BindCDKSession(cdkCode, redemptionToken, sessionPayload string) error {
 	if sess == "" {
 		return nil
 	}
+	sess, err := SealSecret(sess)
+	if err != nil {
+		return err
+	}
 	// 优先已知码
 	if code != "" {
 		_, err := DB.Exec(`
@@ -936,7 +953,7 @@ func GetSessionByCDK(cdkCode string) (string, error) {
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	return sess, err
+	return OpenSecret(sess), err
 }
 
 // CDKBinding 本地码 ↔ token ↔ session 绑定（公开兑换进度/账单依赖）
@@ -968,6 +985,7 @@ func GetBindingByCDK(cdkCode string) (*CDKBinding, error) {
 	if err != nil {
 		return nil, err
 	}
+	b.SessionPayload = OpenSecret(b.SessionPayload)
 	return &b, nil
 }
 
@@ -1125,6 +1143,7 @@ func SaveCardplatformCDKCodeForAccount(upstreamID int64, code, prefix, plan stri
 }
 
 // UpdateCardplatformCDKStatus 按上游 id 更新本站缓存的状态（禁用/解禁后刷新列表）。
+// 本站 DN- 码的 upstream_id 恒为 0，调用方须改用 UpdateCardplatformCDKStatusByID。
 func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
 	if DB == nil || upstreamID == 0 {
 		return nil
@@ -1134,6 +1153,19 @@ func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
 		return nil
 	}
 	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET status = ? WHERE upstream_id = ?`, status, upstreamID)
+	return err
+}
+
+// UpdateCardplatformCDKStatusByID 按本表主键更新状态（本站 DN- 码必须走这里）。
+func UpdateCardplatformCDKStatusByID(id int64, status string) error {
+	if DB == nil || id <= 0 {
+		return nil
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "" {
+		return nil
+	}
+	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET status = ? WHERE id = ?`, status, id)
 	return err
 }
 
@@ -1554,15 +1586,73 @@ func AgentCDKAlreadyExchanged(codeHash string) bool {
 	return n > 0
 }
 
-func RecordAgentCDKExchange(oldHash string, oldID, newID int64, oldPrefix, newPrefix, plan string, orderID int64, orderStatus, ip string) error {
+// ErrExchangeClaimed 该旧码已有换码记录（进行中或已完成）。
+var ErrExchangeClaimed = errors.New("cdk exchange already claimed")
+
+// ClaimAgentCDKExchange 换码前先占位：old_code_hash 唯一，并发请求只有一个能拿到。
+func ClaimAgentCDKExchange(oldHash, ip string) error {
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
 	_, err := DB.Exec(`
-		INSERT INTO agent_cdk_exchanges
-		(old_code_hash, old_upstream_id, new_upstream_id, old_code_prefix, new_code_prefix, plan, order_id, order_status, ip, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`, oldHash, oldID, newID, oldPrefix, newPrefix, plan, orderID, orderStatus, ip)
+		INSERT INTO agent_cdk_exchanges (old_code_hash, status, ip, created_at)
+		VALUES (?, 'pending', ?, CURRENT_TIMESTAMP)
+	`, oldHash, ip)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
+		return ErrExchangeClaimed
+	}
+	return err
+}
+
+// ReleaseAgentCDKExchange 换码未完成时撤销占位，允许稍后重试。已完成的记录不会被删。
+func ReleaseAgentCDKExchange(oldHash string) {
+	if DB == nil {
+		return
+	}
+	_, _ = DB.Exec(`DELETE FROM agent_cdk_exchanges WHERE old_code_hash = ? AND status = 'pending'`, oldHash)
+}
+
+// CompleteAgentCDKExchange 新码发出后补全占位行。
+func CompleteAgentCDKExchange(oldHash string, oldID, newID int64, oldPrefix, newPrefix, plan string, orderID int64, orderStatus string) error {
+	if DB == nil {
+		return fmt.Errorf("db not init")
+	}
+	_, err := DB.Exec(`
+		UPDATE agent_cdk_exchanges
+		SET status = 'done', old_upstream_id = ?, new_upstream_id = ?, old_code_prefix = ?, new_code_prefix = ?,
+		    plan = ?, order_id = ?, order_status = ?
+		WHERE old_code_hash = ?
+	`, oldID, newID, oldPrefix, newPrefix, plan, orderID, orderStatus, oldHash)
+	return err
+}
+
+// migrateAgentExchangeClaim 加 status 列与 old_code_hash 唯一索引。
+// 历史上并发换出的重复行保留（改名避开唯一约束），便于对账。
+func migrateAgentExchangeClaim() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('agent_cdk_exchanges') WHERE name='status'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := DB.Exec(`ALTER TABLE agent_cdk_exchanges ADD COLUMN status TEXT DEFAULT 'done'`); err != nil {
+			return err
+		}
+	}
+	res, err := DB.Exec(`
+		UPDATE agent_cdk_exchanges
+		SET old_code_hash = old_code_hash || ':dup:' || id
+		WHERE id NOT IN (SELECT MIN(id) FROM agent_cdk_exchanges GROUP BY old_code_hash)
+	`)
+	if err != nil {
+		return err
+	}
+	if dup, _ := res.RowsAffected(); dup > 0 {
+		log.Printf("⚠ agent_cdk_exchanges: 发现 %d 条重复换码记录（同一旧码换出多张新码），已标记 :dup:，请对账", dup)
+	}
+	_, err = DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_ex_old_hash_uniq ON agent_cdk_exchanges(old_code_hash)`)
 	return err
 }
 
@@ -1891,13 +1981,15 @@ type AdminRechargeBatch struct {
 	AgentName   string `json:"agent_name,omitempty"`
 	Source      string `json:"source,omitempty"`
 	Plan        string `json:"plan"`
-	Total       int    `json:"total"`
-	Success     int    `json:"success"`
-	Failed      int    `json:"failed"`
-	Status      string `json:"status"`
-	Message     string `json:"message"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
+	// PaymentCountry 自动发码的付款地区；空 = 默认（菲律宾）或代理路径（地区随码）
+	PaymentCountry string `json:"payment_country"`
+	Total          int    `json:"total"`
+	Success        int    `json:"success"`
+	Failed         int    `json:"failed"`
+	Status         string `json:"status"`
+	Message        string `json:"message"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // AdminRechargeItem 批次内一条充值明细。
@@ -1957,6 +2049,9 @@ func scanAdminRechargeItemExport(s interface{ Scan(...any) error }) (AdminRechar
 		&it.AccountEmail, &it.CDKCode, &it.RedemptionToken,
 		&it.UpstreamOrderID, &it.Status, &it.Message, &it.UpdatedAt,
 		&it.GptPassword, &it.EmailPassword, &it.Session)
+	it.GptPassword = OpenSecret(it.GptPassword)
+	it.EmailPassword = OpenSecret(it.EmailPassword)
+	it.Session = OpenSecret(it.Session)
 	return it, err
 }
 
@@ -1972,9 +2067,9 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	defer func() { _ = tx.Rollback() }()
 
 	if _, err := tx.Exec(`
-		INSERT INTO admin_recharge_batches (batch_id, operator, agent_user_id, source, plan, total, status, fingerprint, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-	`, b.BatchID, b.Operator, b.AgentUserID, nullIfEmpty(b.Source), b.Plan, b.Total, b.Status, fingerprint); err != nil {
+		INSERT INTO admin_recharge_batches (batch_id, operator, agent_user_id, source, plan, payment_country, total, status, fingerprint, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+	`, b.BatchID, b.Operator, b.AgentUserID, nullIfEmpty(b.Source), b.Plan, b.PaymentCountry, b.Total, b.Status, fingerprint); err != nil {
 		return err
 	}
 	stmt, err := tx.Prepare(`
@@ -1988,8 +2083,20 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	}
 	defer stmt.Close()
 	for _, it := range items {
+		gptPw, err := SealSecret(it.GptPassword)
+		if err != nil {
+			return err
+		}
+		mailPw, err := SealSecret(it.EmailPassword)
+		if err != nil {
+			return err
+		}
+		sess, err := SealSecret(it.Session)
+		if err != nil {
+			return err
+		}
 		if _, err := stmt.Exec(it.BatchID, it.Seq, it.ClientRequestID, it.ClientReference, it.Plan,
-			it.CredMode, it.AccountEmail, it.GptPassword, it.EmailPassword, it.Session, it.SessionHash,
+			it.CredMode, it.AccountEmail, gptPw, mailPw, sess, it.SessionHash,
 			nullIfEmpty(it.CDKCode), it.Status, it.Message); err != nil {
 			return err
 		}
@@ -1998,7 +2105,7 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 			if !ok {
 				return fmt.Errorf("cdk not found: %s", code)
 			}
-			if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET status = 'reserved' WHERE upstream_id = ?`, row.UpstreamID); err != nil {
+			if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET status = 'reserved' WHERE id = ?`, row.ID); err != nil {
 				return err
 			}
 		}
@@ -2038,10 +2145,10 @@ func GetAdminRechargeBatch(batchID string) (*AdminRechargeBatch, error) {
 	}
 	var b AdminRechargeBatch
 	err := DB.QueryRow(`
-		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), total,
+		SELECT batch_id, COALESCE(operator,''), COALESCE(plan,''), COALESCE(payment_country,''), total,
 		       COALESCE(status,''), COALESCE(message,''), COALESCE(created_at,''), COALESCE(updated_at,'')
 		FROM admin_recharge_batches WHERE batch_id = ?
-	`, batchID).Scan(&b.BatchID, &b.Operator, &b.Plan, &b.Total, &b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt)
+	`, batchID).Scan(&b.BatchID, &b.Operator, &b.Plan, &b.PaymentCountry, &b.Total, &b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -2085,7 +2192,7 @@ func ListAdminRechargeBatches(f AdminBatchFilter) ([]AdminRechargeBatch, error) 
 	rows, err := DB.Query(`
 		SELECT b.batch_id, COALESCE(b.operator,''), COALESCE(b.agent_user_id,0),
 		       COALESCE(a.display_name, a.username, ''),
-		       COALESCE(b.source,''), COALESCE(b.plan,''), b.total,
+		       COALESCE(b.source,''), COALESCE(b.plan,''), COALESCE(b.payment_country,''), b.total,
 		       COALESCE(b.status,''), COALESCE(b.message,''), COALESCE(b.created_at,''), COALESCE(b.updated_at,''),
 		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'success'), 0),
 		       COALESCE((SELECT COUNT(*) FROM admin_recharge_items i WHERE i.batch_id = b.batch_id AND i.status = 'failed'), 0)
@@ -2101,7 +2208,7 @@ func ListAdminRechargeBatches(f AdminBatchFilter) ([]AdminRechargeBatch, error) 
 	out := make([]AdminRechargeBatch, 0, limit)
 	for rows.Next() {
 		var b AdminRechargeBatch
-		if err := rows.Scan(&b.BatchID, &b.Operator, &b.AgentUserID, &b.AgentName, &b.Source, &b.Plan, &b.Total,
+		if err := rows.Scan(&b.BatchID, &b.Operator, &b.AgentUserID, &b.AgentName, &b.Source, &b.Plan, &b.PaymentCountry, &b.Total,
 			&b.Status, &b.Message, &b.CreatedAt, &b.UpdatedAt, &b.Success, &b.Failed); err != nil {
 			return nil, err
 		}

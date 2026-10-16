@@ -33,6 +33,21 @@
           </div>
           <p v-if="planLoadError" class="text-xs text-warn">{{ planLoadError }}</p>
           <p class="text-xs text-subtle">{{ t('batchRecharge.planHint') }}</p>
+          <!-- 地区清单只认卡台下发；主台不支持付款地区时清单为空，整块隐藏 -->
+          <template v-if="paymentRegions.length">
+            <label class="mt-2">{{ t('batchRecharge.regionLabel') }}</label>
+            <!-- Element Plus 不把空字符串当「已选中」，placeholder 写明不选就是菲律宾 -->
+            <el-select v-model="paymentCountry" style="width: 200px" :placeholder="t('batchRecharge.regionDefault')">
+              <el-option :label="t('batchRecharge.regionDefault')" value="" />
+              <el-option
+                v-for="r in paymentRegions"
+                :key="r.country"
+                :label="`${regionLabel(r.country)} (${r.currency})`"
+                :value="r.country"
+              />
+            </el-select>
+            <p class="text-xs text-subtle">{{ t('batchRecharge.regionHint') }}</p>
+          </template>
         </div>
 
         <div class="form-group">
@@ -188,7 +203,10 @@
             </tr>
             <tr v-for="b in batches" :key="b.batch_id">
               <td class="mono">{{ b.batch_id }}</td>
-              <td>{{ planDisplayName(b.plan) }}</td>
+              <td>
+                {{ planDisplayName(b.plan) }}
+                <span v-if="b.payment_country" class="pill pill-info ml-1">{{ regionLabel(b.payment_country) }}</span>
+              </td>
               <td class="num">{{ b.total }}</td>
               <td class="num stat-success">{{ b.success ?? 0 }}</td>
               <td class="num stat-failed">{{ b.failed ?? 0 }}</td>
@@ -330,6 +348,10 @@
             <dt>{{ t('batchRecharge.confirmCount') }}</dt>
             <dd>{{ itemCount }}</dd>
           </div>
+          <div v-if="paymentRegions.length">
+            <dt>{{ t('batchRecharge.regionLabel') }}</dt>
+            <dd>{{ batchRegionText(paymentCountry) }}</dd>
+          </div>
           <div>
             <dt>{{ t('batchRecharge.confirmUnitFee') }}</dt>
             <dd>{{ usd(DISPLAY_FEE_MINOR) }}</dd>
@@ -359,6 +381,7 @@ import { useI18n } from 'vue-i18n'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { planLabel } from '../../lib/plan'
+import { parsePaymentRegions, regionLabel, type PaymentRegion } from '../../lib/region'
 import { AGENT_ENABLED } from '../../lib/features'
 import {
   parseMailboxLines,
@@ -399,6 +422,7 @@ interface BatchRow {
   agent_user_id?: number
   agent_name?: string
   plan: string
+  payment_country?: string
   total: number
   success?: number
   failed?: number
@@ -437,6 +461,13 @@ interface ResubmitRow {
 
 const plan = ref('plus')
 const planRegistry = ref<SellablePlan[]>([])
+const paymentRegions = ref<PaymentRegion[]>([])
+/** 空 = 卡台默认（菲律宾） */
+const paymentCountry = ref('')
+
+function batchRegionText(code: string): string {
+  return code ? `${regionLabel(code)} (${code})` : t('batchRecharge.regionDefault')
+}
 const planLoadError = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
 const mailboxText = ref('')
@@ -702,6 +733,7 @@ async function submitBatch() {
       body: JSON.stringify({
         plan: plan.value,
         funding_confirmed: fundingConfirmed.value,
+        payment_country: paymentCountry.value,
         items: buildItems(),
       }),
     })
@@ -757,8 +789,15 @@ async function loadPlans() {
     const d = await r.json().catch(() => ({}))
     if (!r.ok) {
       planRegistry.value = []
+      paymentRegions.value = []
+      paymentCountry.value = ''
       planLoadError.value = d.error || d.msg || t('batchRecharge.planLoadFailed')
       return
+    }
+    paymentRegions.value = parsePaymentRegions(d.payment_regions)
+    // 卡台不再下发某个地区时，把已选中的收回到默认
+    if (paymentCountry.value && !paymentRegions.value.some((r) => r.country === paymentCountry.value)) {
+      paymentCountry.value = ''
     }
     const rows = Array.isArray(d.registry) ? d.registry : []
     planRegistry.value = rows
