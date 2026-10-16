@@ -2,11 +2,11 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
@@ -129,10 +129,23 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		return
 	}
 	codeHash := db.HashCDKCode(code)
-	if db.AgentCDKAlreadyExchanged(codeHash) {
-		c.JSON(http.StatusConflict, gin.H{"error": "该卡密已换过新码，不可重复兑换"})
+	// 先占位再做任何上游操作：并发请求同一旧码时只有一个能继续，其余 409。
+	if err := db.ClaimAgentCDKExchange(codeHash, ip); err != nil {
+		if errors.Is(err, db.ErrExchangeClaimed) {
+			c.JSON(http.StatusConflict, gin.H{"error": "该卡密已换过新码或正在换码，不可重复兑换"})
+			return
+		}
+		log.Printf("[agent-exchange] claim failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "系统错误，请稍后重试"})
 		return
 	}
+	// 未走到「新码已发出」之前的任何退出都撤销占位，允许重试。
+	issued := false
+	defer func() {
+		if !issued {
+			db.ReleaseAgentCDKExchange(codeHash)
+		}
+	}()
 
 	upstreamID, plan, prefix, localStatus, ok := db.LookupStoredCDKByCode(code)
 	if !ok || upstreamID <= 0 {
@@ -221,7 +234,16 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		issuePrefs = append(issuePrefs, pref)
 	}
 
-	idem := "agent-swap-" + codeHash[:16] + "-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	// 先禁用旧码，再发新码：禁用失败就不发，避免新旧码同时可用。
+	if err := cli.DisableCDK(c.Request.Context(), upstreamID); err != nil {
+		log.Printf("[agent-exchange] disable old cdk %d failed: %v", upstreamID, err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "旧卡密停用失败，未发新码，请稍后重试"})
+		return
+	}
+	_ = db.UpdateCardplatformCDKStatus(upstreamID, "disabled")
+
+	// 幂等键只跟旧码绑定：重试同一旧码时卡台返回同一张新码，不会多发。
+	idem := "agent-swap-" + codeHash
 	var res *cardplatform.IssueCDKResult
 	if len(issuePrefs) > 0 {
 		res, err = cli.IssueCDKs(c.Request.Context(), plan, 1, idem, issuePrefs[0])
@@ -229,13 +251,16 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		res, err = cli.IssueCDKs(c.Request.Context(), plan, 1, idem)
 	}
 	if err != nil {
+		// 旧码已停用、新码未发出：撤销占位后用户可重试，幂等键保证不会重复发码。
+		log.Printf("[agent-exchange] issue new cdk for old %d failed (old disabled): %v", upstreamID, err)
 		writeCardErr(c, err)
 		return
 	}
 	if res == nil || len(res.Issued) == 0 || strings.TrimSpace(res.Issued[0].Code) == "" {
-		c.JSON(http.StatusBadGateway, gin.H{"error": "发新码失败：卡台未返回完整码"})
+		c.JSON(http.StatusBadGateway, gin.H{"error": "发新码失败：卡台未返回完整码，请稍后重试"})
 		return
 	}
+	issued = true
 	newIt := res.Issued[0]
 	newCode := strings.TrimSpace(newIt.Code)
 	newPrefix := strings.TrimSpace(newIt.CodePrefix)
@@ -244,15 +269,9 @@ func PublicAgentCDKExchange(c *gin.Context) {
 	}
 	_ = db.SaveCardplatformCDKCodeForAccount(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor, "unused", primaryCardAccountID())
 
-	// 禁用旧码（防再次兑换）
-	if err := cli.DisableCDK(c.Request.Context(), upstreamID); err != nil {
-		log.Printf("[agent-exchange] disable old cdk %d failed: %v (new already issued id=%d)", upstreamID, err, newIt.ID)
-		// 不回滚新码；记录警告
-	} else {
-		_ = db.UpdateCardplatformCDKStatus(upstreamID, "disabled")
+	if err := db.CompleteAgentCDKExchange(codeHash, upstreamID, newIt.ID, prefix, newPrefix, plan, orderID, status); err != nil {
+		log.Printf("[agent-exchange] complete record failed old=%d new=%d: %v", upstreamID, newIt.ID, err)
 	}
-
-	_ = db.RecordAgentCDKExchange(codeHash, upstreamID, newIt.ID, prefix, newPrefix, plan, orderID, status, ip)
 	db.WriteAudit("agent-swap", "agent_cdk_exchange",
 		"old="+strconv.FormatInt(upstreamID, 10)+" new="+strconv.FormatInt(newIt.ID, 10)+" plan="+plan+" order="+strconv.FormatInt(orderID, 10),
 		ip)

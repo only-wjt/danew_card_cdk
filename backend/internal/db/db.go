@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -369,6 +370,9 @@ func createTables() error {
 	}
 	if err := migrateSiteDualBindSchema(); err != nil {
 		return fmt.Errorf("migrate dual-bind schema: %w", err)
+	}
+	if err := migrateAgentExchangeClaim(); err != nil {
+		return fmt.Errorf("migrate agent exchange claim: %w", err)
 	}
 	if err := migrateSealCDKSessions(); err != nil {
 		log.Printf("migrateSealCDKSessions: %v", err)
@@ -1565,15 +1569,73 @@ func AgentCDKAlreadyExchanged(codeHash string) bool {
 	return n > 0
 }
 
-func RecordAgentCDKExchange(oldHash string, oldID, newID int64, oldPrefix, newPrefix, plan string, orderID int64, orderStatus, ip string) error {
+// ErrExchangeClaimed 该旧码已有换码记录（进行中或已完成）。
+var ErrExchangeClaimed = errors.New("cdk exchange already claimed")
+
+// ClaimAgentCDKExchange 换码前先占位：old_code_hash 唯一，并发请求只有一个能拿到。
+func ClaimAgentCDKExchange(oldHash, ip string) error {
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
 	_, err := DB.Exec(`
-		INSERT INTO agent_cdk_exchanges
-		(old_code_hash, old_upstream_id, new_upstream_id, old_code_prefix, new_code_prefix, plan, order_id, order_status, ip, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-	`, oldHash, oldID, newID, oldPrefix, newPrefix, plan, orderID, orderStatus, ip)
+		INSERT INTO agent_cdk_exchanges (old_code_hash, status, ip, created_at)
+		VALUES (?, 'pending', ?, CURRENT_TIMESTAMP)
+	`, oldHash, ip)
+	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
+		return ErrExchangeClaimed
+	}
+	return err
+}
+
+// ReleaseAgentCDKExchange 换码未完成时撤销占位，允许稍后重试。已完成的记录不会被删。
+func ReleaseAgentCDKExchange(oldHash string) {
+	if DB == nil {
+		return
+	}
+	_, _ = DB.Exec(`DELETE FROM agent_cdk_exchanges WHERE old_code_hash = ? AND status = 'pending'`, oldHash)
+}
+
+// CompleteAgentCDKExchange 新码发出后补全占位行。
+func CompleteAgentCDKExchange(oldHash string, oldID, newID int64, oldPrefix, newPrefix, plan string, orderID int64, orderStatus string) error {
+	if DB == nil {
+		return fmt.Errorf("db not init")
+	}
+	_, err := DB.Exec(`
+		UPDATE agent_cdk_exchanges
+		SET status = 'done', old_upstream_id = ?, new_upstream_id = ?, old_code_prefix = ?, new_code_prefix = ?,
+		    plan = ?, order_id = ?, order_status = ?
+		WHERE old_code_hash = ?
+	`, oldID, newID, oldPrefix, newPrefix, plan, orderID, orderStatus, oldHash)
+	return err
+}
+
+// migrateAgentExchangeClaim 加 status 列与 old_code_hash 唯一索引。
+// 历史上并发换出的重复行保留（改名避开唯一约束），便于对账。
+func migrateAgentExchangeClaim() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('agent_cdk_exchanges') WHERE name='status'`).Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		if _, err := DB.Exec(`ALTER TABLE agent_cdk_exchanges ADD COLUMN status TEXT DEFAULT 'done'`); err != nil {
+			return err
+		}
+	}
+	res, err := DB.Exec(`
+		UPDATE agent_cdk_exchanges
+		SET old_code_hash = old_code_hash || ':dup:' || id
+		WHERE id NOT IN (SELECT MIN(id) FROM agent_cdk_exchanges GROUP BY old_code_hash)
+	`)
+	if err != nil {
+		return err
+	}
+	if dup, _ := res.RowsAffected(); dup > 0 {
+		log.Printf("⚠ agent_cdk_exchanges: 发现 %d 条重复换码记录（同一旧码换出多张新码），已标记 :dup:，请对账", dup)
+	}
+	_, err = DB.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_ex_old_hash_uniq ON agent_cdk_exchanges(old_code_hash)`)
 	return err
 }
 
