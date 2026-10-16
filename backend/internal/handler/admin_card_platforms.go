@@ -422,3 +422,93 @@ func AdminGetSiteCDKBindings(c *gin.Context) {
 		"bindings": bindings,
 	})
 }
+
+// AdminReleaseSiteCDKBinding POST /api/v1/admin/card-platforms/bindings/release
+// body: { "binding_id": 123, "action": "retry" | "retire" }
+//
+// 卡在 unknown / retiring 的 binding 会让整张本站码的预览硬失败（资金安全上是对的），
+// 但此前没有解除入口，只能手工改库。这里给管理端一个受控出口：
+//
+//	retry  —— 重新走一遍上游收回（删码/退款，失败再禁用），成功则解除
+//	retire —— 不再尝试上游，直接把这张标作废（上游那张当损失）
+//
+// 只允许从 unknown / retiring 转出，不会把已核销/已退回的码改回来。
+func AdminReleaseSiteCDKBinding(c *gin.Context) {
+	var req struct {
+		BindingID int64  `json:"binding_id"`
+		Action    string `json:"action"`
+		Note      string `json:"note"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.BindingID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "binding_id required"})
+		return
+	}
+	action := strings.ToLower(strings.TrimSpace(req.Action))
+	if action != "retry" && action != "retire" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "action must be retry or retire"})
+		return
+	}
+	b, ok := db.GetSiteBindingByID(req.BindingID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "binding 不存在"})
+		return
+	}
+	switch b.Status {
+	case db.BindingStatusUnknown, db.BindingStatusRetiring:
+	default:
+		c.JSON(http.StatusConflict, gin.H{
+			"error":  "只有 unknown / retiring 状态的绑定需要人工解除",
+			"status": b.Status,
+		})
+		return
+	}
+
+	if action == "retire" {
+		// 主动放弃：上游那张码当损失，本地标作废，路由不再选它。
+		ok, err := db.UpdateBindingStatusFrom(b.ID,
+			[]string{db.BindingStatusUnknown, db.BindingStatusRetiring},
+			db.BindingStatusRetired, "管理端人工作废："+strings.TrimSpace(req.Note))
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusConflict, gin.H{"error": "状态已变化，请刷新后重试"})
+			return
+		}
+		auditAdmin(c, "site_binding_release_retire",
+			fmt.Sprintf("binding=%d code=%s note=%s", b.ID, b.SiteCode, strings.TrimSpace(req.Note)))
+		c.JSON(http.StatusOK, gin.H{"ok": true, "action": action, "status": db.BindingStatusRetired})
+		return
+	}
+
+	// retry：先认领回 retiring，再复用自动收回链路。
+	claimed, err := db.ClaimBindingForRetire(b.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if !claimed {
+		// unknown 不在自动认领的 from 列表里，先落到 retiring 再走同一条链路。
+		ok, uerr := db.UpdateBindingStatusFrom(b.ID,
+			[]string{db.BindingStatusUnknown}, db.BindingStatusRetiring, "管理端重试收回")
+		if uerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": uerr.Error()})
+			return
+		}
+		if !ok {
+			c.JSON(http.StatusConflict, gin.H{"error": "状态已变化，请刷新后重试"})
+			return
+		}
+	}
+	provider.RetireOne(c.Request.Context(), b)
+
+	after, okAfter := db.GetSiteBindingByID(b.ID)
+	final := b.Status
+	if okAfter {
+		final = after.Status
+	}
+	auditAdmin(c, "site_binding_release_retry",
+		fmt.Sprintf("binding=%d code=%s result=%s", b.ID, b.SiteCode, final))
+	c.JSON(http.StatusOK, gin.H{"ok": true, "action": action, "status": final})
+}

@@ -21,9 +21,11 @@ func TestReconcileCDKAfterItemTerminalStatuses(t *testing.T) {
 			if err := SaveCardplatformCDKCode(7001, code, "CDK-RECON", "plus", 100); err != nil {
 				t.Fatalf("save cdk: %v", err)
 			}
-			// 代理提交时码是 reserved；终态再按上表流转
-			if err := ReserveAgentCDK(code); err != nil {
-				t.Fatalf("reserve: %v", err)
+			// 代理提交时码是 reserved（走 CreateAdminRechargeBatch 里的真实占位）；
+			// 明细落终态后再按上表流转
+			reserveViaBatch(t, code, "recon-"+c.itemStatus, c.itemStatus)
+			if got := cdkStatusByCode(code); got != "reserved" {
+				t.Fatalf("reserve via batch: status=%q, want reserved", got)
 			}
 			ReconcileCDKAfterItemTerminal(code, c.itemStatus)
 			row, ok := LookupStoredCDKDetail(code)

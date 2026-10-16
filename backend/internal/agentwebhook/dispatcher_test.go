@@ -19,12 +19,12 @@ func TestValidateURLBlocksInternalTargets(t *testing.T) {
 		"http://[::1]/hook",
 		"http://0.0.0.0/hook",
 		"http://100.64.1.1/hook", // CGNAT
-		"ftp://example.com/hook",  // 协议不支持
-		"http://[fd00::1]/hook",   // IPv6 ULA
-		"http://198.18.0.242/cb",  // 基准测试保留段，也是常见 fake-ip 段
-		"http://192.0.0.1/hook",   // IETF 协议分配段
-		"http://224.0.0.1/hook",   // 组播
-		"https://[fe80::1]/hook",  // IPv6 链路本地
+		"ftp://example.com/hook", // 协议不支持
+		"http://[fd00::1]/hook",  // IPv6 ULA
+		"http://198.18.0.242/cb", // 基准测试保留段，也是常见 fake-ip 段
+		"http://192.0.0.1/hook",  // IETF 协议分配段
+		"http://224.0.0.1/hook",  // 组播
+		"https://[fe80::1]/hook", // IPv6 链路本地
 	}
 	for _, raw := range blocked {
 		if err := ValidateURL(raw); err == nil {

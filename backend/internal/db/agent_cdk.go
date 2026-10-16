@@ -452,26 +452,10 @@ func ValidateAgentCDKBatch(agentUserID int64, plan string, lines []string) Agent
 	return out
 }
 
-// ReserveAgentCDK 将卡密标为 reserved（创建批次时调用）。
-// 条件更新：只从「未使用」转入 reserved。上层校验是只读的，并发提交同一张码时
-// 两边都会通过校验，真正能改到行的只有一个，另一个必须失败（见 C6）。
-func ReserveAgentCDK(code string) error {
-	row, ok := LookupStoredCDKDetail(code)
-	if !ok {
-		return ErrCDKNotFound
-	}
-	res, err := DB.Exec(`
-		UPDATE cardplatform_cdk_codes SET status = 'reserved'
-		WHERE id = ? AND lower(COALESCE(status,'')) IN ('', 'unused')
-	`, row.ID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n != 1 {
-		return ErrCDKUnavailable
-	}
-	return nil
-}
+// 占位不在这里：生产路径由 CreateAdminRechargeBatch 在同一个事务里对带 cdk_code
+// 的明细做条件 UPDATE（只从 ''/unused 转入 reserved），失败即整批回滚。
+// 曾经这里有个 ReserveAgentCDK 包装，但没有任何生产调用方，测试只测它本身，
+// 真正生效的那条分支反而没被覆盖，所以删掉。
 
 // CountItemsBlockingCDKRelease 统计仍在引用该卡密的明细：在途状态 + 结果未知。
 // unknown 必须人工核对，不能因为另一条失败就自动把码放回可重试。

@@ -772,11 +772,15 @@ async function runPreflightRedeem(
       // 5xx / 网关超时只说明没拿到回执，卡台可能已经在扣款；409 说明这张码已被兑换。
       // 这两种都不是失败结论，直接判 failed 会诱导操作员重试导致重复扣款 —— 改成去查真实订单。
       if (redeem.r.status >= 500 || redeem.r.status === 409) {
+        // 后端明确回了「已受理」时给出更确定的文案，否则保持通用提示。
+        const accepted =
+          redeem.data?.error_code === 'GPT_NOTIFICATION_RETRY_RESULT' ||
+          redeem.data?.redeem_accepted === true
         updateItem(item.id, {
           status: 'processing',
           email: orderEmail || email,
           cardLastFour: cardLastFour || item.cardLastFour,
-          progressMsg: '未拿到提交回执，正在查卡台结果…',
+          progressMsg: accepted ? '兑换已受理，正在查卡台结果…' : '未拿到提交回执，正在查卡台结果…',
           error: '',
         })
         startPoll(item.id, redemptionToken)

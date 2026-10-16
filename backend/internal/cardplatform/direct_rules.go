@@ -47,16 +47,16 @@ type DirectCardRule struct {
 
 // DirectCardProduct 卡台 GET /gpt-direct/card-products 条目（含未启动）。
 type DirectCardProduct struct {
-	ProductCode      string `json:"product_code"`
-	Issuer           string `json:"issuer"`
-	BIN              string `json:"bin"`
-	Label            string `json:"label"`
-	Enabled          bool   `json:"enabled"`
-	Suspended        bool   `json:"suspended"`
-	SuspendReason    string `json:"suspend_reason,omitempty"`
-	ChannelOpen      bool   `json:"channel_open"`
-	AutoOpenAllowed  bool   `json:"auto_open_allowed"`
-	Usable           bool   `json:"usable"`
+	ProductCode     string `json:"product_code"`
+	Issuer          string `json:"issuer"`
+	BIN             string `json:"bin"`
+	Label           string `json:"label"`
+	Enabled         bool   `json:"enabled"`
+	Suspended       bool   `json:"suspended"`
+	SuspendReason   string `json:"suspend_reason,omitempty"`
+	ChannelOpen     bool   `json:"channel_open"`
+	AutoOpenAllowed bool   `json:"auto_open_allowed"`
+	Usable          bool   `json:"usable"`
 }
 
 // GetDirectCardProducts GET /gpt-direct/card-products — 全量卡头及是否启动。

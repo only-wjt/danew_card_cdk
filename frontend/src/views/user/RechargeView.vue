@@ -236,6 +236,9 @@
         <!-- 结论只有一条，且以轮询到的订单状态为准：提交环节的报错不在这里回显 -->
         <div v-if="resultStatus === 'completed'" class="alert alert-success">开通完成，请到 ChatGPT 账号确认套餐。</div>
         <div v-else-if="submitRejected" class="alert alert-error">{{ submitRejected }}</div>
+        <div v-else-if="acceptedNotice" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
+          {{ acceptedNotice }}
+        </div>
         <div v-else-if="isTerminal(resultStatus)" class="alert alert-error">
           兑换未成功。请勿重复提交，可联系发码方或稍后用同一设备再查结果。
         </div>
@@ -334,6 +337,8 @@ const timeline = ref<any[]>([])
 const polling = ref(false)
 /** 提交时被卡台明确拒绝（4xx）的结论文案。5xx/网关超时不写这里：那只是没拿到回执，成败未知 */
 const submitRejected = ref('')
+/** 上游已受理但本地通知失败（503 GPT_NOTIFICATION_RETRY_RESULT）时的提示。 */
+const acceptedNotice = ref('')
 /** 轮询主动停下的原因：'' 未停 | 'timeout' 跟太久 | 'missing' 卡台查不到这笔单 */
 const pollHalted = ref<'' | 'timeout' | 'missing'>('')
 let pollTimer: any = null
@@ -636,6 +641,15 @@ const POLL_MAX_MS = 10 * 60 * 1000
  * 所以要给足窗口；一直查不到才认定卡台没收到这笔单。
  */
 const POLL_MISSING_AFTER_MS = 3 * 60 * 1000
+
+/**
+ * 上游已受理、只是本地通知没存下（后端 503 + GPT_NOTIFICATION_RETRY_RESULT）。
+ * 这类响应必须按「去查结果」处理，绝不能诱导用户重新提交。
+ */
+function isAcceptedRetry(data: any): boolean {
+  if (!data || typeof data !== 'object') return false
+  return data.error_code === 'GPT_NOTIFICATION_RETRY_RESULT' || data.redeem_accepted === true
+}
 
 function isTerminal(st: string) {
   return TERMINAL.has(String(st || '').toLowerCase())
@@ -964,6 +978,13 @@ async function doRedeem() {
     // 4xx 是卡台给出的业务结论；5xx / 网关超时只是没拿到回执，扣款可能已经在跑，一律交给轮询定论。
     if (r.status === 409) {
       // 卡密已被兑换 —— 很可能就是上一次超时的那笔，去查真实订单
+      if (!resultStatus.value) resultStatus.value = 'queued'
+    } else if (isAcceptedRetry(data)) {
+      // 上游已受理，只是本地通知没存下（503 GPT_NOTIFICATION_RETRY_RESULT）。
+      // 这是一条「已受理、别重交」的明确信号，用提示告知用户，而不是当成失败。
+      acceptedNotice.value = String(
+        data?.error || data?.message || '兑换已受理，通知保存暂时失败；请查询结果，勿重新提交兑换',
+      )
       if (!resultStatus.value) resultStatus.value = 'queued'
     } else if (!r.ok && r.status !== 202 && r.status < 500) {
       submitRejected.value = String(data?.error || data?.msg || data?.message || '卡台拒绝了本次兑换')

@@ -195,6 +195,32 @@ func FindSiteBindingByRemote(accountID int64, remoteID string) (SiteCDKBinding, 
 	return b, true
 }
 
+// GetSiteBindingByID 按主键取单条 binding（管理端人工解除用）。
+func GetSiteBindingByID(bindingID int64) (SiteCDKBinding, bool) {
+	if DB == nil || bindingID <= 0 {
+		return SiteCDKBinding{}, false
+	}
+	var b SiteCDKBinding
+	var primary int
+	err := DB.QueryRow(`
+		SELECT b.id, b.site_code_id, COALESCE(c.code,''), b.account_id, b.provider,
+		       COALESCE(b.remote_id,''), COALESCE(b.remote_code,''), COALESCE(b.remote_code_prefix,''),
+		       b.is_primary, b.status, COALESCE(b.last_error,''), COALESCE(b.created_at,''), COALESCE(b.updated_at,'')
+		FROM site_cdk_bindings b
+		JOIN cardplatform_cdk_codes c ON c.id = b.site_code_id
+		WHERE b.id = ?
+	`, bindingID).Scan(
+		&b.ID, &b.SiteCodeID, &b.SiteCode, &b.AccountID, &b.Provider,
+		&b.RemoteID, &b.RemoteCode, &b.RemoteCodePrefix, &primary,
+		&b.Status, &b.LastError, &b.CreatedAt, &b.UpdatedAt,
+	)
+	if err != nil {
+		return SiteCDKBinding{}, false
+	}
+	b.IsPrimary = primary != 0
+	return b, true
+}
+
 func scanSiteCDKBindings(rows *sql.Rows) ([]SiteCDKBinding, error) {
 	out := make([]SiteCDKBinding, 0, 2)
 	for rows.Next() {

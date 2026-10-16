@@ -155,6 +155,27 @@
                   effect="plain"
                 >
                   {{ accountName(binding.account_id) }} · {{ binding.remote_code_prefix || '无前缀' }} · {{ bindingStatusLabel(binding.status) }}
+                  <!-- unknown / retiring 会让整张码无法预览，给管理端一个受控解除入口 -->
+                  <template v-if="bindingNeedsRelease(binding.status)">
+                    <el-button
+                      link
+                      size="small"
+                      type="primary"
+                      :loading="releasingBindingId === binding.id"
+                      @click="releaseBinding(binding, 'retry')"
+                    >
+                      重试收回
+                    </el-button>
+                    <el-button
+                      link
+                      size="small"
+                      type="danger"
+                      :loading="releasingBindingId === binding.id"
+                      @click="releaseBinding(binding, 'retire')"
+                    >
+                      作废
+                    </el-button>
+                  </template>
                 </el-tag>
                 <span v-if="!item.bindings.length" class="text-xs" style="color: var(--err)">未找到绑定</span>
               </div>
@@ -458,6 +479,8 @@ const tableRef = ref<any>(null)
 const issueOpen = ref(false)
 const recentBindingsOpen = ref(false)
 const loadingRecentBindings = ref(false)
+/** 正在解除的绑定 id（0 = 空闲） */
+const releasingBindingId = ref(0)
 const recentBindings = ref<Array<{ code: string; bindings: any[]; error?: string }>>([])
 
 const plans = ref<Record<string, any>>({})
@@ -1096,6 +1119,37 @@ function codeKindType(kind: string) {
   if (k === 'site') return 'success'
   if (k === 'local_stock') return 'warning'
   return 'info'
+}
+
+/** 只有卡在 unknown / retiring 的绑定需要人工解除（它们会让整张码无法预览）。 */
+function bindingNeedsRelease(status: string) {
+  const s = String(status || '').toLowerCase()
+  return s === 'unknown' || s === 'retiring'
+}
+
+async function releaseBinding(binding: any, action: 'retry' | 'retire') {
+  if (releasingBindingId.value) return
+  const who = `${accountName(binding.account_id)} · ${binding.remote_code_prefix || '无前缀'}`
+  const label = action === 'retry' ? '重试收回（删码/退款，失败再禁用）' : '直接作废（上游那张当损失）'
+  if (!(await dialog.confirm(`对绑定「${who}」执行：${label}？`))) return
+  releasingBindingId.value = binding.id
+  try {
+    const r = await authFetch('/api/v1/admin/card-platforms/bindings/release', {
+      method: 'POST',
+      body: JSON.stringify({ binding_id: binding.id, action, note: '管理端人工解除' }),
+    })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) {
+      dialog.toast(d.error || '解除失败', 'err')
+      return
+    }
+    dialog.toast(`已解除，当前状态：${bindingStatusLabel(d.status)}`, 'ok')
+    await loadRecentBindings()
+  } catch (e: any) {
+    dialog.toast(e?.message || '解除失败', 'err')
+  } finally {
+    releasingBindingId.value = 0
+  }
 }
 
 function bindingStatusLabel(status: string) {

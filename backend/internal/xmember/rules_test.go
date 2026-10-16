@@ -19,10 +19,10 @@ func TestLimitsReadyRejectsFundingAboveWallet(t *testing.T) {
 
 func TestNormalizeHandle(t *testing.T) {
 	cases := map[string]string{
-		"@Example_User":                 "Example_User",
-		"https://x.com/example_user":    "example_user",
-		"https://twitter.com/Ab_1?s=1":  "Ab_1",
-		"  x.com/name/extra ":           "name",
+		"@Example_User":                "Example_User",
+		"https://x.com/example_user":   "example_user",
+		"https://twitter.com/Ab_1?s=1": "Ab_1",
+		"  x.com/name/extra ":          "name",
 	}
 	for in, want := range cases {
 		if got := NormalizeHandle(in); got != want {

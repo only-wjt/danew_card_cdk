@@ -380,6 +380,8 @@ func setupRoutes(r *gin.Engine) {
 			admin.PUT("/tg/plan-limits", handler.AdminSaveTGLimits)
 			admin.PUT("/card-platforms/dual-bind", handler.AdminPutDualBindConfig)
 			admin.GET("/card-platforms/bindings", handler.AdminGetSiteCDKBindings)
+			// 人工解除卡在 unknown/retiring 的绑定（否则整张码无法预览）
+			admin.POST("/card-platforms/bindings/release", handler.AdminReleaseSiteCDKBinding)
 
 			// 卡健康：同卡失败 × 邮箱归因 → 坏卡冻结
 			admin.GET("/card-health", handler.AdminListCardHealth)

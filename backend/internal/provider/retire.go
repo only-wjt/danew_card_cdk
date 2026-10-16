@@ -35,29 +35,35 @@ func RetireSiblings(ctx context.Context, siteCodeID, consumedBindingID int64) {
 			log.Printf("[retire] skip sibling binding=%d status=%s remote=%s", b.ID, b.Status, b.RemoteID)
 			continue
 		}
-		p, _, perr := ForAccount(b.AccountID)
-		if perr != nil {
-			_ = db.UpdateBindingStatus(b.ID, db.BindingStatusUnknown, perr.Error())
-			continue
-		}
-		if err := p.DeleteAndRefund(ctx, b.RemoteID); err == nil {
-			_, _ = db.UpdateBindingStatusFrom(b.ID, []string{db.BindingStatusRetiring}, db.BindingStatusRefunded, "")
-			continue
-		} else if err != ErrRefundUnsupported {
-			log.Printf("[retire] delete+refund failed binding=%d remote=%s: %v", b.ID, b.RemoteID, err)
-		}
-		if err := p.Disable(ctx, b.RemoteID); err == ErrRefundUnsupported {
-			// 上游没有作废接口（Avanfinity）：只在本站标作废，路由不会再选这张。
-			_ = db.UpdateBindingStatus(b.ID, db.BindingStatusRetired, "上游不支持作废，仅本站标记")
-			continue
-		} else if err != nil {
-			// 收不回来是钱的问题，兑换侧靠 binding 状态兜底，所以标 unknown 等人工。
-			_ = db.UpdateBindingStatus(b.ID, db.BindingStatusUnknown, err.Error())
-			log.Printf("[retire] disable failed binding=%d remote=%s: %v", b.ID, b.RemoteID, err)
-			continue
-		}
-		_ = db.UpdateBindingStatus(b.ID, db.BindingStatusRetired, "")
+		RetireOne(ctx, b)
 	}
+}
+
+// RetireOne 收回单张已认领的 binding（调用方必须已用 ClaimBindingForRetire 拿到所有权）。
+// 抽出来是为了让管理端「重试收回」能复用同一条链路。
+func RetireOne(ctx context.Context, b db.SiteCDKBinding) {
+	p, _, perr := ForAccount(b.AccountID)
+	if perr != nil {
+		_ = db.UpdateBindingStatus(b.ID, db.BindingStatusUnknown, perr.Error())
+		return
+	}
+	if err := p.DeleteAndRefund(ctx, b.RemoteID); err == nil {
+		_, _ = db.UpdateBindingStatusFrom(b.ID, []string{db.BindingStatusRetiring}, db.BindingStatusRefunded, "")
+		return
+	} else if err != ErrRefundUnsupported {
+		log.Printf("[retire] delete+refund failed binding=%d remote=%s: %v", b.ID, b.RemoteID, err)
+	}
+	if err := p.Disable(ctx, b.RemoteID); err == ErrRefundUnsupported {
+		// 上游没有作废接口（Avanfinity）：只在本站标作废，路由不会再选这张。
+		_ = db.UpdateBindingStatus(b.ID, db.BindingStatusRetired, "上游不支持作废，仅本站标记")
+		return
+	} else if err != nil {
+		// 收不回来是钱的问题，兑换侧靠 binding 状态兜底，所以标 unknown 等人工。
+		_ = db.UpdateBindingStatus(b.ID, db.BindingStatusUnknown, err.Error())
+		log.Printf("[retire] disable failed binding=%d remote=%s: %v", b.ID, b.RemoteID, err)
+		return
+	}
+	_ = db.UpdateBindingStatus(b.ID, db.BindingStatusRetired, "")
 }
 
 // MarkConsumed 记录本站码在哪台核销成功，并退役兄弟码。

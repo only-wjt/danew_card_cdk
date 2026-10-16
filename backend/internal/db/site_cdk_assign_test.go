@@ -66,9 +66,8 @@ func TestSiteCDKStatusUpdatesAreScopedToOneRow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ReserveAgentCDK(target.Code); err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
+	// 占位走真实路径；明细直接落终态，这样下面 ReleaseAgentCDK 才不被在途明细挡住
+	reserveViaBatch(t, target.Code, "scope-1", "failed")
 	if got := cdkStatusByID(target.ID); got != "reserved" {
 		t.Fatalf("target status = %q, want reserved", got)
 	}
