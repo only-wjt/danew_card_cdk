@@ -842,8 +842,10 @@ async function doPreview() {
     })
     if (!r.ok) {
       const msg = data?.error || data?.msg || data?.message || 'CDK 无效或不可用'
-      // 已兑换：尝试用本站绑定恢复进度，而不是卡在第一步
-      if (/已兑换|已使用|used|redeemed|consumed|已消耗/i.test(String(msg))) {
+      // 已兑换 / 正在兑换中：都用本站绑定恢复进度，而不是卡在第一步。
+      // 「正在兑换中」「待人工核对」是后端在结果不确定时会返回的文案，
+      // 必须一起匹配，否则用户只能看到一句话而进不去结果页。
+      if (/已兑换|已使用|正在兑换|处理中|核对|used|redeemed|consumed|已消耗/i.test(String(msg))) {
         const ok = await tryResumeByCode(cdk)
         if (ok) {
           error.value = ''

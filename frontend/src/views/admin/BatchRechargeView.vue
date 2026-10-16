@@ -275,7 +275,14 @@
         </p>
 
         <div class="flex flex-wrap items-center gap-3">
-          <button type="button" class="btn-secondary !py-1.5" :disabled="reconciling" @click="reconcile">
+          <!-- 还有明细在途时后端会 409（重试与执行协程会撞车），直接禁用，
+               别让用户点了才看到报错 -->
+          <button
+            type="button"
+            class="btn-secondary !py-1.5"
+            :disabled="reconciling || hasInFlightItems"
+            @click="reconcile"
+          >
             {{ reconciling ? t('batchRecharge.reconciling') : t('batchRecharge.reconcile') }}
           </button>
           <span class="text-xs text-muted flex-1 min-w-[220px]">{{ t('batchRecharge.reconcileHint') }}</span>
@@ -888,6 +895,11 @@ watch(
       }, POLL_INTERVAL_MS)
     }
   },
+)
+
+/** 还有明细没落终态：此时后端会拒绝重试对齐（与执行协程撞车）。 */
+const hasInFlightItems = computed(
+  () => !!detail.value && detail.value.items.some((i) => !ITEM_TERMINAL.has(i.status)),
 )
 
 async function reconcile() {
