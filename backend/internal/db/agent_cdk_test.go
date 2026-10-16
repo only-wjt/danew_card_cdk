@@ -152,6 +152,12 @@ func TestAccountEmailByCDK(t *testing.T) {
 		}
 	}
 	mk("eml-1", "failed@example.com", "failed")
+	// 失败明细落终态后卡密会被放回可重试（ReconcileCDKAfterItemTerminal → Release），
+	// 代理才能拿同一张码重新提交成新批次。占位已按 C6 改成条件更新，
+	// 不先释放的话第二张批次会因「码不可占位」被拒。
+	if err := ReleaseAgentCDK(code); err != nil {
+		t.Fatalf("release after failed batch: %v", err)
+	}
 	mk("eml-2", "ok@example.com", "success")
 
 	if got := AccountEmailByCDK(code); got != "ok@example.com" {

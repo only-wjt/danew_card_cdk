@@ -156,9 +156,14 @@ func applyCDKStatusFromWebhook(payload map[string]interface{}, eventType string,
 	}
 	if binding, ok := db.FindSiteBindingByRemote(accountID, strconv.FormatInt(cdkID, 10)); ok {
 		if st == "consumed" {
-			_ = db.UpdateBindingStatus(binding.ID, db.BindingStatusConsumed, "")
-			_ = db.UpdateCardplatformCDKStatusByRowID(binding.SiteCodeID, st)
-			_ = db.MarkSiteCDKFulfilled(binding.SiteCodeID, accountID, binding.Provider, !binding.IsPrimary, "webhook")
+			// 条件转换：webhook 与 result 轮询都会走到这里，只有第一个生效者
+			// 才记录履约信息，避免并发覆盖。兄弟码退役由 provider.MarkConsumed 负责。
+			if won, err := db.UpdateBindingStatusFrom(binding.ID,
+				[]string{db.BindingStatusUnused, db.BindingStatusRedeeming, db.BindingStatusFailed, db.BindingStatusReserved},
+				db.BindingStatusConsumed, ""); err == nil && won {
+				_ = db.UpdateCardplatformCDKStatusByRowID(binding.SiteCodeID, st)
+				_ = db.MarkSiteCDKFulfilled(binding.SiteCodeID, accountID, binding.Provider, !binding.IsPrimary, "webhook")
+			}
 		}
 		return
 	}

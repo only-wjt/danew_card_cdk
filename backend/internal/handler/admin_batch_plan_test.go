@@ -40,7 +40,7 @@ func TestBatchPlanAvailableSorted(t *testing.T) {
 	if len(got) != 2 || got[0] != "plus" || got[1] != "pro_20x_renew" {
 		t.Fatalf("got %#v", got)
 	}
-	if got := batchPlanAvailable(nil); len(got) != 3 {
+	if got := batchPlanAvailable(nil); len(got) != 4 {
 		t.Fatalf("fallback %#v", got)
 	}
 }

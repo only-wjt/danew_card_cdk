@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
@@ -83,8 +84,17 @@ func issueCDKsForAgentOrder(ctx context.Context, plan string, count int, idem st
 	return codes, nil
 }
 
+// agentOrderFulfillTimeout 单次发货的总时长上限。
+const agentOrderFulfillTimeout = 10 * time.Minute
+
 // fulfillAgentOrder 发码并划给下单代理。
+//
+// 发货一旦开始就会真的向卡台买码；用户关标签页 / 支付网关断连都不该中断它，
+// 否则码可能已发出但本站没落库。所以这里脱离请求生命周期，用自己的超时。
 func fulfillAgentOrder(ctx context.Context, order db.AgentOrder) (db.AgentOrder, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentOrderFulfillTimeout)
+	defer cancel()
+
 	updated, err := db.UpdateAgentOrderIssuing(order.OrderNo)
 	if err != nil {
 		return order, err
@@ -100,6 +110,11 @@ func fulfillAgentOrder(ctx context.Context, order db.AgentOrder) (db.AgentOrder,
 		}
 		return fresh, fmt.Errorf("订单状态不可发货")
 	}
+	// 认领成功后必须重读：调用方手里的 order 可能是很久以前的快照（例如上一次
+	// 发货已发了一部分码但收尾失败），拿旧快照算 need 会重复发满一整轮。
+	if fresh, ferr := db.GetAgentOrderByNo(order.OrderNo); ferr == nil {
+		order = fresh
+	}
 	existing := append([]string{}, order.IssuedCodes...)
 	// 重试只补差额。need<=0 时不能回落成 order.Count：已经发满、只是收尾失败的单
 	// 会被再发一轮，卡台重复扣费、白号重复占库存，最后按 2×count 发货。
@@ -107,10 +122,9 @@ func fulfillAgentOrder(ctx context.Context, order db.AgentOrder) (db.AgentOrder,
 	if need < 0 {
 		need = 0
 	}
-	idem := "fulfill-" + order.OrderNo
-	if len(existing) > 0 {
-		idem = idem + "-retry"
-	}
+	// 幂等键必须跟着「已发数量」走：只写 -retry 会让第二次重试复用第一次 retry
+	// 的键，而两次要买的张数不同——上游要么回放旧结果（少发码），要么报冲突（见 C11）。
+	idem := fmt.Sprintf("fulfill-%s-%d", order.OrderNo, len(existing))
 
 	var newCodes []string
 	if need > 0 {

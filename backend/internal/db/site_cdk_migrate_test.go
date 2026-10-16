@@ -69,10 +69,14 @@ func TestClaimBindingForRedeemUsesLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := ClaimBindingForRedeem(bindingID); err != nil || !ok {
+	ok, cid, err := ClaimBindingForRedeem(bindingID, "web-first-1")
+	if err != nil || !ok {
 		t.Fatalf("first claim ok=%v err=%v", ok, err)
 	}
-	if ok, err := ClaimBindingForRedeem(bindingID); err != nil || ok {
+	if cid != "web-first-1" {
+		t.Fatalf("first claim client id=%q, want the candidate", cid)
+	}
+	if ok, _, err := ClaimBindingForRedeem(bindingID, "web-second-2"); err != nil || ok {
 		t.Fatalf("concurrent claim must fail: ok=%v err=%v", ok, err)
 	}
 	if _, err := DB.Exec(`
@@ -80,8 +84,13 @@ func TestClaimBindingForRedeemUsesLease(t *testing.T) {
 	`, bindingID); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := ClaimBindingForRedeem(bindingID); err != nil || !ok {
+	// 租约过期后重试：必须复用第一次的键，否则上游会当成新兑换再扣一次
+	ok, cid, err = ClaimBindingForRedeem(bindingID, "web-third-3")
+	if err != nil || !ok {
 		t.Fatalf("expired lease should retry: ok=%v err=%v", ok, err)
+	}
+	if cid != "web-first-1" {
+		t.Fatalf("retry reused key=%q, want the original web-first-1", cid)
 	}
 }
 

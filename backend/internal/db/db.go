@@ -374,6 +374,9 @@ func createTables() error {
 	if err := migrateAdminRechargeBatchRegionCol(); err != nil {
 		return fmt.Errorf("migrate batch recharge region: %w", err)
 	}
+	if err := migrateCodeLookupIndexes(); err != nil {
+		log.Printf("migrateCodeLookupIndexes: %v", err)
+	}
 	if err := migrateAgentExchangeClaim(); err != nil {
 		return fmt.Errorf("migrate agent exchange claim: %w", err)
 	}
@@ -2105,8 +2108,17 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 			if !ok {
 				return fmt.Errorf("cdk not found: %s", code)
 			}
-			if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET status = 'reserved' WHERE id = ?`, row.ID); err != nil {
-				return err
+			// 条件占位：同一张码并发提交两次时，两个事务都通过了上层只读校验，
+			// 只有先到的能改到行。没改到说明码已被占用/消耗，整批回滚。
+			res, rerr := tx.Exec(`
+				UPDATE cardplatform_cdk_codes SET status = 'reserved'
+				WHERE id = ? AND lower(COALESCE(status,'')) IN ('', 'unused')
+			`, row.ID)
+			if rerr != nil {
+				return rerr
+			}
+			if n, _ := res.RowsAffected(); n != 1 {
+				return fmt.Errorf("cdk not reservable: %s", code)
 			}
 		}
 	}
@@ -2333,9 +2345,23 @@ func PatchAdminRechargeItem(clientRequestID string, p AdminRechargeItemPatch) er
 	}
 	sets = append(sets, "updated_at = CURRENT_TIMESTAMP")
 	args = append(args, clientRequestID)
-	_, err := DB.Exec(`UPDATE admin_recharge_items SET `+strings.Join(sets, ", ")+
-		` WHERE client_request_id = ?`, args...)
+	where := ` WHERE client_request_id = ?`
+	// 终态单向：明细一旦落到 success/failed/skipped/unknown，就不允许被改回非终态。
+	// 否则「重试」接口与仍在跑的批次协程会互相覆盖（见 C9）。
+	if p.Status != nil && !isTerminalRechargeItemStatus(*p.Status) {
+		where += ` AND lower(COALESCE(status,'')) NOT IN ('success','failed','skipped','unknown')`
+	}
+	_, err := DB.Exec(`UPDATE admin_recharge_items SET `+strings.Join(sets, ", ")+where, args...)
 	return err
+}
+
+// isTerminalRechargeItemStatus 明细终态判定（与 handler 侧状态机一致）。
+func isTerminalRechargeItemStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "success", "failed", "skipped", "unknown":
+		return true
+	}
+	return false
 }
 
 // SetAdminRechargeBatchStatus 更新批次状态与备注。

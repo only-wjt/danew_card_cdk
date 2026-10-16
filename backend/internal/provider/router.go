@@ -114,6 +114,22 @@ func PreviewWithFailover(ctx context.Context, siteCode, device string) (*Route, 
 		return nil, 0, nil, err
 	}
 
+	// 任一 binding 处在「兑换中」或「结果未知」时，一律不选台、不换台：
+	//
+	//   redeeming —— 上一次兑换可能已经打出去了，换台会把同一个本站码兑两次；
+	//   unknown   —— 兄弟码退役失败（删/退/禁用都没成功），那张上游码可能还活着，
+	//                路由过去同样会二次扣款，需人工核对。
+	//
+	// 两种都直接让用户去查结果，不做任何 preview 探测（见 C2）。
+	for i := range bindings {
+		switch bindings[i].Status {
+		case db.BindingStatusRedeeming:
+			return nil, 0, nil, fmt.Errorf("该卡密正在兑换中，请到兑换结果页查询进度")
+		case db.BindingStatusUnknown:
+			return nil, 0, nil, fmt.Errorf("该卡密上次兑换结果待人工核对，请联系客服")
+		}
+	}
+
 	var lastStatus int
 	var lastRaw []byte
 	var lastErr error
@@ -122,7 +138,8 @@ func PreviewWithFailover(ctx context.Context, siteCode, device string) (*Route, 
 	for i := range bindings {
 		b := bindings[i]
 		if b.Status == db.BindingStatusRefunded || b.Status == db.BindingStatusRetired ||
-			b.Status == db.BindingStatusDisabled || b.Status == db.BindingStatusConsumed {
+			b.Status == db.BindingStatusDisabled || b.Status == db.BindingStatusConsumed ||
+			b.Status == db.BindingStatusRetiring {
 			continue
 		}
 		p, acc, perr := ForAccount(b.AccountID)

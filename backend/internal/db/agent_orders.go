@@ -250,15 +250,26 @@ func MarkAgentOrderPaid(orderNo, epayTradeNo string) (AgentOrder, bool, error) {
 	return o, n == 1, nil
 }
 
+// AgentOrderIssuingLease 发货认领的租约时长。超过它仍停在 issuing 的订单视为
+// 上次发货已中断（进程重启等），允许重新认领；未超时的 issuing 不可重复认领，
+// 否则并发发货会给同一张订单发两轮码、卡台扣两次费。
+const AgentOrderIssuingLease = 10 * time.Minute
+
+// UpdateAgentOrderIssuing 认领发货：只从 paid / paid_undelivered 认领，
+// 或认领已超过租约的 issuing（崩溃恢复）。成功返回 true，表示本次调用独占发货权。
 func UpdateAgentOrderIssuing(orderNo string) (bool, error) {
 	if DB == nil {
 		return false, fmt.Errorf("db not initialized")
 	}
 	res, err := DB.Exec(`
 		UPDATE agent_orders SET status = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE order_no = ? AND status IN (?, ?, ?)
+		WHERE order_no = ? AND (
+			status IN (?, ?)
+			OR (status = ? AND updated_at <= datetime('now', ?))
+		)
 	`, AgentOrderStatusIssuing, orderNo,
-		AgentOrderStatusPaid, AgentOrderStatusPaidUndelivered, AgentOrderStatusIssuing)
+		AgentOrderStatusPaid, AgentOrderStatusPaidUndelivered,
+		AgentOrderStatusIssuing, fmt.Sprintf("-%d seconds", int(AgentOrderIssuingLease.Seconds())))
 	if err != nil {
 		return false, err
 	}

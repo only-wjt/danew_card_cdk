@@ -94,3 +94,25 @@ func migrateAdminRechargeBatchRegionCol() error {
 	_, err := DB.Exec(`ALTER TABLE admin_recharge_batches ADD COLUMN payment_country TEXT DEFAULT ''`)
 	return err
 }
+
+// migrateCodeLookupIndexes 给热路径的 upper(trim(code)) 查询建表达式索引。
+// 这些查询每次预览/预检/兑换/查结果都会跑 3–5 遍，没索引就是全表扫描（见 C10）。
+// 索引表达式必须与查询逐字一致，SQLite 才会用它。
+func migrateCodeLookupIndexes() error {
+	if DB == nil {
+		return nil
+	}
+	stmts := []string{
+		`CREATE INDEX IF NOT EXISTS idx_cpk_code_upper ON cardplatform_cdk_codes(upper(trim(code)))`,
+		`CREATE INDEX IF NOT EXISTS idx_ari_cdk_code_upper ON admin_recharge_items(upper(trim(cdk_code)))`,
+		`CREATE INDEX IF NOT EXISTS idx_scb_site_code_upper ON site_cdk_bindings(upper(trim(site_code)))`,
+		`CREATE INDEX IF NOT EXISTS idx_cdkeys_code_upper ON cd_keys(upper(trim(code)))`,
+		`CREATE INDEX IF NOT EXISTS idx_recharge_tasks_cdk_upper ON recharge_tasks(upper(trim(cdk_code)))`,
+	}
+	for _, q := range stmts {
+		if _, err := DB.Exec(q); err != nil {
+			return err
+		}
+	}
+	return nil
+}

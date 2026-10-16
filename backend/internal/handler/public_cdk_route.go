@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -95,8 +96,13 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 	proxyPublicJSON(c, st, raw)
 }
 
+// siteRedeemTimeout 单次兑换请求的时长上限。兑换会真实扣款，不能被用户关页面打断。
+const siteRedeemTimeout = 90 * time.Second
+
 func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map[string]any) {
-	claimed, cerr := db.ClaimBindingForRedeem(route.BindingID)
+	// 幂等键：首次用前端给的，重试同一 binding 时由 DB 返回上次存的键。
+	candidate := firstNonEmpty(strAny(body["clientRequestId"]), strAny(body["client_request_id"]))
+	claimed, clientID, cerr := db.ClaimBindingForRedeem(route.BindingID, candidate)
 	if cerr != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": cerr.Error()})
 		return
@@ -106,16 +112,21 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 		return
 	}
 	body["code"] = route.RemoteCode
-	clientIDs := []string{firstNonEmpty(strAny(body["clientRequestId"]), strAny(body["client_request_id"]))}
+	clientIDs := []string{clientID}
 	if route.Provider.Protocol() == provider.ProtocolAvanfinity202608 {
-		effectiveID := provider.AvanfinityRedeemClientRequestID(clientIDs[0])
+		effectiveID := provider.AvanfinityRedeemClientRequestID(clientID)
 		body["clientRequestId"] = effectiveID
 		clientIDs = append(clientIDs, effectiveID)
 	}
-	st, raw, err := route.Provider.Redeem(c.Request.Context(), body, deviceFrom(c))
+	// 脱离请求生命周期 + 自己的超时：用户关标签页 / 网关断连不该取消一笔已发出的兑换，
+	// 否则上游可能已扣款而本地状态错乱。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request.Context()), siteRedeemTimeout)
+	defer cancel()
+	st, raw, err := route.Provider.Redeem(ctx, body, deviceFrom(c))
 	if err != nil {
-		// 请求都没打出去，码没被消耗，放回去让用户重试同一台。
-		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusUnused, err.Error())
+		// 传输层错误（响应超时、连接中断）不能证明请求没打出去：可能已扣款。
+		// 保持 redeeming 并保留幂等键，同一台重试会拿回原订单，也绝不切台。
+		_, _ = db.UpdateBindingStatusFrom(route.BindingID, []string{db.BindingStatusRedeeming}, db.BindingStatusRedeeming, err.Error())
 		writeUpstreamUnavailable(c, "site-redeem", err)
 		return
 	}
@@ -126,11 +137,12 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 		goSafe("mark-consumed", func() { provider.MarkConsumed(context.Background(), route) })
 	case st >= 400 && st < 500:
 		// 业务拒绝（码无效/凭证不对），码没被消耗，允许改参数重试。
-		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusUnused, upstreamErrText(raw))
+		// 清掉幂等键：用户会改凭证重来，复用旧键会拿回同一个被拒的订单。
+		_ = db.ResetBindingForRetry(route.BindingID, upstreamErrText(raw))
 	default:
 		// 5xx / 超时：上游可能已经扣了，状态未知。保持 redeeming 只允许同台重试，
 		// 绝不能因此切到另一台，那会变成两台各扣一次。
-		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusRedeeming, upstreamErrText(raw))
+		_, _ = db.UpdateBindingStatusFrom(route.BindingID, []string{db.BindingStatusRedeeming}, db.BindingStatusRedeeming, upstreamErrText(raw))
 	}
 	// Notification errors are local, not an upstream rejection: never release
 	// the binding or invite another recharge submission after acceptance.

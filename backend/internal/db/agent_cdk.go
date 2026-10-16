@@ -448,21 +448,67 @@ func ValidateAgentCDKBatch(agentUserID int64, plan string, lines []string) Agent
 }
 
 // ReserveAgentCDK 将卡密标为 reserved（创建批次时调用）。
+// 条件更新：只从「未使用」转入 reserved。上层校验是只读的，并发提交同一张码时
+// 两边都会通过校验，真正能改到行的只有一个，另一个必须失败（见 C6）。
 func ReserveAgentCDK(code string) error {
 	row, ok := LookupStoredCDKDetail(code)
 	if !ok {
 		return ErrCDKNotFound
 	}
-	return UpdateCardplatformCDKStatusByID(row.ID, "reserved")
+	res, err := DB.Exec(`
+		UPDATE cardplatform_cdk_codes SET status = 'reserved'
+		WHERE id = ? AND lower(COALESCE(status,'')) IN ('', 'unused')
+	`, row.ID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return ErrCDKUnavailable
+	}
+	return nil
+}
+
+// CountItemsBlockingCDKRelease 统计仍在引用该卡密的明细：在途状态 + 结果未知。
+// unknown 必须人工核对，不能因为另一条失败就自动把码放回可重试。
+func CountItemsBlockingCDKRelease(code string) (int, error) {
+	if DB == nil {
+		return 0, nil
+	}
+	code = normalizeCDKCode(code)
+	if code == "" {
+		return 0, nil
+	}
+	statuses := append(append([]string{}, AgentInFlightItemStatuses...), "unknown")
+	ph := make([]string, len(statuses))
+	args := make([]any, 0, len(statuses)+1)
+	args = append(args, code)
+	for i, s := range statuses {
+		ph[i] = "?"
+		args = append(args, s)
+	}
+	var n int
+	err := DB.QueryRow(`
+		SELECT COUNT(*) FROM admin_recharge_items
+		WHERE upper(trim(cdk_code)) = upper(trim(?))
+		  AND lower(COALESCE(status,'')) IN (`+strings.Join(ph, ",")+`)
+	`, args...).Scan(&n)
+	return n, err
 }
 
 // ReleaseAgentCDK 失败/跳过后释放卡密，允许代理重试。
+// 只有确认没有别的在途/未知明细还在用这张码时才释放，否则会把「可能已成功」的码
+// 放回可重试，代理再提交一次就是二次扣费。
 func ReleaseAgentCDK(code string) error {
 	row, ok := LookupStoredCDKDetail(code)
 	if !ok {
 		return nil
 	}
 	if strings.EqualFold(row.Status, "consumed") {
+		return nil
+	}
+	if n, err := CountItemsBlockingCDKRelease(code); err != nil {
+		return err
+	} else if n > 0 {
 		return nil
 	}
 	return UpdateCardplatformCDKStatusByID(row.ID, "unused")

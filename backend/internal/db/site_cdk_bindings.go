@@ -20,6 +20,9 @@ const (
 	BindingStatusRetired   = "retired"
 	BindingStatusRefunded  = "refunded"
 	BindingStatusDisabled  = "disabled"
+	// BindingStatusRetiring 兄弟码收回中的中间态：只有一个协程能认领到，
+	// 避免多路轮询同时对同一张码发起退款/禁用。路由视同 retired，不再选用。
+	BindingStatusRetiring = "retiring"
 
 	IssueStatusPending = "pending"
 	IssueStatusActive  = "active"
@@ -74,7 +77,25 @@ func migrateSiteCDKBindings() error {
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_scb_site_code ON site_cdk_bindings(site_code)`)
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_scb_site_code_id ON site_cdk_bindings(site_code_id)`)
 	_, _ = DB.Exec(`CREATE INDEX IF NOT EXISTS idx_scb_status ON site_cdk_bindings(status)`)
-	return nil
+	return migrateBindingRedeemClientID()
+}
+
+// migrateBindingRedeemClientID 记录本次兑换用的幂等键。
+// 结果不确定时（超时/5xx）binding 停在 redeeming，用户重试必须复用同一个键，
+// 否则上游会当成一笔新兑换再扣一次钱。
+func migrateBindingRedeemClientID() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	if err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('site_cdk_bindings') WHERE name='redeem_client_id'`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	_, err := DB.Exec(`ALTER TABLE site_cdk_bindings ADD COLUMN redeem_client_id TEXT NOT NULL DEFAULT ''`)
+	return err
 }
 
 // InsertSiteCDKBinding 写入一条上游绑定。
@@ -190,6 +211,7 @@ func scanSiteCDKBindings(rows *sql.Rows) ([]SiteCDKBinding, error) {
 }
 
 // UpdateBindingStatus 更新 binding 状态。
+// 无条件写入：调用方仅在「独占持有该 binding」时使用（见 C8 说明）。
 func UpdateBindingStatus(bindingID int64, status, lastError string) error {
 	if DB == nil || bindingID <= 0 {
 		return nil
@@ -198,6 +220,45 @@ func UpdateBindingStatus(bindingID int64, status, lastError string) error {
 		UPDATE site_cdk_bindings SET status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, status, lastError, bindingID)
+	return err
+}
+
+// UpdateBindingStatusFrom 条件转换：仅当当前状态在 from 集合内才写入。
+// 返回是否真的改到了行，让调用方判断自己是不是「胜出者」。
+func UpdateBindingStatusFrom(bindingID int64, from []string, status, lastError string) (bool, error) {
+	if DB == nil || bindingID <= 0 || len(from) == 0 {
+		return false, nil
+	}
+	// 绑定顺序必须与 SQL 中 ? 的出现顺序一致：status, lastError, id, from...
+	args := make([]any, 0, len(from)+3)
+	args = append(args, status, lastError, bindingID)
+	ph := make([]string, len(from))
+	for i, f := range from {
+		ph[i] = "?"
+		args = append(args, f)
+	}
+	res, err := DB.Exec(`
+		UPDATE site_cdk_bindings SET status = ?, last_error = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status IN (`+strings.Join(ph, ",")+`)
+	`, args...)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
+// ResetBindingForRetry 业务拒绝后放回可重试，并清掉幂等键：
+// 用户会改凭证重来，复用旧键会拿回同一个已被拒的订单。
+func ResetBindingForRetry(bindingID int64, lastError string) error {
+	if DB == nil || bindingID <= 0 {
+		return nil
+	}
+	_, err := DB.Exec(`
+		UPDATE site_cdk_bindings
+		SET status = ?, redeem_client_id = '', last_error = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, BindingStatusUnused, lastError, bindingID)
 	return err
 }
 
@@ -237,25 +298,53 @@ func GetActiveBindingID(siteCodeID int64) (int64, error) {
 }
 
 // ClaimBindingForRedeem 抢占式把 binding 置为 redeeming。
-// 同一本站码并发兑换时只有一个请求能拿到，避免两个台同时被扣。
-func ClaimBindingForRedeem(bindingID int64) (bool, error) {
+// ClaimBindingForRedeem 认领兑换权。同一 binding 并发只有一个请求能拿到。
+//
+// candidate 是本次的幂等键。重新认领一个卡在 redeeming 的 binding（上次结果未知
+// 或进程中断）时，复用已存的键而不是新键：上游按 clientRequestId 幂等，
+// 复用才会拿回原来那笔订单，而不是再开一笔。
+// 返回真正应该发给上游的 clientRequestId。
+func ClaimBindingForRedeem(bindingID int64, candidate string) (bool, string, error) {
 	if DB == nil || bindingID <= 0 {
-		return false, fmt.Errorf("invalid binding id")
+		return false, "", fmt.Errorf("invalid binding id")
 	}
+	candidate = strings.TrimSpace(candidate)
 	res, err := DB.Exec(`
 		UPDATE site_cdk_bindings
-		SET status = ?, updated_at = CURRENT_TIMESTAMP
+		SET status = ?, updated_at = CURRENT_TIMESTAMP,
+		    redeem_client_id = CASE
+		        WHEN redeem_client_id = '' OR status IN (?, ?) THEN ?
+		        ELSE redeem_client_id END
 		WHERE id = ? AND (
 			status IN (?, ?)
 			OR (status = ? AND updated_at <= datetime('now', '-60 seconds'))
 		)
-	`, BindingStatusRedeeming, bindingID,
+	`, BindingStatusRedeeming,
+		BindingStatusUnused, BindingStatusFailed, candidate,
+		bindingID,
 		BindingStatusUnused, BindingStatusFailed, BindingStatusRedeeming)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, "", nil
+	}
+	var stored string
+	if err := DB.QueryRow(`SELECT COALESCE(redeem_client_id,'') FROM site_cdk_bindings WHERE id = ?`, bindingID).Scan(&stored); err != nil {
+		return true, candidate, nil
+	}
+	if strings.TrimSpace(stored) == "" {
+		return true, candidate, nil
+	}
+	return true, stored, nil
+}
+
+// ClaimBindingForRetire 认领「收回这张兄弟码」的权利。
+// 从可用态（unused/failed）条件转入 retiring：并发的多路轮询里只有一个能拿到，
+// 其他直接返回 false，从而避免对同一张上游码重复退款/禁用。
+func ClaimBindingForRetire(bindingID int64) (bool, error) {
+	return UpdateBindingStatusFrom(bindingID,
+		[]string{BindingStatusUnused, BindingStatusFailed}, BindingStatusRetiring, "核销后收回中")
 }
 
 // SiblingBindings 同一本站码下除指定 binding 外的其他绑定（核销后要退役它们）。
@@ -269,8 +358,9 @@ func SiblingBindings(siteCodeID, exceptBindingID int64) ([]SiteCDKBinding, error
 		if b.ID == exceptBindingID {
 			continue
 		}
+		// retiring 也算已决定收回，不再重复处理；unknown 留给人工核对。
 		if b.Status == BindingStatusRefunded || b.Status == BindingStatusRetired ||
-			b.Status == BindingStatusConsumed {
+			b.Status == BindingStatusConsumed || b.Status == BindingStatusRetiring {
 			continue
 		}
 		out = append(out, b)

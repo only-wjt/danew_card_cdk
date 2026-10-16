@@ -601,6 +601,15 @@ func AdminBatchRechargeRetry(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
 		return
 	}
+	// 批次仍在跑时不许并行对齐：重试协程与执行协程会同时 patch 同一批明细，
+	// 终态事件和卡密对账各触发两次（见 C9）。
+	if batch.Status == batchStatusRunning {
+		c.JSON(http.StatusConflict, gin.H{
+			"error":  "批次仍在执行中，请等它结束后再重试对齐",
+			"status": batch.Status,
+		})
+		return
+	}
 	items, err := db.ListAdminRechargeItems(batchID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
