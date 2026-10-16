@@ -1143,6 +1143,7 @@ func SaveCardplatformCDKCodeForAccount(upstreamID int64, code, prefix, plan stri
 }
 
 // UpdateCardplatformCDKStatus 按上游 id 更新本站缓存的状态（禁用/解禁后刷新列表）。
+// 本站 DN- 码的 upstream_id 恒为 0，调用方须改用 UpdateCardplatformCDKStatusByID。
 func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
 	if DB == nil || upstreamID == 0 {
 		return nil
@@ -1152,6 +1153,19 @@ func UpdateCardplatformCDKStatus(upstreamID int64, status string) error {
 		return nil
 	}
 	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET status = ? WHERE upstream_id = ?`, status, upstreamID)
+	return err
+}
+
+// UpdateCardplatformCDKStatusByID 按本表主键更新状态（本站 DN- 码必须走这里）。
+func UpdateCardplatformCDKStatusByID(id int64, status string) error {
+	if DB == nil || id <= 0 {
+		return nil
+	}
+	status = strings.TrimSpace(strings.ToLower(status))
+	if status == "" {
+		return nil
+	}
+	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET status = ? WHERE id = ?`, status, id)
 	return err
 }
 
@@ -2091,7 +2105,7 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 			if !ok {
 				return fmt.Errorf("cdk not found: %s", code)
 			}
-			if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET status = 'reserved' WHERE upstream_id = ?`, row.UpstreamID); err != nil {
+			if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET status = 'reserved' WHERE id = ?`, row.ID); err != nil {
 				return err
 			}
 		}

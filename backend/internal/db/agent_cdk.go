@@ -8,18 +8,21 @@ import (
 )
 
 var (
-	ErrCDKNotFound      = errors.New("卡密不存在或未录入本站")
-	ErrCDKNotAssigned   = errors.New("卡密未分配给当前代理")
-	ErrCDKWrongAgent    = errors.New("卡密已分配给其他代理")
-	ErrCDKUnavailable   = errors.New("卡密不可用（已使用或已禁用）")
-	ErrCDKPlanMismatch  = errors.New("卡密套餐与所选套餐不一致")
-	ErrCDKInFlight      = errors.New("卡密正在其他充值任务中使用")
-	ErrCDKDuplicate     = errors.New("本批卡密重复")
-	ErrCDKLocalStock    = errors.New("GPT白号不能用于代充，请复制发给下级")
+	ErrCDKNotFound     = errors.New("卡密不存在或未录入本站")
+	ErrCDKNotAssigned  = errors.New("卡密未分配给当前代理")
+	ErrCDKWrongAgent   = errors.New("卡密已分配给其他代理")
+	ErrCDKUnavailable  = errors.New("卡密不可用（已使用或已禁用）")
+	ErrCDKPlanMismatch = errors.New("卡密套餐与所选套餐不一致")
+	ErrCDKInFlight     = errors.New("卡密正在其他充值任务中使用")
+	ErrCDKDuplicate    = errors.New("本批卡密重复")
+	ErrCDKLocalStock   = errors.New("GPT白号不能用于代充，请复制发给下级")
 )
 
 // StoredCDK 本站缓存的卡密详情。
 type StoredCDK struct {
+	// ID 是本表主键。本站 DN- 码的 upstream_id 恒为 0，凡按行更新都必须用 ID，
+	// 否则 WHERE upstream_id = 0 会命中所有 DN- 码（见 2026-10-16 修复）。
+	ID                  int64
 	UpstreamID          int64
 	Code                string
 	Plan                string
@@ -203,12 +206,12 @@ func LookupStoredCDKDetail(code string) (StoredCDK, bool) {
 	}
 	var row StoredCDK
 	err := DB.QueryRow(`
-		SELECT COALESCE(upstream_id,0), code, COALESCE(plan,''), COALESCE(code_prefix,''),
+		SELECT id, COALESCE(upstream_id,0), code, COALESCE(plan,''), COALESCE(code_prefix,''),
 		       COALESCE(status,''), COALESCE(assigned_agent_user_id,0)
 		FROM cardplatform_cdk_codes
 		WHERE upper(trim(code)) = upper(trim(?))
 		ORDER BY created_at DESC LIMIT 1
-	`, code).Scan(&row.UpstreamID, &row.Code, &row.Plan, &row.Prefix, &row.Status, &row.AssignedAgentUserID)
+	`, code).Scan(&row.ID, &row.UpstreamID, &row.Code, &row.Plan, &row.Prefix, &row.Status, &row.AssignedAgentUserID)
 	if err != nil {
 		return StoredCDK{}, false
 	}
@@ -450,7 +453,7 @@ func ReserveAgentCDK(code string) error {
 	if !ok {
 		return ErrCDKNotFound
 	}
-	return UpdateCardplatformCDKStatus(row.UpstreamID, "reserved")
+	return UpdateCardplatformCDKStatusByID(row.ID, "reserved")
 }
 
 // ReleaseAgentCDK 失败/跳过后释放卡密，允许代理重试。
@@ -462,7 +465,7 @@ func ReleaseAgentCDK(code string) error {
 	if strings.EqualFold(row.Status, "consumed") {
 		return nil
 	}
-	return UpdateCardplatformCDKStatus(row.UpstreamID, "unused")
+	return UpdateCardplatformCDKStatusByID(row.ID, "unused")
 }
 
 // ConsumeAgentCDK 充值成功后标记卡密已消耗。
@@ -471,7 +474,7 @@ func ConsumeAgentCDK(code string) error {
 	if !ok {
 		return nil
 	}
-	return UpdateCardplatformCDKStatus(row.UpstreamID, "consumed")
+	return UpdateCardplatformCDKStatusByID(row.ID, "consumed")
 }
 
 // AssignCDKsToAgent 把未分配且可用的卡密批量划给代理（站长线下发货后录入）。
@@ -493,14 +496,14 @@ func AssignCDKsToAgent(agentUserID int64, codes []string) (assigned int, skipped
 		if code == "" {
 			continue
 		}
-		var upstreamID, assignedTo int64
+		var rowID, assignedTo int64
 		var status string
 		qerr := tx.QueryRow(`
-			SELECT upstream_id, COALESCE(assigned_agent_user_id,0), COALESCE(status,'')
+			SELECT id, COALESCE(assigned_agent_user_id,0), COALESCE(status,'')
 			FROM cardplatform_cdk_codes
 			WHERE upper(trim(code)) = upper(trim(?))
 			ORDER BY created_at DESC LIMIT 1
-		`, code).Scan(&upstreamID, &assignedTo, &status)
+		`, code).Scan(&rowID, &assignedTo, &status)
 		if qerr == sql.ErrNoRows {
 			skipped = append(skipped, code+": 未录入本站")
 			continue
@@ -524,8 +527,8 @@ func AssignCDKsToAgent(agentUserID int64, codes []string) (assigned int, skipped
 			skipped = append(skipped, code+": 正在充值中")
 			continue
 		}
-		if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET assigned_agent_user_id = ? WHERE upstream_id = ?`,
-			agentUserID, upstreamID); err != nil {
+		if _, err := tx.Exec(`UPDATE cardplatform_cdk_codes SET assigned_agent_user_id = ? WHERE id = ?`,
+			agentUserID, rowID); err != nil {
 			return assigned, skipped, err
 		}
 		assigned++
@@ -591,8 +594,8 @@ func UnassignCDKsFromAgent(agentUserID int64, codes []string) (released int, ski
 			skipped = append(skipped, code+": 正在充值中")
 			continue
 		}
-		if _, uerr := DB.Exec(`UPDATE cardplatform_cdk_codes SET assigned_agent_user_id = 0 WHERE upstream_id = ?`,
-			row.UpstreamID); uerr != nil {
+		if _, uerr := DB.Exec(`UPDATE cardplatform_cdk_codes SET assigned_agent_user_id = 0 WHERE id = ?`,
+			row.ID); uerr != nil {
 			return released, skipped, uerr
 		}
 		released++
