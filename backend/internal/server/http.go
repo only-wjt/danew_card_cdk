@@ -167,13 +167,13 @@ func setupRoutes(r *gin.Engine) {
 		pubCDK := api.Group("/public/cdk")
 		{
 			pubCDK.GET("/plans", handler.PublicCDKPlans)
-			pubCDK.POST("/preview", handler.PublicCDKPreview)
+			pubCDK.POST("/preview", handler.RateLimitPublicCDKPreview(), handler.PublicCDKPreview)
 			pubCDK.POST("/preflight", handler.PublicCDKPreflight)
 			pubCDK.POST("/recover-subscription", handler.PublicCDKGraceRecovery)
 			pubCDK.POST("/redeem", handler.PublicCDKRedeem)
 			pubCDK.GET("/result", handler.PublicCDKResult)
 			// 刷新进度 / 任务查询：凭卡密反查本站绑定的 redemption_token
-			pubCDK.GET("/result-by-code", handler.PublicCDKResultByCode)
+			pubCDK.GET("/result-by-code", handler.RateLimitResultByCode(), handler.PublicCDKResultByCode)
 			// 代理隐藏换码：密码 + 失败未扣款 CDK → 新码
 			pubCDK.POST("/exchange", handler.PublicAgentCDKExchange)
 		}
@@ -194,21 +194,23 @@ func setupRoutes(r *gin.Engine) {
 		}
 
 		// 卡密状态查询：是否已用 + 充值邮箱（不返回 token）
+		// 限流：单查按次数；批量在 handler 内按张数计。管理员登录态不受限、可见完整邮箱。
 		lookup := api.Group("/lookup")
 		{
-			lookup.GET("/cdk", handler.LookupCDKStatus)
+			lookup.GET("/cdk", handler.RateLimitLookupSingle(), handler.LookupCDKStatus)
 			lookup.POST("/cdk/batch", handler.LookupCDKStatusBatch)
 			// 兼容旧路径
-			lookup.GET("/task", handler.LookupCDKStatus)
+			lookup.GET("/task", handler.RateLimitLookupSingle(), handler.LookupCDKStatus)
 		}
 
 		registerWebhookRoutes(api)
 
 		// 账单：粘贴 session 查 ChatGPT 订阅 + hosted_invoice（小助手同款）
-		api.POST("/public/billing/check", handler.SessionBillingCheck)
-		api.POST("/billing/check", handler.SessionBillingCheck)
+		billingRL := handler.RateLimitBilling()
+		api.POST("/public/billing/check", billingRL, handler.SessionBillingCheck)
+		api.POST("/billing/check", billingRL, handler.SessionBillingCheck)
 		// Session 工具：用 sessionToken 换新 accessToken（不落库）
-		api.POST("/public/session/refresh", handler.PublicSessionRefresh)
+		api.POST("/public/session/refresh", billingRL, handler.PublicSessionRefresh)
 
 		// 代理门户 / API（账号由站长创建）
 		agent := api.Group("/agent")

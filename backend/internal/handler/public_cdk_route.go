@@ -87,7 +87,7 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 	if tok == "" {
 		tok = extractJSONString(raw, "redemption_token", "token")
 	}
-	if sess := extractCredentialSession(body["credential"]); sess != "" {
+	if sess := bindableSession(st, body); sess != "" {
 		if berr := db.BindCDKSession(siteCode, tok, sess); berr != nil {
 			log.Printf("[cdk-preflight] bind session failed: %v", berr)
 		}

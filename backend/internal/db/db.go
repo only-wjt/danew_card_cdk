@@ -370,6 +370,12 @@ func createTables() error {
 	if err := migrateSiteDualBindSchema(); err != nil {
 		return fmt.Errorf("migrate dual-bind schema: %w", err)
 	}
+	if err := migrateSealCDKSessions(); err != nil {
+		log.Printf("migrateSealCDKSessions: %v", err)
+	}
+	if err := migrateSealAdminRechargeCreds(); err != nil {
+		log.Printf("migrateSealAdminRechargeCreds: %v", err)
+	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
 	}
@@ -884,6 +890,10 @@ func BindCDKSession(cdkCode, redemptionToken, sessionPayload string) error {
 	if sess == "" {
 		return nil
 	}
+	sess, err := SealSecret(sess)
+	if err != nil {
+		return err
+	}
 	// 优先已知码
 	if code != "" {
 		_, err := DB.Exec(`
@@ -936,7 +946,7 @@ func GetSessionByCDK(cdkCode string) (string, error) {
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
-	return sess, err
+	return OpenSecret(sess), err
 }
 
 // CDKBinding 本地码 ↔ token ↔ session 绑定（公开兑换进度/账单依赖）
@@ -968,6 +978,7 @@ func GetBindingByCDK(cdkCode string) (*CDKBinding, error) {
 	if err != nil {
 		return nil, err
 	}
+	b.SessionPayload = OpenSecret(b.SessionPayload)
 	return &b, nil
 }
 
@@ -1957,6 +1968,9 @@ func scanAdminRechargeItemExport(s interface{ Scan(...any) error }) (AdminRechar
 		&it.AccountEmail, &it.CDKCode, &it.RedemptionToken,
 		&it.UpstreamOrderID, &it.Status, &it.Message, &it.UpdatedAt,
 		&it.GptPassword, &it.EmailPassword, &it.Session)
+	it.GptPassword = OpenSecret(it.GptPassword)
+	it.EmailPassword = OpenSecret(it.EmailPassword)
+	it.Session = OpenSecret(it.Session)
 	return it, err
 }
 
@@ -1988,8 +2002,20 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 	}
 	defer stmt.Close()
 	for _, it := range items {
+		gptPw, err := SealSecret(it.GptPassword)
+		if err != nil {
+			return err
+		}
+		mailPw, err := SealSecret(it.EmailPassword)
+		if err != nil {
+			return err
+		}
+		sess, err := SealSecret(it.Session)
+		if err != nil {
+			return err
+		}
 		if _, err := stmt.Exec(it.BatchID, it.Seq, it.ClientRequestID, it.ClientReference, it.Plan,
-			it.CredMode, it.AccountEmail, it.GptPassword, it.EmailPassword, it.Session, it.SessionHash,
+			it.CredMode, it.AccountEmail, gptPw, mailPw, sess, it.SessionHash,
 			nullIfEmpty(it.CDKCode), it.Status, it.Message); err != nil {
 			return err
 		}

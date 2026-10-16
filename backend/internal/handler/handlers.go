@@ -156,7 +156,7 @@ func AdminLogin(c *gin.Context) {
 	}
 
 	// 登录限流：按 客户端IP + 用户名 计数
-	rateKey := c.ClientIP() + "|" + strings.ToLower(strings.TrimSpace(req.Username))
+	rateKey := loginRateKey(c.ClientIP(), req.Username)
 	if ok, wait := loginAllowed(rateKey); !ok {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf("尝试次数过多，请 %d 分钟后再试", int(wait.Minutes())+1),

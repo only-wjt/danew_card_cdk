@@ -156,7 +156,7 @@ func AgentLogin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	rateKey := c.ClientIP() + "|agent|" + strings.ToLower(strings.TrimSpace(req.Username))
+	rateKey := loginRateKey(c.ClientIP()+"|agent", req.Username)
 	if ok, wait := loginAllowed(rateKey); !ok {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf("尝试次数过多，请 %d 分钟后再试", int(wait.Minutes())+1),

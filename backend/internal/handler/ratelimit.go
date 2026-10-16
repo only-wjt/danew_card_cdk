@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
@@ -20,7 +21,29 @@ type loginAttempt struct {
 var (
 	loginMu       sync.Mutex
 	loginAttempts = make(map[string]*loginAttempt)
+	loginLastGC   time.Time
 )
+
+// 失败记录上限：超过后先清理过期项，仍满则不再新增（已有 key 照常计数）。
+const loginMaxKeys = 50000
+
+// loginRateKey 组装限流 key；用户名截断，防止超长用户名撑大内存。
+func loginRateKey(ip, username string) string {
+	u := strings.ToLower(strings.TrimSpace(username))
+	if len(u) > 64 {
+		u = u[:64]
+	}
+	return ip + "|" + u
+}
+
+func loginGCLocked(now time.Time) {
+	for k, a := range loginAttempts {
+		if now.After(a.lockedUntil) && now.Sub(a.windowStart) > loginLockWindow {
+			delete(loginAttempts, k)
+		}
+	}
+	loginLastGC = now
+}
 
 // loginAllowed 返回是否允许尝试登录，以及若被锁定还需等待多久。
 func loginAllowed(key string) (bool, time.Duration) {
@@ -48,8 +71,14 @@ func loginFailed(key string) {
 	defer loginMu.Unlock()
 
 	now := time.Now()
+	if now.Sub(loginLastGC) > time.Minute || len(loginAttempts) >= loginMaxKeys {
+		loginGCLocked(now)
+	}
 	a := loginAttempts[key]
 	if a == nil || now.Sub(a.windowStart) > loginLockWindow {
+		if a == nil && len(loginAttempts) >= loginMaxKeys {
+			return
+		}
 		a = &loginAttempt{windowStart: now}
 		loginAttempts[key] = a
 	}

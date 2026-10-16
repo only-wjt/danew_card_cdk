@@ -45,7 +45,10 @@ func LookupCDKStatus(c *gin.Context) {
 		return
 	}
 
-	resp := lookupOneCDK(c.Request.Context(), code, deviceFrom(c))
+	resp := lookupOneCDK(c.Request.Context(), code, deviceFrom(c), true)
+	if !requestIsAdmin(c) {
+		resp.AccountEmail = maskEmailForAdmin(resp.AccountEmail)
+	}
 	if resp.Status == "unknown" {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":    "未找到该卡密记录",
@@ -83,6 +86,15 @@ func LookupCDKStatusBatch(c *gin.Context) {
 		return
 	}
 
+	// 非管理员：按张数计入 IP 额度；只读本地库，不回源卡台，邮箱打码。
+	isAdmin := requestIsAdmin(c)
+	if !isAdmin {
+		if ok, wait := lookupBatchLimiter.allow(c.ClientIP(), len(codes)); !ok {
+			rejectRateLimited(c, wait, "查询太频繁，请稍后再试")
+			return
+		}
+	}
+
 	results := make([]cdkLookupResult, len(codes))
 	sem := make(chan struct{}, lookupBatchWorkers)
 	var wg sync.WaitGroup
@@ -94,7 +106,11 @@ func LookupCDKStatusBatch(c *gin.Context) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			results[i] = lookupOneCDK(ctx, code, device)
+			r := lookupOneCDK(ctx, code, device, isAdmin)
+			if !isAdmin {
+				r.AccountEmail = maskEmailForAdmin(r.AccountEmail)
+			}
+			results[i] = r
 		}(i, code)
 	}
 	wg.Wait()
@@ -188,7 +204,8 @@ func lookupXCode(code string) cdkLookupResult {
 	return resp
 }
 
-func lookupOneCDK(ctx context.Context, code, deviceID string) cdkLookupResult {
+// lookupOneCDK 汇总本地各表的卡密状态；upstream=true 时对已绑定 token 的码实时回源卡台。
+func lookupOneCDK(ctx context.Context, code, deviceID string, upstream bool) cdkLookupResult {
 	resp := cdkLookupResult{CDKCode: code, Status: "unknown", Message: "未找到该卡密记录"}
 	if strings.HasPrefix(strings.ToUpper(strings.TrimSpace(code)), "DNX-") {
 		return lookupXCode(code)
@@ -320,7 +337,7 @@ func lookupOneCDK(ctx context.Context, code, deviceID string) cdkLookupResult {
 				resp.AccountEmail = em
 			}
 		}
-		if tok := strings.TrimSpace(bind.RedemptionToken); tok != "" {
+		if tok := strings.TrimSpace(bind.RedemptionToken); tok != "" && upstream {
 			cli := cardClientOrSettings(db.CardPlatformAccountIDForCode(code))
 			st, raw, rerr := cli.Result(ctx, tok, deviceID)
 			if rerr == nil && st >= 200 && st < 300 && len(raw) > 0 {

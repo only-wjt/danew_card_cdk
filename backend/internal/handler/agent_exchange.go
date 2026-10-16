@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
@@ -18,29 +17,9 @@ import (
 const agentSwapPasswordKey = "agent_swap_password_hash"
 
 // 简易 IP 限流：每 IP 每小时最多 20 次换码尝试
-var (
-	swapRateMu   sync.Mutex
-	swapRateHits = map[string][]time.Time{}
-)
-
 func swapRateAllow(ip string) bool {
-	swapRateMu.Lock()
-	defer swapRateMu.Unlock()
-	now := time.Now()
-	cut := now.Add(-time.Hour)
-	hits := swapRateHits[ip]
-	kept := hits[:0]
-	for _, t := range hits {
-		if t.After(cut) {
-			kept = append(kept, t)
-		}
-	}
-	if len(kept) >= 20 {
-		swapRateHits[ip] = kept
-		return false
-	}
-	swapRateHits[ip] = append(kept, now)
-	return true
+	ok, _ := swapLimiter.allow(ip, 1)
+	return ok
 }
 
 func setAgentSwapPassword(plain string) error {

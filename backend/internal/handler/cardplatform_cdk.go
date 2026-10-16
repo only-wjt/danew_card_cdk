@@ -1154,6 +1154,10 @@ func PublicCDKPreflight(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
+	if credentialIsMailbox(body["credential"]) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "已不支持邮箱密码兑换，请改用 Session"})
+		return
+	}
 	if guardAgentAssignedCDK(c, str(body["code"])) {
 		return
 	}
@@ -1177,8 +1181,8 @@ func PublicCDKPreflight(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
-	// 预检成功：把 credential.session 绑到卡密（账单页可凭卡密查）
-	// 即便上游返回非 2xx，只要本地能解析到 session 也尽量落库，方便后续账单查询。
+	// 预检成功才把 credential.session 绑到卡密（账单页可凭卡密查）。
+	// 上游拒绝的请求不落库：否则任何人都能对任意码写入/覆盖绑定。
 	tok := str(body["redemption_token"])
 	if tok == "" {
 		tok = extractJSONString(raw, "redemption_token", "token")
@@ -1189,15 +1193,39 @@ func PublicCDKPreflight(c *gin.Context) {
 			code = found
 		}
 	}
-	sess := extractCredentialSession(body["credential"])
-	if sess != "" && (code != "" || tok != "") {
+	if sess := bindableSession(st, body); sess != "" && (code != "" || tok != "") {
 		if err := db.BindCDKSession(code, tok, sess); err != nil {
 			log.Printf("[cdk-preflight] bind session failed tok=%s: %v", shortTok(tok), err)
 		}
-	} else if st >= 200 && st < 300 {
-		log.Printf("[cdk-preflight] no session to bind (mode may be mailbox) tok=%s", shortTok(tok))
 	}
 	proxyPublicJSON(c, st, raw)
+}
+
+// 单条 session 绑定上限；正常的 ChatGPT session JSON 远小于此。
+const maxBoundSessionBytes = 16 << 10
+
+// bindableSession 仅在上游预检 2xx 时返回可落库的 session。
+func bindableSession(status int, body map[string]any) string {
+	if status < 200 || status >= 300 {
+		return ""
+	}
+	sess := extractCredentialSession(body["credential"])
+	if len(sess) > maxBoundSessionBytes {
+		return ""
+	}
+	return sess
+}
+
+// credentialIsMailbox 邮箱+密码兑换已下线，挡住直接调 API 的请求。
+func credentialIsMailbox(cred any) bool {
+	m, ok := cred.(map[string]any)
+	if !ok {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(str(m["mode"])), "mailbox") {
+		return true
+	}
+	return str(m["password"]) != ""
 }
 
 // PublicCDKRedeem POST /api/v1/public/cdk/redeem
