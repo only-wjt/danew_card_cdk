@@ -5,3 +5,7 @@ export const AGENT_ENABLED = import.meta.env.VITE_ENABLE_AGENT === 'true'
 // X 直充（Avan x_direct）和 X 付款卡界面：业务上只用 CDK，界面隐藏，代码和接口保留。
 // 恢复时构建前设 VITE_ENABLE_X_DIRECT=true。
 export const X_DIRECT_UI = import.meta.env.VITE_ENABLE_X_DIRECT === 'true'
+
+// X 兑换（DNX- 本站码 + 用户名）：已下线，充值页隐藏入口；后端接口和在途订单结算保留。
+// 恢复时构建前设 VITE_ENABLE_X_REDEEM=true。
+export const X_REDEEM_UI = import.meta.env.VITE_ENABLE_X_REDEEM === 'true'

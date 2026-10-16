@@ -15,12 +15,12 @@
 
       <RedeemModeTabs />
 
-      <div class="grid sm:grid-cols-3 gap-3 mb-6">
+      <div class="grid gap-3 mb-6" :class="X_REDEEM_UI ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
         <button type="button" class="product-card" :class="{ on: product === 'gpt' }" @click="product = 'gpt'">
           <div class="font-semibold text-ink">{{ t('recharge.productGpt') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productGptHint') }}</p>
         </button>
-        <button type="button" class="product-card" :class="{ on: product === 'x' }" @click="product = 'x'">
+        <button v-if="X_REDEEM_UI" type="button" class="product-card" :class="{ on: product === 'x' }" @click="product = 'x'">
           <div class="font-semibold text-ink">{{ t('recharge.productX') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productXHint') }}</p>
         </button>
@@ -30,7 +30,7 @@
         </button>
       </div>
 
-      <XRedeemView v-if="product === 'x'" :key="xSeed || 'x'" embedded :initial-code="xSeed" @switch-gpt="onSwitchGpt" />
+      <XRedeemView v-if="X_REDEEM_UI && product === 'x'" :key="xSeed || 'x'" embedded :initial-code="xSeed" @switch-gpt="onSwitchGpt" />
       <TgRedeemView v-else-if="product === 'tg'" :key="tgSeed || 'tg'" embedded :initial-code="tgSeed" @switch-gpt="onSwitchGpt" />
 
       <template v-else>
@@ -65,25 +65,16 @@
       <!-- 2 preflight -->
       <div v-show="step === 2" class="card space-y-4">
         <h2 class="text-xl font-bold text-ink">{{ isXPremiumPlan(targetPlan) ? t('xPremium.credential') : 'ChatGPT 凭证' }}</h2>
-        <div v-if="!isXPremiumPlan(targetPlan)" class="flex gap-2">
-          <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'session' }" @click="credMode = 'session'">Session</button>
-          <button type="button" class="btn-secondary !py-1" :class="{ 'ring-2': credMode === 'mailbox' }" @click="credMode = 'mailbox'">邮箱</button>
-        </div>
-        <template v-if="credMode === 'session' || isXPremiumPlan(targetPlan)">
-          <p v-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}
-            <button type="button" class="app-link" @click="cookieGuide = true">怎么获取 Cookie？</button>
-          </p>
-          <p v-else class="text-sm text-muted">打开
-            <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
-            复制<strong>完整 JSON</strong>（必须含 <code>sessionToken</code>）。已禁用纯 Access Token。
-          </p>
-          <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" :placeholder="isXPremiumPlan(targetPlan) ? t('xPremium.placeholder') : sessionPlaceholder" />
-          <XCookieGuide v-model="cookieGuide" @fill="sessionRaw = $event" />
-        </template>
-        <template v-else>
-          <input v-model="email" class="input" placeholder="email@outlook.com" />
-          <input v-model="password" class="input" type="password" placeholder="邮箱密码" />
-        </template>
+        <!-- 只支持 Session：邮箱+密码兑换已下线（后端 preflight 也会拒绝 mailbox） -->
+        <p v-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}
+          <button type="button" class="app-link" @click="cookieGuide = true">怎么获取 Cookie？</button>
+        </p>
+        <p v-else class="text-sm text-muted">打开
+          <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
+          复制<strong>完整 JSON</strong>（必须含 <code>sessionToken</code>）。已禁用纯 Access Token。
+        </p>
+        <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" :placeholder="isXPremiumPlan(targetPlan) ? t('xPremium.placeholder') : sessionPlaceholder" />
+        <XCookieGuide v-model="cookieGuide" @fill="sessionRaw = $event" />
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div class="flex gap-3">
           <button class="btn-secondary flex-1" @click="step = 1">上一步</button>
@@ -274,6 +265,7 @@ import XCookieGuide from '../../components/XCookieGuide.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
+import { X_REDEEM_UI } from '../../lib/features'
 
 const { t } = useI18n({ useScope: 'global' })
 const route = useRoute()
@@ -290,8 +282,16 @@ const product = ref<'gpt' | 'x' | 'tg'>('gpt')
 const xSeed = ref('')
 const tgSeed = ref('')
 
+const X_REDEEM_OFFLINE = 'X 兑换已暂停，如需处理请联系客服'
+
 function onSwitchGpt(raw: string) {
   if (/^DNX-/i.test(raw)) {
+    if (!X_REDEEM_UI) {
+      product.value = 'gpt'
+      code.value = raw
+      error.value = X_REDEEM_OFFLINE
+      return
+    }
     product.value = 'x'
     xSeed.value = raw
     return
@@ -307,12 +307,9 @@ function onSwitchGpt(raw: string) {
 const previewInfo = ref<any>(null)
 const redemptionToken = ref('')
 const preflightToken = ref('')
-const credMode = ref<'session' | 'mailbox'>('session')
 const sessionPlaceholder = '{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ...五段JWE..."}'
 const sessionRaw = ref('')
 const cookieGuide = ref(false)
-const email = ref('')
-const password = ref('')
 /** 预检成功后的账号/订阅摘要（与卡台 GPT 直充 preflight 字段对齐） */
 const account = ref({
   checked: false,
@@ -531,7 +528,7 @@ function invalidatePreflight() {
   recoveryPending.value = false
   clearAccount()
 }
-watch([code, sessionRaw, email, password, credMode], invalidatePreflight, { flush: 'sync' })
+watch([code, sessionRaw], invalidatePreflight, { flush: 'sync' })
 
 const alreadySatisfied = computed(() => {
   if (!account.value.checked || !targetPlan.value) return false
@@ -822,6 +819,11 @@ async function doPreview() {
     return
   }
   if (/^DNX-/i.test(code.value.trim())) {
+    // 下线时直接提示，别让 DNX- 码落到卡台去报一个看不懂的「无效卡密」
+    if (!X_REDEEM_UI) {
+      error.value = X_REDEEM_OFFLINE
+      return
+    }
     xSeed.value = code.value.trim()
     product.value = 'x'
     return
@@ -859,7 +861,6 @@ async function doPreview() {
       error.value = '未返回 redemption_token，请检查卡台 Base 配置'
       return
     }
-    if (isXPremiumPlan(String(previewInfo.value?.plan || ''))) credMode.value = 'session'
     step.value = 2
   } finally {
     busy.value = false
@@ -873,21 +874,12 @@ async function doPreflight() {
   error.value = ''
   busy.value = true
   try {
-    let credential: any
-    if (credMode.value === 'session') {
-      const session = isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
-      if (!session) {
-        error.value = isXPremiumPlan(targetPlan.value) ? t('xPremium.invalid') : '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
-        return
-      }
-      credential = { mode: 'session', session }
-    } else {
-      if (!email.value || !password.value) {
-        error.value = '请填写邮箱与密码'
-        return
-      }
-      credential = { mode: 'mailbox', email: email.value.trim(), password: password.value }
+    const session = isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
+    if (!session) {
+      error.value = isXPremiumPlan(targetPlan.value) ? t('xPremium.invalid') : '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
+      return
     }
+    const credential = { mode: 'session', session }
     const { r, data } = await api('/api/v1/public/cdk/preflight', {
       method: 'POST',
       body: JSON.stringify({
@@ -1057,9 +1049,17 @@ onMounted(() => {
   }, 30000)
   const q = String(route.query.cdk || route.query.code || '').trim()
   if (route.query.product === 'x' || /^DNX-/i.test(q)) {
-    product.value = 'x'
-    xSeed.value = q
-    return
+    if (X_REDEEM_UI) {
+      product.value = 'x'
+      xSeed.value = q
+      return
+    }
+    // 旧的 /x?code=DNX-… 链接：留在 ChatGPT 页并说明已暂停，不跳 404
+    if (/^DNX-/i.test(q)) {
+      code.value = q
+      error.value = X_REDEEM_OFFLINE
+      return
+    }
   }
   if (route.query.product === 'tg' || /^DNT-/i.test(q)) {
     product.value = 'tg'
