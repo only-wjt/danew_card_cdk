@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"math"
 	"net/http"
 	"strconv"
@@ -186,4 +187,10 @@ func RateLimitResultByCode() gin.HandlerFunc {
 
 func RateLimitBilling() gin.HandlerFunc {
 	return RateLimitByIP(billingLimiter, "查询太频繁，请稍后再试")
+}
+
+// writeUpstreamUnavailable 上游网络错误不透传给公开接口（会带出卡台地址/IP），只记日志。
+func writeUpstreamUnavailable(c *gin.Context, tag string, err error) {
+	log.Printf("[%s] upstream error: %v", tag, err)
+	c.JSON(http.StatusBadGateway, gin.H{"error": "兑换服务暂时不可用，请稍后重试"})
 }

@@ -14,7 +14,7 @@ gptcdk.ai, www.gptcdk.ai {
     # 全部反代到 CDK（SPA 由 Go WEB_DIR 托管）
     reverse_proxy 127.0.0.1:9080 {
         header_up X-Real-IP {client_ip}
-        header_up CF-Connecting-IP {client_ip}
+        # 不要覆盖 CF-Connecting-IP；橙云真实 IP 请在全局 servers 里配 trusted_proxies + client_ip_headers（见仓库 Caddyfile）
         header_up X-Forwarded-Proto {scheme}
         header_up X-Forwarded-Host {host}
     }

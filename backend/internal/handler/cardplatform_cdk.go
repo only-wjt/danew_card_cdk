@@ -1131,7 +1131,7 @@ func PublicCDKPreview(c *gin.Context) {
 	cli := legacyCardClientForCode(code)
 	st, raw, err := cli.Preview(c.Request.Context(), code, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-preview", err)
 		return
 	}
 	// 成功时记下 code ↔ redemption_token，供后续绑定 session / 账单查卡密
@@ -1178,7 +1178,7 @@ func PublicCDKPreflight(c *gin.Context) {
 	cli := legacyCardClientForCode(legacyCode)
 	st, raw, err := cli.Preflight(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-preflight", err)
 		return
 	}
 	// 预检成功才把 credential.session 绑到卡密（账单页可凭卡密查）。
@@ -1274,7 +1274,7 @@ func PublicCDKRedeem(c *gin.Context) {
 	cli := legacyCardClientForCode(redeemCode)
 	st, raw, err := cli.Redeem(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-redeem", err)
 		return
 	}
 	if enqueueImmediateGPTResult(c, accountID, redeemCode, body, st, raw) {
@@ -1304,7 +1304,7 @@ func PublicCDKResult(c *gin.Context) {
 		}
 		st, raw, err := route.Provider.Result(c.Request.Context(), token, deviceFrom(c))
 		if err != nil {
-			c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+			writeUpstreamUnavailable(c, "cdk-result", err)
 			return
 		}
 		raw = maskUpstreamCode(raw, route.RemoteCode, boundCode)
@@ -1336,7 +1336,7 @@ func PublicCDKResult(c *gin.Context) {
 	cli := legacyCardClientForCode(boundCode)
 	st, raw, err := cli.Result(c.Request.Context(), token, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-result", err)
 		return
 	}
 	// 卡健康观察（best-effort，不阻断用户）
@@ -1402,7 +1402,7 @@ func PublicCDKResultByCode(c *gin.Context) {
 		st, raw, err = legacyCardClientForCode(code).Result(c.Request.Context(), bind.RedemptionToken, deviceFrom(c))
 	}
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "cdk-result-by-code", err)
 		return
 	}
 	// 附带本站元信息，前端可恢复轮询 token

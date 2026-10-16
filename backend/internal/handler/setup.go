@@ -101,9 +101,6 @@ func SetupBootstrap(c *gin.Context) {
 	}
 
 	token := strings.TrimSpace(c.GetHeader("X-Setup-Token"))
-	if token == "" {
-		token = strings.TrimSpace(c.Query("setup_token"))
-	}
 	if !db.VerifySetupToken(token) {
 		setupFailed(ip)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid setup token"})

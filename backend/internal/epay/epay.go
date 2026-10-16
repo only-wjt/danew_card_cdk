@@ -3,6 +3,7 @@ package epay
 import (
 	"context"
 	"crypto/md5"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -133,7 +134,7 @@ func (c Config) VerifyNotify(params map[string]string) (ok bool, errMsg string) 
 		return false, "missing sign"
 	}
 	expect := SignWithMode(params, c.Key, c.signMode())
-	if !strings.EqualFold(got, expect) {
+	if subtle.ConstantTimeCompare([]byte(strings.ToLower(got)), []byte(strings.ToLower(expect))) != 1 {
 		return false, "invalid sign"
 	}
 	st := strings.TrimSpace(params["trade_status"])

@@ -2,6 +2,7 @@ package server
 
 import (
 	"crypto/subtle"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -123,6 +124,12 @@ func JWTAuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// 管理员被停用后旧 JWT 立即失效
+		if claims.IsAdmin && !claims.IsAgent && !db.AdminUserActive(claims.UserID) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "账号已停用"})
+			c.Abort()
+			return
+		}
 
 		// 基于 cookie 认证的写操作必须通过 CSRF 双提交校验（Bearer 头不受 CSRF 影响，跳过）
 		if fromCookie && isUnsafeMethod(c.Request.Method) {
@@ -194,6 +201,12 @@ func AgentAuthMiddleware() gin.HandlerFunc {
 			c.Abort()
 			return
 		}
+		// 与 API Key 路径一致：代理被停用后旧 JWT 立即失效
+		if !db.AgentUserActive(claims.UserID) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "账号已停用"})
+			c.Abort()
+			return
+		}
 
 		if fromCookie && isUnsafeMethod(c.Request.Method) {
 			csrfHeader := c.GetHeader("X-CSRF-Token")
@@ -223,4 +236,41 @@ func AdminAuthMiddleware() gin.HandlerFunc {
 		}
 		c.Next()
 	}
+}
+
+// 请求体上限：公开接口 1MB；管理端 / 代理端批量提交可能带上千条 session，放宽到 32MB。
+const (
+	publicMaxBody = 1 << 20
+	authedMaxBody = 32 << 20
+)
+
+func MaxBodyMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if c.Request.Body != nil {
+			limit := int64(publicMaxBody)
+			p := c.Request.URL.Path
+			if strings.HasPrefix(p, "/api/v1/admin/") || strings.HasPrefix(p, "/api/v1/agent/") {
+				limit = authedMaxBody
+			}
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, limit)
+		}
+		c.Next()
+	}
+}
+
+// pathOnlyLogFormatter 访问日志只记 path，不记 query（避免卡密、token 进日志）。
+func pathOnlyLogFormatter(p gin.LogFormatterParams) string {
+	path := p.Path
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		path = path[:i]
+	}
+	return fmt.Sprintf("[GIN] %v | %3d | %13v | %15s | %-7s %#v\n%s",
+		p.TimeStamp.Format("2006/01/02 - 15:04:05"),
+		p.StatusCode,
+		p.Latency,
+		p.ClientIP,
+		p.Method,
+		path,
+		p.ErrorMessage,
+	)
 }

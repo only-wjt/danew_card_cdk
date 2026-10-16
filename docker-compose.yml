@@ -17,7 +17,9 @@ services:
       WEB_DIR: /app/web
       INSTALL_MODE: ${INSTALL_MODE:-wizard}
       JWT_SECRET: ${JWT_SECRET:-}
-      TRUSTED_PROXIES: 172.16.0.0/12
+      # 应用端口不对外发布，能直连它的只有同一 compose 网络里的 Caddy；
+      # Docker 网段可能是 172.x / 10.x / 192.168.x，三段私网都信任，避免网段不同时全站共用一个 IP。
+      TRUSTED_PROXIES: 172.16.0.0/12,10.0.0.0/8,192.168.0.0/16
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
       interval: 30s

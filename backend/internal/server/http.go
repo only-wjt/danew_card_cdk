@@ -37,17 +37,25 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	}
 	notify.Start(ctx)
 
-	engine := gin.Default()
+	// 不用 gin.Default()：默认日志会记完整 query，而 ?code= / ?token= / ?setup_token= 都是敏感值。
+	engine := gin.New()
+	engine.Use(gin.LoggerWithConfig(gin.LoggerConfig{Formatter: pathOnlyLogFormatter}), gin.Recovery())
 
 	// 不信任任意代理头（X-Forwarded-For 等），保证限流拿到的是真实来源 IP。
 	// 若部署在已知反代后，用 TRUSTED_PROXIES（逗号分隔）显式声明。
+	var trusted []string
 	if tp := strings.TrimSpace(os.Getenv("TRUSTED_PROXIES")); tp != "" {
-		_ = engine.SetTrustedProxies(splitAndTrim(tp))
-	} else {
-		_ = engine.SetTrustedProxies(nil)
+		trusted = splitAndTrim(tp)
 	}
+	if err := engine.SetTrustedProxies(trusted); err != nil {
+		return nil, fmt.Errorf("TRUSTED_PROXIES 配置无效: %w", err)
+	}
+	// 优先 X-Real-IP：Caddy 每次都用 {client_ip} 覆盖它（橙云下已解析 CF-Connecting-IP）。
+	// X-Forwarded-For 末尾会被追加 Cloudflare 边缘 IP，从右往左取会拿到边缘节点而不是访客。
+	engine.RemoteIPHeaders = []string{"X-Real-IP", "X-Forwarded-For"}
 
 	// Setup middleware
+	engine.Use(MaxBodyMiddleware())
 	engine.Use(SecurityHeadersMiddleware())
 	engine.Use(CORSMiddleware())
 
@@ -74,17 +82,25 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 // enforceJWTSecret 在 release 模式下拒绝使用空/默认密钥启动。
 func enforceJWTSecret(mode string) error {
 	secret := os.Getenv("JWT_SECRET")
-	weak := secret == "" ||
-		secret == "your-secret-key-change-in-production" ||
-		secret == "dev-secret-key-change-in-production" ||
-		len(secret) < 16
+	weak := secret == "" || len(secret) < 16 || isPlaceholderSecret(secret)
 	if mode == "release" && weak {
-		return fmt.Errorf("不安全的 JWT_SECRET：release 模式必须设置至少 16 位的随机 JWT_SECRET 环境变量")
+		return fmt.Errorf("不安全的 JWT_SECRET：release 模式必须设置至少 16 位的随机 JWT_SECRET 环境变量（不能沿用示例值）")
 	}
 	if weak {
 		log.Printf("⚠️  当前 JWT_SECRET 不安全（默认/过短）。仅可用于本地开发，部署前请设置强随机 JWT_SECRET（release 模式将拒绝启动）。")
 	}
 	return nil
+}
+
+// isPlaceholderSecret 仓库里出现过的示例/占位密钥：照抄即等于公开，任何人都能伪造管理员 token。
+func isPlaceholderSecret(secret string) bool {
+	s := strings.ToLower(secret)
+	for _, marker := range []string{"change-me", "changeme", "your-secret", "dev-secret", "example", "placeholder"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitAndTrim(s string) []string {

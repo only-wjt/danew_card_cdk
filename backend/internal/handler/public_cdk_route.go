@@ -79,7 +79,7 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 	body["code"] = route.RemoteCode
 	st, raw, err := route.Provider.Preflight(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "site-preflight", err)
 		return
 	}
 	raw = maskUpstreamCode(raw, route.RemoteCode, siteCode)
@@ -116,7 +116,7 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 	if err != nil {
 		// 请求都没打出去，码没被消耗，放回去让用户重试同一台。
 		_ = db.UpdateBindingStatus(route.BindingID, db.BindingStatusUnused, err.Error())
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		writeUpstreamUnavailable(c, "site-redeem", err)
 		return
 	}
 	raw = maskUpstreamCode(raw, route.RemoteCode, siteCode)
