@@ -17,33 +17,33 @@ const (
 	AgentOrderStatusExpired         = "expired"
 	AgentOrderStatusCancelled       = "cancelled"
 
-	AgentOrderMaxCount     = 50
-	AgentOrderPendingTTL   = 30 * time.Minute
-	AgentOrderNoPrefix     = "AG"
+	AgentOrderMaxCount   = 50
+	AgentOrderPendingTTL = 30 * time.Minute
+	AgentOrderNoPrefix   = "AG"
 )
 
 // AgentOrder 代理购卡订单。
 type AgentOrder struct {
-	ID                int64    `json:"id"`
-	OrderNo           string   `json:"order_no"`
-	AgentUserID       int64    `json:"agent_user_id"`
-	Plan              string   `json:"plan"`
-	PlanLabel         string   `json:"plan_label"`
-	Count             int      `json:"count"`
-	UnitPriceCents    int64    `json:"unit_price_cents"`
-	TotalAmountCents  int64    `json:"total_amount_cents"`
-	Status            string   `json:"status"`
-	PayType           string   `json:"pay_type"`
-	EpayTradeNo       string   `json:"epay_trade_no,omitempty"`
-	IssuedCount       int      `json:"issued_count"`
-	IssuedCodes       []string `json:"issued_codes,omitempty"`
-	FailReason        string   `json:"fail_reason,omitempty"`
-	PaidAt            string   `json:"paid_at,omitempty"`
-	DeliveredAt       string   `json:"delivered_at,omitempty"`
-	ExpiresAt         string   `json:"expires_at,omitempty"`
-	CreatedAt         string   `json:"created_at"`
-	UpdatedAt         string   `json:"updated_at"`
-	AgentUsername     string   `json:"agent_username,omitempty"`
+	ID               int64    `json:"id"`
+	OrderNo          string   `json:"order_no"`
+	AgentUserID      int64    `json:"agent_user_id"`
+	Plan             string   `json:"plan"`
+	PlanLabel        string   `json:"plan_label"`
+	Count            int      `json:"count"`
+	UnitPriceCents   int64    `json:"unit_price_cents"`
+	TotalAmountCents int64    `json:"total_amount_cents"`
+	Status           string   `json:"status"`
+	PayType          string   `json:"pay_type"`
+	EpayTradeNo      string   `json:"epay_trade_no,omitempty"`
+	IssuedCount      int      `json:"issued_count"`
+	IssuedCodes      []string `json:"issued_codes,omitempty"`
+	FailReason       string   `json:"fail_reason,omitempty"`
+	PaidAt           string   `json:"paid_at,omitempty"`
+	DeliveredAt      string   `json:"delivered_at,omitempty"`
+	ExpiresAt        string   `json:"expires_at,omitempty"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
+	AgentUsername    string   `json:"agent_username,omitempty"`
 }
 
 type AgentOrderQuery struct {
@@ -253,7 +253,11 @@ func MarkAgentOrderPaid(orderNo, epayTradeNo string) (AgentOrder, bool, error) {
 // AgentOrderIssuingLease 发货认领的租约时长。超过它仍停在 issuing 的订单视为
 // 上次发货已中断（进程重启等），允许重新认领；未超时的 issuing 不可重复认领，
 // 否则并发发货会给同一张订单发两轮码、卡台扣两次费。
-const AgentOrderIssuingLease = 10 * time.Minute
+//
+// 必须明显大于 handler 侧 agentOrderFulfillTimeout（10 分钟）：两者相等时，
+// 一次被挂起/暂停的 goroutine 恢复后可能刚好在租约到期的同一刻重新认领并按
+// 旧快照重发一轮（review Medium-3）。
+const AgentOrderIssuingLease = 20 * time.Minute
 
 // UpdateAgentOrderIssuing 认领发货：只从 paid / paid_undelivered 认领，
 // 或认领已超过租约的 issuing（崩溃恢复）。成功返回 true，表示本次调用独占发货权。
@@ -393,4 +397,39 @@ func truncate(s string, n int) string {
 
 type scanner interface {
 	Scan(dest ...any) error
+}
+
+// ListAgentOrdersNeedingFulfill 列出需要重新发货的订单：
+// paid / paid_undelivered（付款成功但还没发出去），以及租约已过期的 issuing
+// （发货中途进程被杀，凭据没了但单已收钱）。
+// 用于进程启动时兜底，避免「付了钱但那张单永远停住」。
+func ListAgentOrdersNeedingFulfill(limit int) ([]AgentOrder, error) {
+	if DB == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := DB.Query(`
+		SELECT `+agentOrderCols+`
+		FROM agent_orders
+		WHERE status IN (?, ?)
+		   OR (status = ? AND updated_at <= datetime('now', ?))
+		ORDER BY paid_at ASC
+		LIMIT ?
+	`, AgentOrderStatusPaid, AgentOrderStatusPaidUndelivered,
+		AgentOrderStatusIssuing, fmt.Sprintf("-%d seconds", int(AgentOrderIssuingLease.Seconds())), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AgentOrder
+	for rows.Next() {
+		o, err := scanAgentOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
 }

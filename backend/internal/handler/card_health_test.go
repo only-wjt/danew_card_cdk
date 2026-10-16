@@ -4,10 +4,10 @@ import "testing"
 
 func TestEvaluateCardFailVerdict(t *testing.T) {
 	cases := []struct {
-		name              string
+		name               string
 		fail, distinct, th int
-		requireKnown      bool
-		want              string
+		requireKnown       bool
+		want               string
 	}{
 		{"under threshold", 1, 1, 2, true, verdictNeedMore},
 		{"same email twice", 2, 1, 2, true, verdictEmailSuspect},

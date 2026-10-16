@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -408,6 +409,13 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 	}
 	if err := db.CreateAdminRechargeBatch(batch, fp, items); err != nil {
 		log.Printf("[batch-recharge] create batch failed: %v", err)
+		if errors.Is(err, db.ErrCDKNotReservable) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":      "部分卡密正在别的在途批次中使用，请等它结束后重试",
+				"error_code": "CDK_UNAVAILABLE",
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建批次失败"})
 		return
 	}
@@ -601,18 +609,22 @@ func AdminBatchRechargeRetry(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "批次不存在"})
 		return
 	}
-	// 批次仍在跑时不许并行对齐：重试协程与执行协程会同时 patch 同一批明细，
-	// 终态事件和卡密对账各触发两次（见 C9）。
-	if batch.Status == batchStatusRunning {
+	items, err := db.ListAdminRechargeItems(batchID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	// 批次头写着 running 且确实还有未落终态的明细时不许并行对齐：重试协程与执行
+	// 协程会同时 patch 同一批明细，终态事件和卡密对账各触发两次（见 C9）。
+	//
+	// 判据用的是「明细是否真的还在跑」，不是批次头的状态：进程在最后一条明细之后、
+	// 写批次状态之前被杀，批次头会永远停在 running，而这条接口正是唯一能把它翻成
+	// done 的路径（下面的 allDone 分支）。按状态硬挡会造成死锁（review High-2）。
+	if batch.Status == batchStatusRunning && batchRechargeHasInFlightItems(items) {
 		c.JSON(http.StatusConflict, gin.H{
 			"error":  "批次仍在执行中，请等它结束后再重试对齐",
 			"status": batch.Status,
 		})
-		return
-	}
-	items, err := db.ListAdminRechargeItems(batchID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -1126,4 +1138,17 @@ func regionOrDefault(country string) string {
 		return "default(PH)"
 	}
 	return country
+}
+
+// batchRechargeHasInFlightItems 是否还有明细真的在途（正在发码/预检/提交/等结果）。
+// 用于判断「重试对齐」会不会和执行协程撞车；pending 不算在途：
+// 没有 redemption_token，重试本来也对齐不了。
+func batchRechargeHasInFlightItems(items []db.AdminRechargeItem) bool {
+	for _, it := range items {
+		switch strings.ToLower(strings.TrimSpace(it.Status)) {
+		case itemStatusIssuing, itemStatusPreparing, itemStatusSubmitted, itemStatusRunning:
+			return true
+		}
+	}
+	return false
 }

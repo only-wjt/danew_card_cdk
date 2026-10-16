@@ -16,6 +16,11 @@ var (
 	ErrCDKInFlight     = errors.New("卡密正在其他充值任务中使用")
 	ErrCDKDuplicate    = errors.New("本批卡密重复")
 	ErrCDKLocalStock   = errors.New("GPT白号不能用于代充，请复制发给下级")
+
+	// ErrCDKNotReservable 占位失败：码已被别的在途批次占用，或已被消耗。
+	// 包装 ErrCDKUnavailable，这样 AgentCDKErrorCode 会归到 CDK_UNAVAILABLE，
+	// 调用方也能用 errors.Is(err, ErrCDKUnavailable) 判断（review Medium-5）。
+	ErrCDKNotReservable = fmt.Errorf("卡密已被占用或正在使用中：%w", ErrCDKUnavailable)
 )
 
 // StoredCDK 本站缓存的卡密详情。
@@ -506,9 +511,12 @@ func ReleaseAgentCDK(code string) error {
 	if strings.EqualFold(row.Status, "consumed") {
 		return nil
 	}
-	if n, err := CountItemsBlockingCDKRelease(code); err != nil {
+	// 查不到就不能放：宁可让站长手动处理，也不要放回一张可能已成功的码。
+	n, err := CountItemsBlockingCDKRelease(code)
+	if err != nil {
 		return err
-	} else if n > 0 {
+	}
+	if n > 0 {
 		return nil
 	}
 	return UpdateCardplatformCDKStatusByID(row.ID, "unused")

@@ -8,13 +8,13 @@ import (
 )
 
 const (
-	PlanGPTWhite              = "gpt_white"
-	PlanGPTWhiteLabel         = "GPT白号"
-	PlanGPTWhiteDefaultCents  = int64(300) // ¥3.00
-	FulfillmentLocalStock     = "local_stock"
-	FulfillmentCardPlatform   = "card_platform"
-	localStockImportMaxItems  = 500
-	localStockCodeMaxRunes    = 512
+	PlanGPTWhite             = "gpt_white"
+	PlanGPTWhiteLabel        = "GPT白号"
+	PlanGPTWhiteDefaultCents = int64(300) // ¥3.00
+	FulfillmentLocalStock    = "local_stock"
+	FulfillmentCardPlatform  = "card_platform"
+	localStockImportMaxItems = 500
+	localStockCodeMaxRunes   = 512
 )
 
 // IsLocalStockPlan 本站库存 SKU（不走卡台发码）。

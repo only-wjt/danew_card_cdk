@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/gin-gonic/gin"
 )
 
 // 一键更新状态（进程内；重启后重置为 idle，版本由 VERSION 体现）

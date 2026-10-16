@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
+	"github.com/gin-gonic/gin"
 )
 
 // NetworkEgress GET /api/v1/admin/network/egress
@@ -17,9 +17,9 @@ func NetworkEgress(c *gin.Context) {
 	cfg := cardplatform.LoadConfig()
 	ip, source, err := detectEgressIP(c.Request.Context())
 	out := gin.H{
-		"card_site_base":   cfg.SiteBase,
-		"openapi_base":     cfg.OpenAPIBase(),
-		"public_cdk_base":  cfg.PublicCDKBase(),
+		"card_site_base":     cfg.SiteBase,
+		"openapi_base":       cfg.OpenAPIBase(),
+		"public_cdk_base":    cfg.PublicCDKBase(),
 		"api_key_configured": strings.TrimSpace(cfg.APIKey) != "",
 		"presets": []gin.H{
 			{"id": "prod", "label": "生产", "site_base": "https://spacexcard.com", "openapi": "https://spacexcard.com/openapi/v1", "cdk": "https://spacexcard.com/api/v1/cdk"},

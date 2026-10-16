@@ -2118,7 +2118,7 @@ func CreateAdminRechargeBatch(b AdminRechargeBatch, fingerprint string, items []
 				return rerr
 			}
 			if n, _ := res.RowsAffected(); n != 1 {
-				return fmt.Errorf("cdk not reservable: %s", code)
+				return fmt.Errorf("%w（code=%s）", ErrCDKNotReservable, code)
 			}
 		}
 	}
@@ -2346,19 +2346,24 @@ func PatchAdminRechargeItem(clientRequestID string, p AdminRechargeItemPatch) er
 	sets = append(sets, "updated_at = CURRENT_TIMESTAMP")
 	args = append(args, clientRequestID)
 	where := ` WHERE client_request_id = ?`
-	// 终态单向：明细一旦落到 success/failed/skipped/unknown，就不允许被改回非终态。
-	// 否则「重试」接口与仍在跑的批次协程会互相覆盖（见 C9）。
+	// 终态单向：已定论的明细不允许被改回非终态，否则「重试」接口与仍在跑的批次
+	// 协程会互相覆盖（见 C9）。
+	//
+	// 注意这里**不含 unknown**：unknown 表示「结果不确定，等人工/上游核对」，
+	// 而 resolveOneRecharge 正是把它对齐成 processing 或某个终态的唯一路径
+	// （admin_batch_recharge.go 的 switch 显式包含 itemStatusUnknown）。
+	// 把 unknown 也挡住会让这类明细永远卡住（review High-1）。
 	if p.Status != nil && !isTerminalRechargeItemStatus(*p.Status) {
-		where += ` AND lower(COALESCE(status,'')) NOT IN ('success','failed','skipped','unknown')`
+		where += ` AND lower(COALESCE(status,'')) NOT IN ('success','failed','skipped')`
 	}
 	_, err := DB.Exec(`UPDATE admin_recharge_items SET `+strings.Join(sets, ", ")+where, args...)
 	return err
 }
 
-// isTerminalRechargeItemStatus 明细终态判定（与 handler 侧状态机一致）。
+// isTerminalRechargeItemStatus 已定论的明细状态（unknown 不算：它可被重新对齐）。
 func isTerminalRechargeItemStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "success", "failed", "skipped", "unknown":
+	case "success", "failed", "skipped":
 		return true
 	}
 	return false

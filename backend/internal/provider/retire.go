@@ -29,6 +29,10 @@ func RetireSiblings(ctx context.Context, siteCodeID, consumedBindingID int64) {
 			continue
 		}
 		if !claimed {
+			// 不是本次该处理的（别人正在收，或状态不适合自动收回）。
+			// 打日志而不是静默跳过：reserved/unknown 这类需要人工确认
+			// 「上游那张码是不是还活着」（review Medium-3）。
+			log.Printf("[retire] skip sibling binding=%d status=%s remote=%s", b.ID, b.Status, b.RemoteID)
 			continue
 		}
 		p, _, perr := ForAccount(b.AccountID)
@@ -64,17 +68,16 @@ func MarkConsumed(ctx context.Context, r *Route) {
 	if r == nil || !r.IsSite {
 		return
 	}
-	won, err := db.UpdateBindingStatusFrom(r.BindingID,
-		[]string{db.BindingStatusRedeeming, db.BindingStatusUnused, db.BindingStatusFailed, db.BindingStatusReserved},
-		db.BindingStatusConsumed, "")
+	won, err := db.MarkBindingConsumed(r.BindingID)
 	if err != nil {
 		log.Printf("[retire] mark consumed binding=%d: %v", r.BindingID, err)
 		return
 	}
-	if !won {
-		// 已经是 consumed（或已退役/退回），说明另一次调用已经在处理，不重复退役。
-		return
+	if won {
+		_ = db.MarkSiteCDKFulfilled(r.SiteCodeID, r.Account.ID, r.Provider.Protocol(), r.FailoverUsed, r.FailoverReason)
 	}
-	_ = db.MarkSiteCDKFulfilled(r.SiteCodeID, r.Account.ID, r.Provider.Protocol(), r.FailoverUsed, r.FailoverReason)
+	// 无论是不是本次写成的都继续退役兄弟码：RetireSiblings 自己会先认领每张兄弟码，
+	// 重复调用是幂等的。条件写只用来决定「谁记录履约信息」，不能用来决定
+	// 「要不要退役」——否则 unknown/其它状态的兄弟码会被永久漏掉（review #5）。
 	RetireSiblings(ctx, r.SiteCodeID, r.BindingID)
 }

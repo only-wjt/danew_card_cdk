@@ -685,6 +685,9 @@ func submitAgentRecharge(c *gin.Context, operator string, agentID int64, source,
 	}
 	if err := db.CreateAdminRechargeBatch(batch, fp, []db.AdminRechargeItem{item}); err != nil {
 		log.Printf("[agent-recharge] create failed: %v", err)
+		if errors.Is(err, db.ErrCDKNotReservable) {
+			return nil, http.StatusConflict, db.ErrCDKUnavailable
+		}
 		return nil, http.StatusInternalServerError, fmt.Errorf("创建任务失败")
 	}
 	jobs := []batchRechargeJob{{seq: 1, clientRequestID: crid, cred: cred}}

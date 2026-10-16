@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -348,10 +349,13 @@ func EpayNotify(c *gin.Context) {
 			return
 		}
 		if order.Status == db.AgentOrderStatusPaidUndelivered {
-			order, err = fulfillAgentOrder(c.Request.Context(), order)
-			if err != nil {
-				log.Printf("[epay] retry fulfill fail order=%s: %v", orderNo, err)
-			}
+			// 后台发货并立即 ack：支付网关回调阻塞超过它的超时会被判失败并重试，
+			// 而重试本身不会重复发货（认领 + 幂等键保证），只是白跑。
+			goSafe("epay-fulfill-retry", func() {
+				if _, ferr := fulfillAgentOrder(context.Background(), order); ferr != nil {
+					log.Printf("[epay] retry fulfill fail order=%s: %v", orderNo, ferr)
+				}
+			})
 			c.String(http.StatusOK, "success")
 			return
 		}
@@ -361,9 +365,13 @@ func EpayNotify(c *gin.Context) {
 
 	db.WriteAudit("epay", "agent_order_paid", orderNo+" cents="+strconv.FormatInt(moneyCents, 10), c.ClientIP())
 
-	if _, err := fulfillAgentOrder(c.Request.Context(), order); err != nil {
-		log.Printf("[epay] fulfill fail order=%s: %v", orderNo, err)
-	}
+	// 同上：先 ack 再后台发货。订单已落 paid，发货失败/中断由启动时的
+	// ResumeStuckAgentOrders 兜底，不会漏单。
+	goSafe("epay-fulfill", func() {
+		if _, ferr := fulfillAgentOrder(context.Background(), order); ferr != nil {
+			log.Printf("[epay] fulfill fail order=%s: %v", orderNo, ferr)
+		}
+	})
 	c.String(http.StatusOK, "success")
 }
 

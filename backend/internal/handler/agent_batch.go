@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -211,6 +212,13 @@ func AgentBatchCreate(c *gin.Context) {
 	}
 	if err := db.CreateAdminRechargeBatch(batch, fp, items); err != nil {
 		log.Printf("[agent-batch] create batch failed: %v", err)
+		// 占位竞争失败是有明确语义的：码正被别处在途任务占用。
+		// 归到 CDK_UNAVAILABLE / 409，代理才能区分「手慢了」和「系统故障」。
+		if errors.Is(err, db.ErrCDKNotReservable) {
+			agentErr(c, http.StatusConflict, db.AgentCDKErrorCode(db.ErrCDKUnavailable),
+				db.AgentCDKErrorMessage(db.ErrCDKUnavailable))
+			return
+		}
 		agentErr(c, http.StatusInternalServerError, "INTERNAL", "创建批次失败")
 		return
 	}

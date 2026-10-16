@@ -112,9 +112,12 @@ func fulfillAgentOrder(ctx context.Context, order db.AgentOrder) (db.AgentOrder,
 	}
 	// 认领成功后必须重读：调用方手里的 order 可能是很久以前的快照（例如上一次
 	// 发货已发了一部分码但收尾失败），拿旧快照算 need 会重复发满一整轮。
-	if fresh, ferr := db.GetAgentOrderByNo(order.OrderNo); ferr == nil {
-		order = fresh
+	// 读失败不能继续：那等于用旧快照发货，正是这一步要防的事。
+	fresh, ferr := db.GetAgentOrderByNo(order.OrderNo)
+	if ferr != nil {
+		return order, fmt.Errorf("读取订单失败，未发货：%w", ferr)
 	}
+	order = fresh
 	existing := append([]string{}, order.IssuedCodes...)
 	// 重试只补差额。need<=0 时不能回落成 order.Count：已经发满、只是收尾失败的单
 	// 会被再发一轮，卡台重复扣费、白号重复占库存，最后按 2×count 发货。
@@ -200,4 +203,33 @@ func fulfillAgentOrder(ctx context.Context, order db.AgentOrder) (db.AgentOrder,
 	}
 	enqueueAgentOrderDelivered(order)
 	return order, nil
+}
+
+// ResumeStuckAgentOrders 启动时兜底发货：把「已付款但没发出去」和「发货中途中断
+// （租约已过期）」的订单重新跑一遍。
+//
+// 代理订单与批量充值不同，重跑不需要用户凭据（码是向卡台现买的），所以可以安全重放；
+// 幂等由 UpdateAgentOrderIssuing 的认领 + 幂等键保证，不会重复扣费。
+func ResumeStuckAgentOrders(ctx context.Context) {
+	orders, err := db.ListAgentOrdersNeedingFulfill(50)
+	if err != nil {
+		log.Printf("[agent-order] resume query failed: %v", err)
+		return
+	}
+	if len(orders) == 0 {
+		return
+	}
+	log.Printf("[agent-order] resume: %d order(s) need fulfillment", len(orders))
+	goSafe("resume-agent-orders", func() {
+		for _, o := range orders {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			if _, ferr := fulfillAgentOrder(ctx, o); ferr != nil {
+				log.Printf("[agent-order] resume fulfill order=%s: %v", o.OrderNo, ferr)
+			}
+		}
+	})
 }

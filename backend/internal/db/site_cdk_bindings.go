@@ -1,9 +1,12 @@
 package db
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"strings"
+	"time"
 )
 
 const (
@@ -248,6 +251,26 @@ func UpdateBindingStatusFrom(bindingID int64, from []string, status, lastError s
 	return n == 1, nil
 }
 
+// MarkBindingConsumed 核销成功：条件转入 consumed 并清掉本次的幂等键。
+// 返回 true 表示本次是「胜出者」（此前不是 consumed）。
+// 键与状态在同一条语句里改，避免出现「已 consumed 但仍挂着旧键」的中间态。
+func MarkBindingConsumed(bindingID int64) (bool, error) {
+	if DB == nil || bindingID <= 0 {
+		return false, nil
+	}
+	res, err := DB.Exec(`
+		UPDATE site_cdk_bindings
+		SET status = ?, redeem_client_id = '', last_error = '', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND status IN (?, ?, ?, ?)
+	`, BindingStatusConsumed, bindingID,
+		BindingStatusRedeeming, BindingStatusUnused, BindingStatusFailed, BindingStatusReserved)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
+}
+
 // ResetBindingForRetry 业务拒绝后放回可重试，并清掉幂等键：
 // 用户会改凭证重来，复用旧键会拿回同一个已被拒的订单。
 func ResetBindingForRetry(bindingID int64, lastError string) error {
@@ -298,6 +321,16 @@ func GetActiveBindingID(siteCodeID int64) (int64, error) {
 }
 
 // ClaimBindingForRedeem 抢占式把 binding 置为 redeeming。
+// newRedeemClientID 调用方没给幂等键时，由服务端生成一个并落库。
+// 不能留空：空键会让下一次重试又生成新键，上游就会当成两笔订单各扣一次。
+func newRedeemClientID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return ""
+	}
+	return "srv-" + hex.EncodeToString(b)
+}
+
 // ClaimBindingForRedeem 认领兑换权。同一 binding 并发只有一个请求能拿到。
 //
 // candidate 是本次的幂等键。重新认领一个卡在 redeeming 的 binding（上次结果未知
@@ -309,6 +342,11 @@ func ClaimBindingForRedeem(bindingID int64, candidate string) (bool, string, err
 		return false, "", fmt.Errorf("invalid binding id")
 	}
 	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		// 直接调 API 的调用方可能不带 client_request_id；服务端补一个，
+		// 后续重试才能复用它（见 review 发现的空键分支）。
+		candidate = newRedeemClientID()
+	}
 	res, err := DB.Exec(`
 		UPDATE site_cdk_bindings
 		SET status = ?, updated_at = CURRENT_TIMESTAMP,
@@ -339,12 +377,33 @@ func ClaimBindingForRedeem(bindingID int64, candidate string) (bool, string, err
 	return true, stored, nil
 }
 
+// BindingRetireLease 收回租约。认领后若进程在写终态前崩溃/被杀，行会停在 retiring；
+// 超过租约就允许重新认领，否则这张码会永远从路由里消失（见 review High-2）。
+const BindingRetireLease = 10 * time.Minute
+
 // ClaimBindingForRetire 认领「收回这张兄弟码」的权利。
-// 从可用态（unused/failed）条件转入 retiring：并发的多路轮询里只有一个能拿到，
+// 从可用态（unused/failed/reserved）条件转入 retiring：并发的多路轮询里只有一个能拿到，
 // 其他直接返回 false，从而避免对同一张上游码重复退款/禁用。
+// 停在 retiring 超过租约的行允许被重新认领（崩溃恢复）。
 func ClaimBindingForRetire(bindingID int64) (bool, error) {
-	return UpdateBindingStatusFrom(bindingID,
-		[]string{BindingStatusUnused, BindingStatusFailed}, BindingStatusRetiring, "核销后收回中")
+	if DB == nil || bindingID <= 0 {
+		return false, nil
+	}
+	res, err := DB.Exec(`
+		UPDATE site_cdk_bindings
+		SET status = ?, last_error = '核销后收回中', updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND (
+			status IN (?, ?, ?)
+			OR (status = ? AND updated_at <= datetime('now', ?))
+		)
+	`, BindingStatusRetiring, bindingID,
+		BindingStatusUnused, BindingStatusFailed, BindingStatusReserved,
+		BindingStatusRetiring, fmt.Sprintf("-%d seconds", int(BindingRetireLease.Seconds())))
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n == 1, nil
 }
 
 // SiblingBindings 同一本站码下除指定 binding 外的其他绑定（核销后要退役它们）。
@@ -358,9 +417,11 @@ func SiblingBindings(siteCodeID, exceptBindingID int64) ([]SiteCDKBinding, error
 		if b.ID == exceptBindingID {
 			continue
 		}
-		// retiring 也算已决定收回，不再重复处理；unknown 留给人工核对。
+		// 已定论的不再处理：退回成功/已作废/已核销。
+		// retiring 必须留着：进程中途崩掉的行会停在 retiring，而「重新认领超期
+		// retiring」正是唯一的恢复路径——在这里跳过它，恢复代码就永远跑不到。
 		if b.Status == BindingStatusRefunded || b.Status == BindingStatusRetired ||
-			b.Status == BindingStatusConsumed || b.Status == BindingStatusRetiring {
+			b.Status == BindingStatusConsumed {
 			continue
 		}
 		out = append(out, b)

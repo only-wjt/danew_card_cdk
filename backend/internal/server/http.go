@@ -70,6 +70,9 @@ func New(ctx context.Context, cfg *config.Config) (*Server, error) {
 	// 重启后把仍在途的批量充值明细与上游状态对齐一次
 	handler.ResumeInFlightBatchRecharges(ctx)
 
+	// 重启后补发「已付款但没发出去」的代理订单（发货中途被杀、租约已过期）
+	handler.ResumeStuckAgentOrders(ctx)
+
 	// 代理回调投递 worker：消费 agent_webhook_deliveries outbox
 	agentwebhook.Start(ctx)
 
