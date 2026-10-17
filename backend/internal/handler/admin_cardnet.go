@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
 )
 
@@ -124,6 +125,36 @@ func AdminRotateCardnetClientKey(c *gin.Context) {
 	auditAdmin(c, "cardnet_client_rotate_key", fmt.Sprintf("id=%d", id))
 	client, _ := db.GetCardnetClient(id)
 	c.JSON(http.StatusOK, gin.H{"client": client, "api_key": key})
+}
+
+// AdminCardnetOptions GET /api/v1/admin/cardnet/options
+// 客户端表单可勾选的套餐与地区：与卡网发码同源（主台可售档位、主台下发的地区）。
+func AdminCardnetOptions(c *gin.Context) {
+	out := gin.H{"plans": []gin.H{}, "payment_regions": []cardplatform.PaymentRegion{}}
+	acc, err := cardnetPrimaryAccount()
+	if err != nil {
+		out["message"] = "主台不可用：" + err.Error()
+		c.JSON(http.StatusOK, out)
+		return
+	}
+	snap := cardnetUpstream(c.Request.Context(), acc)
+	if snap.plansErr != nil || snap.plans == nil {
+		out["message"] = "读取卡台套餐失败"
+		c.JSON(http.StatusOK, out)
+		return
+	}
+	plans := []gin.H{}
+	for _, p := range snap.plans.SellablePlans() {
+		if cardplatform.IsXPremiumPlan(p.Key) {
+			continue
+		}
+		plans = append(plans, gin.H{"key": p.Key, "label": p.Label, "service_fee_usd_minor": p.ServiceFeeUsdMinor})
+	}
+	out["plans"] = plans
+	if snap.plans.PaymentRegions != nil {
+		out["payment_regions"] = snap.plans.PaymentRegions
+	}
+	c.JSON(http.StatusOK, out)
 }
 
 // AdminListCardnetRequests GET /api/v1/admin/cardnet/requests

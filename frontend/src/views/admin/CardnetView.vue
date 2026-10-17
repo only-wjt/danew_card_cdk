@@ -215,12 +215,46 @@
           <input v-model="editing.name" class="input" placeholder="例如 card.danew.cc" />
         </div>
         <div class="form-group">
-          <label>允许套餐（逗号分隔，留空则不能发任何码）</label>
-          <input v-model="editing.plans" class="input mono" placeholder="plus, pro_20x" />
+          <label>允许套餐（不勾选则不能发任何码）</label>
+          <div v-if="optionsLoading" class="text-xs text-muted">正在读取卡台套餐…</div>
+          <template v-else>
+            <div v-if="planChoices.length" class="check-list">
+              <label
+                v-for="p in planChoices"
+                :key="p.key"
+                class="check-tile"
+                :class="{ 'is-checked': editing.plans.includes(p.key) }"
+              >
+                <input type="checkbox" :value="p.key" v-model="editing.plans" />
+                <span class="flex-1">
+                  <span class="font-medium text-ink">{{ p.label || p.key }}</span>
+                  <span class="block text-xs text-muted mono">
+                    {{ p.key }}<template v-if="p.stale"> · 卡台已停售</template><template v-else> · {{ usd(p.service_fee_usd_minor) }}/张</template>
+                  </span>
+                </span>
+              </label>
+            </div>
+            <p v-if="optionsMessage" class="text-xs text-err mt-1">{{ optionsMessage }}</p>
+          </template>
         </div>
         <div class="form-group">
-          <label>允许地区（两位国家代码，留空则只允许默认地区 PH）</label>
-          <input v-model="editing.countries" class="input mono" placeholder="PH, US" />
+          <label>允许地区（不勾选则只允许默认地区 PH）</label>
+          <div v-if="!optionsLoading" class="check-list">
+            <label
+              v-for="r in regionChoices"
+              :key="r.country"
+              class="check-tile"
+              :class="{ 'is-checked': editing.countries.includes(r.country) }"
+            >
+              <input type="checkbox" :value="r.country" v-model="editing.countries" />
+              <span class="flex-1">
+                <span class="font-medium text-ink">{{ regionLabel(r.country) }}</span>
+                <span class="block text-xs text-muted mono">
+                  {{ r.country }}<template v-if="r.currency"> · {{ r.currency }}</template><template v-if="r.stale"> · 卡台已不支持</template>
+                </span>
+              </span>
+            </label>
+          </div>
         </div>
         <div class="form-group">
           <label>每日额度（北京时间自然日，0 = 禁止发码）</label>
@@ -286,6 +320,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
+import { regionLabel } from '../../lib/region'
 import Modal from '../../components/Modal.vue'
 import Pagination from '../../components/Pagination.vue'
 
@@ -378,7 +413,50 @@ const statTotal = ref({ codes: 0, consumed: 0, disabled: 0, fee_minor: 0 })
 
 const clientOpen = ref(false)
 const saving = ref(false)
-const editing = reactive({ id: 0, name: '', plans: '', countries: '', limit: 200, ips: '' })
+const editing = reactive({ id: 0, name: '', plans: [] as string[], countries: [] as string[], limit: 200, ips: '' })
+
+// 表单勾选项：与卡网发码同源（主台可售档位与地区）。已授权但卡台已下架的项也列出来，方便取消勾选。
+interface PlanOption { key: string; label: string; service_fee_usd_minor: number; stale?: boolean }
+interface RegionOption { country: string; currency: string; stale?: boolean }
+const planOptions = ref<PlanOption[]>([])
+const regionOptions = ref<RegionOption[]>([])
+const optionsLoading = ref(false)
+const optionsMessage = ref('')
+
+const planChoices = computed<PlanOption[]>(() => {
+  const known = new Set(planOptions.value.map((p) => p.key))
+  const stale = editing.plans
+    .filter((key) => !known.has(key))
+    .map((key) => ({ key, label: key, service_fee_usd_minor: 0, stale: true }))
+  return [...planOptions.value, ...stale]
+})
+
+const regionChoices = computed<RegionOption[]>(() => {
+  const list: RegionOption[] = [...regionOptions.value]
+  // 卡台未下发地区清单时至少给出默认地区 PH。
+  if (!list.some((r) => r.country === 'PH')) list.unshift({ country: 'PH', currency: 'PHP' })
+  for (const code of editing.countries) {
+    if (!list.some((r) => r.country === code)) list.push({ country: code, currency: '', stale: true })
+  }
+  return list
+})
+
+async function loadOptions() {
+  optionsLoading.value = true
+  optionsMessage.value = ''
+  try {
+    const d = await api('/api/v1/admin/cardnet/options')
+    planOptions.value = d.plans || []
+    regionOptions.value = d.payment_regions || []
+    optionsMessage.value = d.message || (planOptions.value.length ? '' : '卡台没有可售套餐')
+  } catch (e: any) {
+    planOptions.value = []
+    regionOptions.value = []
+    optionsMessage.value = e.message
+  } finally {
+    optionsLoading.value = false
+  }
+}
 const newKey = ref('')
 
 const clientNames = computed(() => {
@@ -434,11 +512,12 @@ async function loadClients() {
 function openClient(c?: CardnetClient) {
   editing.id = c?.id || 0
   editing.name = c?.name || ''
-  editing.plans = (c?.allowed_plans || []).join(', ')
-  editing.countries = (c?.allowed_countries || []).join(', ')
+  editing.plans = [...(c?.allowed_plans || [])]
+  editing.countries = [...(c?.allowed_countries || [])]
   editing.limit = c?.daily_code_limit ?? 200
   editing.ips = (c?.ip_allowlist || []).join(', ')
   clientOpen.value = true
+  void loadOptions()
 }
 
 async function saveClient() {
@@ -446,8 +525,8 @@ async function saveClient() {
   try {
     const body = JSON.stringify({
       name: editing.name,
-      allowed_plans: splitInput(editing.plans),
-      allowed_countries: splitInput(editing.countries),
+      allowed_plans: editing.plans,
+      allowed_countries: editing.countries,
       daily_code_limit: Number(editing.limit) || 0,
       ip_allowlist: splitInput(editing.ips),
     })
@@ -612,4 +691,9 @@ onMounted(loadClients)
 }
 .filter-actions { display: flex; gap: 8px; }
 .table-foot { padding: 12px 16px; border-top: 1px solid var(--brd); }
+.check-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+}
 </style>
