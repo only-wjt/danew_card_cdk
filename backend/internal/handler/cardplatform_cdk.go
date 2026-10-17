@@ -1198,6 +1198,7 @@ func PublicCDKPreflight(c *gin.Context) {
 			log.Printf("[cdk-preflight] bind session failed tok=%s: %v", shortTok(tok), err)
 		}
 	}
+	bindPreflightEmail(st, code, tok, raw, body)
 	proxyPublicJSON(c, st, raw)
 }
 
@@ -1214,6 +1215,29 @@ func bindableSession(status int, body map[string]any) string {
 		return ""
 	}
 	return sess
+}
+
+// preflightAccountEmail 预检成功时识别到的账号邮箱：优先上游返回的 account_email，
+// 否则从提交的凭证里解析（session JSON 或裸 access token 都行）。只取邮箱，凭证本身不落库。
+func preflightAccountEmail(raw json.RawMessage, body map[string]any) string {
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) == nil && payload != nil {
+		if email := sessionEmail(gptPayloadField(payload, "account_email", "email")); email != "" {
+			return email
+		}
+	}
+	cred, _ := body["credential"].(map[string]any)
+	return extractEmailFromSession(str(cred["session"]))
+}
+
+// bindPreflightEmail 只在上游预检 2xx 时记邮箱，被拒的请求不能改写别人码上的记录。
+func bindPreflightEmail(status int, code, tok string, raw json.RawMessage, body map[string]any) {
+	if status < 200 || status >= 300 || (code == "" && tok == "") {
+		return
+	}
+	if err := db.BindCDKEmail(code, tok, preflightAccountEmail(raw, body)); err != nil {
+		log.Printf("[cdk-preflight] bind email failed tok=%s: %v", shortTok(tok), err)
+	}
 }
 
 // credentialIsMailbox 邮箱+密码兑换已下线，挡住直接调 API 的请求。

@@ -319,3 +319,23 @@ func TestPureFormattingAndBackoff(t *testing.T) {
 		}
 	}
 }
+
+func TestNoticeTimeIsBeijing(t *testing.T) {
+	if _, offset := time.Now().In(beijing).Zone(); offset != 8*3600 {
+		t.Fatalf("beijing offset = %d", offset)
+	}
+	before := time.Now().In(time.FixedZone("UTC+8", 8*3600)).Truncate(time.Second)
+	text := formatChatGPTRedeemed("Plus", "a@example.com", "CODE", "美区")
+	after := time.Now().In(time.FixedZone("UTC+8", 8*3600))
+	i := strings.LastIndex(text, "🕐 ")
+	if i < 0 {
+		t.Fatalf("no time in %q", text)
+	}
+	got, err := time.ParseInLocation("2006-01-02 15:04:05", text[i+len("🕐 "):], time.FixedZone("UTC+8", 8*3600))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Before(before) || got.After(after) {
+		t.Fatalf("notice time %v not within [%v, %v]", got, before, after)
+	}
+}

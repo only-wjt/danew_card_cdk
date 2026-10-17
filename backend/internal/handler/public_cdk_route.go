@@ -93,6 +93,7 @@ func sitePreflight(c *gin.Context, route *provider.Route, siteCode string, body 
 			log.Printf("[cdk-preflight] bind session failed: %v", berr)
 		}
 	}
+	bindPreflightEmail(st, siteCode, tok, raw, body)
 	proxyPublicJSON(c, st, raw)
 }
 
@@ -488,6 +489,14 @@ func notifyGPTSuccess(accountID int64, code, email string, payload map[string]an
 	}
 	if email == "" {
 		email = gptResultEmail(payload)
+	}
+	// 老卡台的 result 不带邮箱；预检时记下的邮箱不依赖凭证是否落库。
+	if email == "" && displayCode != "" {
+		stored, emailErr := db.GetEmailByCDK(displayCode)
+		if emailErr != nil {
+			return emailErr
+		}
+		email = stored
 	}
 	if email == "" && displayCode != "" {
 		sess, sessErr := db.GetSessionByCDK(displayCode)
