@@ -386,6 +386,9 @@ func createTables() error {
 	if err := migrateSealAdminRechargeCreds(); err != nil {
 		log.Printf("migrateSealAdminRechargeCreds: %v", err)
 	}
+	if err := migrateCardnet(); err != nil {
+		return fmt.Errorf("migrate cardnet: %w", err)
+	}
 	if err := ensureDefaultAdmin(); err != nil {
 		return err
 	}
@@ -1095,6 +1098,15 @@ func SaveCardplatformCDKCodeForAccount(upstreamID int64, code, prefix, plan stri
 	if DB == nil {
 		return fmt.Errorf("db not init")
 	}
+	return saveCardplatformCDKCode(DB, upstreamID, code, prefix, plan, feeMinor, status, accountID, country...)
+}
+
+type sqlExecer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+// saveCardplatformCDKCode 落库实现；ex 可以是 DB 或事务，供需要与其它写入同提交的调用方复用。
+func saveCardplatformCDKCode(ex sqlExecer, upstreamID int64, code, prefix, plan string, feeMinor int64, status string, accountID int64, country ...string) error {
 	code = strings.TrimSpace(code)
 	if code == "" {
 		return fmt.Errorf("empty code")
@@ -1122,7 +1134,7 @@ func SaveCardplatformCDKCodeForAccount(upstreamID int64, code, prefix, plan stri
 	if codeKind != CodeKindLegacy {
 		accountID = 0
 	}
-	_, err := DB.Exec(`
+	_, err := ex.Exec(`
 		INSERT INTO cardplatform_cdk_codes
 			(upstream_id, code, code_prefix, plan, fee_amount_minor, status, code_kind, fulfilled_account_id, payment_country, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)

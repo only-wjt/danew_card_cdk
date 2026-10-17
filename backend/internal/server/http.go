@@ -267,6 +267,15 @@ func setupRoutes(r *gin.Engine) {
 			agent.GET("/openapi.md", handler.AgentOpenAPIMarkdown)
 		}
 
+		// 卡网（dujiao-next）服务端发码，cn_live_ Key 鉴权
+		cardnet := api.Group("/cardnet")
+		cardnet.Use(handler.CardnetAuth())
+		{
+			cardnet.GET("/overview", handler.CardnetOverview)
+			cardnet.POST("/cdks/issue", handler.CardnetIssue)
+			cardnet.POST("/cdks/revoke", handler.CardnetRevoke)
+		}
+
 		// Stats routes
 		stats := api.Group("/stats")
 		stats.Use(JWTAuthMiddleware(), AdminAuthMiddleware())
@@ -417,6 +426,17 @@ func setupRoutes(r *gin.Engine) {
 			// 代理购卡订单
 			admin.GET("/agent-orders", handler.AdminListAgentOrders)
 			admin.POST("/agent-orders/:order_no/retry", handler.AdminRetryAgentOrder)
+
+			// 卡网对接：客户端、发码请求、记账统计
+			admin.GET("/cardnet/clients", handler.AdminListCardnetClients)
+			admin.POST("/cardnet/clients", handler.AdminCreateCardnetClient)
+			admin.PUT("/cardnet/clients/:id", handler.AdminUpdateCardnetClient)
+			admin.POST("/cardnet/clients/:id/rotate-key", handler.AdminRotateCardnetClientKey)
+			admin.GET("/cardnet/requests", handler.AdminListCardnetRequests)
+			admin.GET("/cardnet/requests/:id", handler.AdminGetCardnetRequest)
+			admin.POST("/cardnet/requests/:id/refetch", handler.AdminRefetchCardnetRequest)
+			admin.POST("/cardnet/requests/:id/mark-failed", handler.AdminFailCardnetRequest)
+			admin.GET("/cardnet/stats", handler.AdminCardnetStats)
 		}
 	}
 
