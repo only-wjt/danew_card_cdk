@@ -78,11 +78,6 @@ const routes: RouteRecordRaw[] = [
     component: () => import('../views/auth/RegisterView.vue'),
   },
   {
-    path: '/dashboard',
-    name: 'Dashboard',
-    component: () => import('../views/user/DashboardView.vue'),
-  },
-  {
     path: '/billing',
     name: 'BillingCheck',
     component: () => import('../views/user/BillingCheckView.vue'),

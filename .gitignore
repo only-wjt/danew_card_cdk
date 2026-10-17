@@ -78,3 +78,5 @@ cdk-bundle*.tgz
 cdk-bundle*.sha256
 dist/
 .openbitfun/
+.claude/plans/myagents/
+myagents_files/

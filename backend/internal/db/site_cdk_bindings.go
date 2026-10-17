@@ -357,7 +357,8 @@ func newRedeemClientID() string {
 	return "srv-" + hex.EncodeToString(b)
 }
 
-// ClaimBindingForRedeem 认领兑换权。同一 binding 并发只有一个请求能拿到。
+// ClaimBindingForRedeem 认领兑换权。同一 binding 并发只有一个请求能拿到；
+// 且码级独占——同一本站码的多张兄弟 binding 之间也只有一张能进入兑换（防跨台双兑，见下方 SQL）。
 //
 // candidate 是本次的幂等键。重新认领一个卡在 redeeming 的 binding（上次结果未知
 // 或进程中断）时，复用已存的键而不是新键：上游按 clientRequestId 幂等，
@@ -373,6 +374,12 @@ func ClaimBindingForRedeem(bindingID int64, candidate string) (bool, string, err
 		// 后续重试才能复用它（见 review 发现的空键分支）。
 		candidate = newRedeemClientID()
 	}
+	// 码级独占（防跨台双兑）：self 条件只看本 binding，挡不住「同一本站码的另一张
+	// 兄弟 binding 已在兑换/已核销」——preview 切台与 redeem 交错时两张可能被并发各认领一次，
+	// 在两台各扣一次。NOT EXISTS 子查询要求同 site_code_id 下没有任何兄弟处于
+	// consumed 或「新鲜 redeeming」（未过租约）才允许认领；整条写在单条 UPDATE 里，
+	// 靠 SQLite 写串行化保证「检查+置位」原子（WAL 单写者，后到者必然看见先到者的 redeeming）。
+	// 过期 redeeming 兄弟不算阻塞（允许崩溃/超时后的恢复，与 self 的 60s 租约一致）。
 	res, err := DB.Exec(`
 		UPDATE site_cdk_bindings
 		SET status = ?, updated_at = CURRENT_TIMESTAMP,
@@ -383,10 +390,20 @@ func ClaimBindingForRedeem(bindingID int64, candidate string) (bool, string, err
 			status IN (?, ?)
 			OR (status = ? AND updated_at <= datetime('now', '-60 seconds'))
 		)
+		AND NOT EXISTS (
+			SELECT 1 FROM site_cdk_bindings s
+			WHERE s.site_code_id = site_cdk_bindings.site_code_id
+			  AND s.id <> site_cdk_bindings.id
+			  AND (
+			      s.status = ?
+			      OR (s.status = ? AND s.updated_at > datetime('now', '-60 seconds'))
+			  )
+		)
 	`, BindingStatusRedeeming,
 		BindingStatusUnused, BindingStatusFailed, candidate,
 		bindingID,
-		BindingStatusUnused, BindingStatusFailed, BindingStatusRedeeming)
+		BindingStatusUnused, BindingStatusFailed, BindingStatusRedeeming,
+		BindingStatusConsumed, BindingStatusRedeeming)
 	if err != nil {
 		return false, "", err
 	}

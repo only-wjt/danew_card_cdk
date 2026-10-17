@@ -156,8 +156,9 @@ func AgentLogin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
+	ipKey := loginIPKey(c.ClientIP() + "|agent")
 	rateKey := loginRateKey(c.ClientIP()+"|agent", req.Username)
-	if ok, wait := loginAllowed(rateKey); !ok {
+	if ok, wait := loginCheck(ipKey, rateKey); !ok {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf("尝试次数过多，请 %d 分钟后再试", int(wait.Minutes())+1),
 		})
@@ -165,7 +166,7 @@ func AgentLogin(c *gin.Context) {
 	}
 	agent, hash, err := db.GetAgentUserByUsername(req.Username)
 	if err != nil {
-		loginFailed(rateKey)
+		loginRecordFailure(ipKey, rateKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -176,7 +177,7 @@ func AgentLogin(c *gin.Context) {
 	plain := strings.TrimSpace(req.Password)
 	ok, upgraded := db.VerifyAdminPassword(hash, plain)
 	if !ok {
-		loginFailed(rateKey)
+		loginRecordFailure(ipKey, rateKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
