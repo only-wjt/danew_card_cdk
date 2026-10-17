@@ -365,6 +365,9 @@ func createTables() error {
 	if err := migrateWebhookEventAccountCol(); err != nil {
 		log.Printf("migrateWebhookEventAccountCol: %v", err)
 	}
+	if err := migrateCDKBindingEmailCol(); err != nil {
+		return fmt.Errorf("migrate cdk binding email: %w", err)
+	}
 	if err := migrateAgentPortal(); err != nil {
 		log.Printf("migrateAgentPortal: %v", err)
 	}
@@ -423,6 +426,20 @@ func migrateWebhookEventAccountCol() error {
 		}
 	}
 	_, err := DB.Exec(`CREATE INDEX IF NOT EXISTS idx_webhook_account_created ON webhook_events(account_id, created_at)`)
+	return err
+}
+
+// migrateCDKBindingEmailCol 预检时只留账号邮箱给开通通知用；凭证不一定落库（裸 access token 不存）。
+func migrateCDKBindingEmailCol() error {
+	if DB == nil {
+		return nil
+	}
+	var n int
+	err := DB.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('cdk_session_bindings') WHERE name='account_email'`).Scan(&n)
+	if err != nil || n > 0 {
+		return err
+	}
+	_, err = DB.Exec(`ALTER TABLE cdk_session_bindings ADD COLUMN account_email TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 
@@ -960,6 +977,54 @@ func GetSessionByCDK(cdkCode string) (string, error) {
 		return "", nil
 	}
 	return OpenSecret(sess), err
+}
+
+// BindCDKEmail 预检成功后记下账号邮箱（可按码或 redemption_token 关联）。
+// 每次预检成功都覆盖，包括空值：换号重新预检后，不能留着上一个号的邮箱。
+func BindCDKEmail(cdkCode, redemptionToken, email string) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	code := normalizeCDKCode(cdkCode)
+	tok := strings.TrimSpace(redemptionToken)
+	email = strings.TrimSpace(email)
+	if code != "" {
+		_, err := DB.Exec(`
+			INSERT INTO cdk_session_bindings (cdk_code, session_payload, redemption_token, account_email, updated_at)
+			VALUES (?, '', ?, ?, CURRENT_TIMESTAMP)
+			ON CONFLICT(cdk_code) DO UPDATE SET
+				account_email = excluded.account_email,
+				redemption_token = COALESCE(NULLIF(excluded.redemption_token,''), cdk_session_bindings.redemption_token),
+				updated_at = CURRENT_TIMESTAMP
+		`, code, tok, email)
+		return err
+	}
+	if tok != "" {
+		_, err := DB.Exec(`
+			UPDATE cdk_session_bindings
+			SET account_email = ?, updated_at = CURRENT_TIMESTAMP
+			WHERE redemption_token = ?
+		`, email, tok)
+		return err
+	}
+	return nil
+}
+
+// GetEmailByCDK 开通通知用：凭卡密取预检时记下的账号邮箱。
+func GetEmailByCDK(cdkCode string) (string, error) {
+	if DB == nil {
+		return "", fmt.Errorf("db not ready")
+	}
+	code := normalizeCDKCode(cdkCode)
+	if code == "" {
+		return "", nil
+	}
+	var email string
+	err := DB.QueryRow(`SELECT account_email FROM cdk_session_bindings WHERE cdk_code = ?`, code).Scan(&email)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return strings.TrimSpace(email), err
 }
 
 // CDKBinding 本地码 ↔ token ↔ session 绑定（公开兑换进度/账单依赖）

@@ -18,6 +18,20 @@ import (
 
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
+// 运营在国内，通知里的时间一律按北京时间显示，不跟服务器时区（容器默认 UTC）。
+// 镜像缺时区库时退回固定 UTC+8，中国不用夏令时，两者等价。
+var beijing = func() *time.Location {
+	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		return loc
+	}
+	return time.FixedZone("CST", 8*3600)
+}()
+
+// nowText 通知里统一使用的时间文本。
+func nowText() string {
+	return time.Now().In(beijing).Format("2006-01-02 15:04:05")
+}
+
 func settingOrEnv(key, env string) string {
 	if db.DB != nil {
 		if v, _ := db.GetSetting(key); strings.TrimSpace(v) != "" {
@@ -125,7 +139,7 @@ func NotifyNewOrder(taskID, cdkCode, sessionJSON string) {
 	if email == "" {
 		email = "（待后台确认）"
 	}
-	now := time.Now().Format("2006-01-02 15:04:05")
+	now := nowText()
 	text := fmt.Sprintf(
 		"🔔 <b>新订单</b>\n"+
 			"🆔 任务号: <code>%s</code>\n"+
@@ -141,7 +155,7 @@ func NotifyNewOrder(taskID, cdkCode, sessionJSON string) {
 
 // Redeemed 通知一笔会员已经开通。不带卡密。调用方只在状态第一次变成已开通时调用。
 func Redeemed(product, plan, who, amount string) {
-	SendText(FormatRedeemed(product, plan, who, amount) + "\n" + time.Now().Format("2006-01-02 15:04:05"))
+	SendText(FormatRedeemed(product, plan, who, amount) + "\n" + nowText())
 }
 
 // EnqueueRedeemed persists a success notification; it never sends HTTP.
@@ -217,7 +231,7 @@ func formatChatGPTRedeemed(plan, email, code, region string) string {
 	if region == "" {
 		region = "待同步"
 	}
-	now := time.Now().Format("2006-01-02 15:04:05")
+	now := nowText()
 	text := fmt.Sprintf(
 		"✅ <b>ChatGPT 开通成功</b>\n"+
 			"套餐: %s\n"+
