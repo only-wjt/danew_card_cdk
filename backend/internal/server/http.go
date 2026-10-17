@@ -429,6 +429,7 @@ func setupRoutes(r *gin.Engine) {
 
 			// 卡网对接：客户端、发码请求、记账统计
 			admin.GET("/cardnet/clients", handler.AdminListCardnetClients)
+			admin.GET("/cardnet/options", handler.AdminCardnetOptions)
 			admin.POST("/cardnet/clients", handler.AdminCreateCardnetClient)
 			admin.PUT("/cardnet/clients/:id", handler.AdminUpdateCardnetClient)
 			admin.POST("/cardnet/clients/:id/rotate-key", handler.AdminRotateCardnetClientKey)

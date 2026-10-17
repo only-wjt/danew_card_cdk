@@ -596,3 +596,30 @@ func TestCardnetReplayAfterPermissionRevoked(t *testing.T) {
 		t.Fatalf("new request after revoke: %d %v", st, out)
 	}
 }
+
+func TestAdminCardnetOptions(t *testing.T) {
+	e := newCardnetEnv(t)
+	e.router.GET("/admin/cardnet/options", AdminCardnetOptions)
+	st, out := e.do(http.MethodGet, "/admin/cardnet/options", "", "", "")
+	if st != http.StatusOK || out["message"] != nil {
+		t.Fatalf("options: %d %v", st, out)
+	}
+	// 只列可售档位（go 在卡台是停用的）。
+	keys := []string{}
+	for _, p := range out["plans"].([]any) {
+		keys = append(keys, p.(map[string]any)["key"].(string))
+	}
+	if fmt.Sprint(keys) != "[plus pro_20x]" && fmt.Sprint(keys) != "[pro_20x plus]" {
+		t.Fatalf("plans: %v", keys)
+	}
+	if len(out["payment_regions"].([]any)) != 2 {
+		t.Fatalf("regions: %v", out["payment_regions"])
+	}
+
+	gptTestSQL(t, `UPDATE card_platform_accounts SET status='disabled' WHERE id=7`)
+	resetCardnetUpstreamCache()
+	st, out = e.do(http.MethodGet, "/admin/cardnet/options", "", "", "")
+	if st != http.StatusOK || out["message"] == nil || len(out["plans"].([]any)) != 0 {
+		t.Fatalf("unusable primary should report a message: %d %v", st, out)
+	}
+}
