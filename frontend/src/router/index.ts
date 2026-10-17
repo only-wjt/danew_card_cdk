@@ -134,6 +134,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'appearance', name: 'SiteAppearance', component: () => import('../views/admin/SiteAppearance.vue') },
       { path: 'notify', name: 'NotifySettings', component: () => import('../views/admin/NotifySettings.vue') },
       { path: 'platforms', name: 'Platforms', component: () => import('../views/admin/PlatformsView.vue') },
+      { path: 'cardnet', name: 'Cardnet', component: () => import('../views/admin/CardnetView.vue') },
       { path: 'x', name: 'XMember', component: () => import('../views/admin/XMemberView.vue') },
       { path: 'tg', name: 'TGMember', component: () => import('../views/admin/TgMemberView.vue') },
       { path: 'integration', redirect: `${OPS_BASE}/platforms` },
