@@ -155,9 +155,10 @@ func AdminLogin(c *gin.Context) {
 		return
 	}
 
-	// 登录限流：按 客户端IP + 用户名 计数
+	// 登录限流：per-(客户端IP + 用户名) 计数，叠加 per-IP 聚合闸（挡用户名喷洒）
+	ipKey := loginIPKey(c.ClientIP())
 	rateKey := loginRateKey(c.ClientIP(), req.Username)
-	if ok, wait := loginAllowed(rateKey); !ok {
+	if ok, wait := loginCheck(ipKey, rateKey); !ok {
 		c.JSON(http.StatusTooManyRequests, gin.H{
 			"error": fmt.Sprintf("尝试次数过多，请 %d 分钟后再试", int(wait.Minutes())+1),
 		})
@@ -176,7 +177,7 @@ func AdminLogin(c *gin.Context) {
 		WHERE username = ?
 	`, strings.TrimSpace(req.Username)).Scan(&userID, &username, &passwordHash, &displayName, &isActive)
 	if err == sql.ErrNoRows {
-		loginFailed(rateKey)
+		loginRecordFailure(ipKey, rateKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}
@@ -193,7 +194,7 @@ func AdminLogin(c *gin.Context) {
 	plain := strings.TrimSpace(req.Password)
 	ok, upgradedHash := db.VerifyAdminPassword(passwordHash, plain)
 	if !ok {
-		loginFailed(rateKey)
+		loginRecordFailure(ipKey, rateKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "用户名或密码错误"})
 		return
 	}

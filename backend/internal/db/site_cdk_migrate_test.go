@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -91,6 +92,132 @@ func TestClaimBindingForRedeemUsesLease(t *testing.T) {
 	}
 	if cid != "web-first-1" {
 		t.Fatalf("retry reused key=%q, want the original web-first-1", cid)
+	}
+}
+
+// TestClaimBindingForRedeemConcurrentSingleWinner 是「同一毫秒并发双兑」双花猜想的直接回归防护。
+// 兑换真正落到的 binding 是 ResolveSticky 粘定的那一张（active_binding_id），所以同一张本站码
+// 的并发 redeem 都打向同一个 bindingID。这里用 24 个 goroutine 同时抢同一 binding，
+// 断言「有且仅有一个认领成功」——其余必须被拒（409 的 DB 层来源）。
+//
+// 覆盖范围说明：本测试证明「单一 binding 维度」的并发互斥成立。跨台兄弟码的双兑窗口
+// 另有两道防线（ResolveSticky 只认 active binding + PreviewWithFailover 对 redeeming 态拒绝切台
+// + 事后 MarkConsumed/RetireSiblings 收回），属于 handler/provider 层，见那一侧的 mock 流程测试。
+func TestClaimBindingForRedeemConcurrentSingleWinner(t *testing.T) {
+	openTestDB(t)
+	row, err := CreatePendingSiteCDK("DN-RACE1111-22223333-44445555", "plus", true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingID, err := InsertSiteCDKBinding(SiteCDKBinding{
+		SiteCodeID: row.ID, SiteCode: row.Code, AccountID: 1,
+		Provider: AccountProtocolSpaceXLegacy, RemoteID: "race-1",
+		RemoteCode: "GPTD-RACE-1", IsPrimary: true, Status: BindingStatusUnused,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 24 // 压满连接池（SetMaxOpenConns=25），逼出真实并发写
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	var mu sync.Mutex
+	wins := 0
+	winnerKeys := map[string]struct{}{}
+	var firstErr error
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start // 一起起跑，尽量命中同一瞬间
+			ok, cid, cerr := ClaimBindingForRedeem(bindingID, fmt.Sprintf("web-race-%d", i))
+			mu.Lock()
+			defer mu.Unlock()
+			if cerr != nil && firstErr == nil {
+				firstErr = cerr
+			}
+			if ok {
+				wins++
+				winnerKeys[cid] = struct{}{}
+			}
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	if firstErr != nil {
+		t.Fatalf("并发认领不应报错（WAL+busy_timeout 应吸收锁竞争）: %v", firstErr)
+	}
+	if wins != 1 {
+		t.Fatalf("同一本站码并发兑换必须只有一个胜出，实得 %d 个（keys=%v）= 双花", wins, winnerKeys)
+	}
+	var status string
+	if err := DB.QueryRow(`SELECT status FROM site_cdk_bindings WHERE id=?`, bindingID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != BindingStatusRedeeming {
+		t.Fatalf("胜出后 binding 应为 redeeming，实为 %q", status)
+	}
+}
+
+// TestClaimBindingForRedeemCodeLevelExclusive 覆盖「跨台兄弟码」双兑窄窗。
+// 一张本站码在两台各有一张 unused 兄弟 binding。若并发的两次兑换分别落到不同 binding
+// （preview 切台与 redeem 交错时可构造），binding 级 claim 各自为政会让两张都认领成功 = 跨台双花。
+// 码级独占要求：同一 site_code_id 下的兄弟 binding 之间也只能有一个 claim 胜出。
+func TestClaimBindingForRedeemCodeLevelExclusive(t *testing.T) {
+	openTestDB(t)
+	row, err := CreatePendingSiteCDK("DN-DUAL1111-22223333-44445555", "plus", true, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// UNIQUE(site_code_id, account_id) 决定两张兄弟 binding 必须挂不同账户（= 两台）。
+	bidA, err := InsertSiteCDKBinding(SiteCDKBinding{
+		SiteCodeID: row.ID, SiteCode: row.Code, AccountID: 1,
+		Provider: AccountProtocolSpaceXLegacy, RemoteID: "dual-A",
+		RemoteCode: "GPTD-DUAL-A", IsPrimary: true, Status: BindingStatusUnused,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bidB, err := InsertSiteCDKBinding(SiteCDKBinding{
+		SiteCodeID: row.ID, SiteCode: row.Code, AccountID: 2,
+		Provider: AccountProtocolSpaceXLegacy, RemoteID: "dual-B",
+		RemoteCode: "GPTD-DUAL-B", IsPrimary: false, Status: BindingStatusUnused,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	targets := []int64{bidA, bidB}
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	var mu sync.Mutex
+	wins := 0
+	var firstErr error
+	for i, bid := range targets {
+		wg.Add(1)
+		go func(i int, bid int64) {
+			defer wg.Done()
+			<-start
+			ok, _, cerr := ClaimBindingForRedeem(bid, fmt.Sprintf("web-dual-%d", i))
+			mu.Lock()
+			defer mu.Unlock()
+			if cerr != nil && firstErr == nil {
+				firstErr = cerr
+			}
+			if ok {
+				wins++
+			}
+		}(i, bid)
+	}
+	close(start)
+	wg.Wait()
+
+	if firstErr != nil {
+		t.Fatalf("并发认领不应报错: %v", firstErr)
+	}
+	if wins != 1 {
+		t.Fatalf("同一本站码跨台也必须只有一个 claim 胜出，实得 %d = 跨台双花", wins)
 	}
 }
 
