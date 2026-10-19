@@ -113,6 +113,38 @@ func TestPrecheckSiteProblemsHideUpstreamDetail(t *testing.T) {
 	}
 }
 
+func TestPrecheckRejectionHidesUpstreamIdentity(t *testing.T) {
+	cases := []struct {
+		err  *cardplatform.APIError
+		want string
+	}{
+		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "PRECHECK_REJECTED", Msg: "账号已被封禁"}, "账号暂不满足兑换条件：账号已被封禁"},
+		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "PRECHECK_REJECTED", Msg: "ZovoCard 卡台账户余额不足"}, "账号暂不满足兑换条件"},
+		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "SOME_NEW_CODE", Msg: "card pool empty"}, "Session 校验未通过"},
+	}
+	for _, tc := range cases {
+		withPrecheckUpstream(t, func(context.Context, string) (*cardplatform.DirectPreflightResult, error) { return nil, tc.err })
+		code, out := postPrecheck(t, precheckTestSession)
+		if code != 200 || out["valid"] != false || out["message"] != tc.want {
+			t.Fatalf("%v: code=%d out=%v", tc.err, code, out)
+		}
+		if rc, _ := out["reason_code"].(string); rc == "SOME_NEW_CODE" {
+			t.Fatalf("unknown upstream code leaked: %v", out)
+		}
+	}
+}
+
+func TestPrecheckSiteSideRejectionsAreUnavailable(t *testing.T) {
+	for _, ec := range []string{"INSUFFICIENT_BALANCE", "INVALID_REQUEST", "DIRECT_PRODUCT_DISABLED"} {
+		withPrecheckUpstream(t, func(context.Context, string) (*cardplatform.DirectPreflightResult, error) {
+			return nil, &cardplatform.APIError{HTTPStatus: 400, ErrorCode: ec, Msg: "余额不足"}
+		})
+		if code, _ := postPrecheck(t, precheckTestSession); code != http.StatusServiceUnavailable {
+			t.Fatalf("%s: code = %d", ec, code)
+		}
+	}
+}
+
 func TestPrecheckUpstreamRateLimitBecomes429(t *testing.T) {
 	withPrecheckUpstream(t, func(context.Context, string) (*cardplatform.DirectPreflightResult, error) {
 		return nil, &cardplatform.APIError{HTTPStatus: 429, ErrorCode: "GPT_PREFLIGHT_RATE_LIMITED"}

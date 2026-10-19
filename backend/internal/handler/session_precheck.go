@@ -162,22 +162,38 @@ func precheckOutcome(err error) (int, precheckResponse) {
 	case code == "GPT_SESSION_INVALID":
 		return http.StatusOK, precheckResponse{ReasonCode: code, Message: "Session 无效或已过期，请重新打开 chatgpt.com/api/auth/session 复制"}
 	case code == "PRECHECK_REJECTED":
-		return http.StatusOK, precheckResponse{ReasonCode: code, Message: joinReason("账号预检未通过", apiErr.Msg)}
+		return http.StatusOK, precheckResponse{ReasonCode: code, Message: joinReason("账号暂不满足兑换条件", apiErr.Msg)}
 	case apiErr.HTTPStatus == http.StatusUnauthorized || apiErr.HTTPStatus == http.StatusForbidden,
 		apiErr.HTTPStatus >= 500,
-		strings.HasPrefix(code, "GPT_DIRECT_"):
-		// 本站 Key、白名单、直充权限或卡台自身的问题，不是用户 Session 的问题
+		strings.HasPrefix(code, "GPT_DIRECT_"),
+		code == "INSUFFICIENT_BALANCE", code == "INVALID_REQUEST", code == "DIRECT_PRODUCT_DISABLED":
+		// 本站 Key、白名单、直充权限、余额或卡台自身的问题，不是用户 Session 的问题
 		return http.StatusServiceUnavailable, unavailable
 	case apiErr.HTTPStatus >= 400:
-		return http.StatusOK, precheckResponse{ReasonCode: nonEmptyStr(code, "PRECHECK_FAILED"), Message: joinReason("校验未通过", apiErr.Msg)}
+		// 未知错误码不透传给访客，只给通用结论；原文在日志里
+		log.Printf("[session-precheck] rejected: %v", apiErr)
+		return http.StatusOK, precheckResponse{ReasonCode: "PRECHECK_FAILED", Message: joinReason("Session 校验未通过", apiErr.Msg)}
 	}
 	return http.StatusServiceUnavailable, unavailable
 }
 
+// 上游原文里带这些词的不给访客看：公开页面不能暴露本站接的是哪家、用的什么账户。
+var precheckHiddenTerms = []string{
+	"卡台", "卡片", "开卡", "平台", "余额", "服务费", "直充", "密钥", "白名单", "商户", "代理",
+	"zovo", "spacex", "avanfinity", "card", "balance", "api", "key", "merchant", "platform",
+}
+
+// joinReason 上游原文只在「不暴露本站接入信息」时附上，否则只给前缀。
 func joinReason(prefix, msg string) string {
 	msg = strings.TrimSpace(msg)
 	if msg == "" || msg == "business error" {
 		return prefix
+	}
+	lower := strings.ToLower(msg)
+	for _, term := range precheckHiddenTerms {
+		if strings.Contains(lower, term) {
+			return prefix
+		}
 	}
 	if r := []rune(msg); len(r) > 120 {
 		msg = string(r[:120]) + "…"

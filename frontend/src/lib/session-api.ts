@@ -7,6 +7,15 @@ export type SessionRefreshRow = {
   session?: Record<string, unknown>
 }
 
+export type BillingSummary = {
+  plan_type?: string
+  subscription_plan?: string
+  has_active_subscription?: boolean
+  expires_at?: string
+  renews_at?: string
+  will_renew?: boolean | null
+}
+
 function backendError(status: number, fallback: string, down: string): string {
   if (status === 404 || status >= 500) return down
   return fallback
@@ -32,6 +41,27 @@ export async function refreshSessions(
     throw new Error(backendError(r.status, String(data.error || messages.fail), messages.down))
   }
   return Array.isArray(data.results) ? data.results : []
+}
+
+export async function checkSessionBilling(
+  tokenInput: string,
+  messages: { down: string; fail: string },
+): Promise<{ summary?: BillingSummary; error?: string }> {
+  let r: Response
+  try {
+    r = await fetch('/api/v1/public/billing/check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token_input: tokenInput }),
+    })
+  } catch {
+    return { error: messages.down }
+  }
+  const data = await r.json().catch(() => ({}))
+  if (!r.ok) {
+    return { error: backendError(r.status, String(data.error || messages.fail), messages.down) }
+  }
+  return { summary: data.summary || {} }
 }
 
 export type PrecheckResult = {
