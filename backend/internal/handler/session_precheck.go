@@ -28,13 +28,42 @@ var (
 	precheckGlobalLimiter = newIPLimiter(30, time.Minute)
 	precheckSlots         = make(chan struct{}, 3)
 	precheckResults       = newPrecheckCache(3*time.Minute, 2000)
+	// 同一 IP 同一时间只放一条：公开页只支持逐条校验，并发脚本在这里被挡住
+	precheckInFlight = newInFlightSet()
 )
 
 const (
 	precheckSlotWait        = 10 * time.Second
 	precheckUpstreamTimeout = 40 * time.Second
 	precheckRetryAfter      = 30 * time.Second
+	precheckBusyRetry       = 3 * time.Second
 )
+
+// inFlightSet 记录正在处理中的 key（这里是访客 IP）。
+type inFlightSet struct {
+	mu   sync.Mutex
+	keys map[string]struct{}
+}
+
+func newInFlightSet() *inFlightSet {
+	return &inFlightSet{keys: make(map[string]struct{})}
+}
+
+func (s *inFlightSet) acquire(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, busy := s.keys[key]; busy {
+		return false
+	}
+	s.keys[key] = struct{}{}
+	return true
+}
+
+func (s *inFlightSet) release(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.keys, key)
+}
 
 // precheckUpstream 测试可替换。返回 errPrecheckUnavailable 表示本站没有可用的卡台。
 var precheckUpstream = func(ctx context.Context, session string) (*cardplatform.DirectPreflightResult, error) {
@@ -98,6 +127,12 @@ func PublicSessionPrecheck(c *gin.Context) {
 
 	if !requestIsAdmin(c) {
 		ip := c.ClientIP()
+		// 先占位再计次：被并发挡回的请求不消耗额度
+		if !precheckInFlight.acquire(ip) {
+			rejectRateLimited(c, precheckBusyRetry, "上一条还在校验中，请等它完成后再校验下一条")
+			return
+		}
+		defer precheckInFlight.release(ip)
 		if ok, wait := precheckIPMinuteLimiter.allow(ip, 1); !ok {
 			rejectRateLimited(c, wait, "校验太频繁，请稍后再试")
 			return
@@ -188,6 +223,10 @@ func joinReason(prefix, msg string) string {
 	msg = strings.TrimSpace(msg)
 	if msg == "" || msg == "business error" {
 		return prefix
+	}
+	// 上游这段话是给下单写的（「…后重试，未扣款」），校验页不扣款，这半句只会让人以为要扣钱
+	for _, tail := range []string{"，未扣款", "。未扣款", ",未扣款", "未扣款"} {
+		msg = strings.TrimSpace(strings.TrimSuffix(msg, tail))
 	}
 	lower := strings.ToLower(msg)
 	for _, term := range precheckHiddenTerms {
