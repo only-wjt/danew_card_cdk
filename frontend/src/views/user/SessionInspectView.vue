@@ -65,9 +65,9 @@
               type="button"
               class="btn-secondary !py-1.5 text-sm"
               :disabled="checkingAll || !checkableCount"
-              @click="checkAllBilling"
+              @click="checkAll"
             >
-              {{ checkingAll ? t('inspect.checkingBilling') : t('inspect.checkAllBilling') }}
+              {{ checkingAll ? t('inspect.checking') : t('inspect.checkAll') }}
             </button>
             <button
               type="button"
@@ -118,6 +118,11 @@
                   class="rounded-full px-2 py-0.5"
                   style="background: var(--primary-soft); color: var(--primary)"
                 >{{ t('inspect.refreshed') }}</span>
+                <span
+                  v-if="verdict[i] && !verdict[i]!.error"
+                  class="rounded-full px-2 py-0.5 font-medium"
+                  :style="tokenPill(Boolean(verdict[i]!.valid))"
+                >{{ verdict[i]!.valid ? t('inspect.checkPass') : t('inspect.checkFail') }}</span>
               </div>
             </div>
             <div class="grid sm:grid-cols-3 gap-2 text-xs text-muted">
@@ -129,20 +134,25 @@
               {{ row.issues.join(' · ') }}
             </p>
             <p v-if="errors[i]" class="text-xs" style="color: var(--err, #dc2626)">{{ errors[i] }}</p>
-            <div v-if="billing[i]?.summary" class="rounded-lg bg-soft px-3 py-2 text-xs text-muted flex flex-wrap gap-x-4 gap-y-1">
-              <span>{{ t('inspect.plan') }}：<b class="text-ink">{{ planLabel(billing[i]!.summary) }}</b></span>
-              <span>{{ billing[i]!.summary?.has_active_subscription ? t('inspect.billingActive') : t('inspect.billingInactive') }}</span>
-              <span>{{ t('inspect.billingUntil') }}：{{ billing[i]!.summary?.expires_at || billing[i]!.summary?.renews_at || '—' }}</span>
+            <div
+              v-if="verdict[i]?.valid"
+              class="rounded-lg bg-soft px-3 py-2 text-xs text-muted flex flex-wrap gap-x-4 gap-y-1"
+            >
+              <span>{{ t('inspect.checkEmail') }}：<b class="text-ink font-mono">{{ verdict[i]!.email || '—' }}</b></span>
+              <span>{{ t('inspect.currentPlan') }}：<b class="text-ink">{{ verdict[i]!.current_plan ? planLabel(verdict[i]!.current_plan!) : '—' }}</b></span>
             </div>
-            <p v-if="billing[i]?.error" class="text-xs" style="color: var(--err, #dc2626)">{{ billing[i]!.error }}</p>
+            <p v-if="verdict[i]?.valid" class="text-[11px] text-subtle">{{ t('inspect.checkPassNote') }}</p>
+            <p v-if="verdict[i] && !verdict[i]!.valid" class="text-xs" style="color: var(--err, #dc2626)">
+              {{ verdict[i]!.error || verdict[i]!.message || t('inspect.checkFailGeneric') }}
+            </p>
             <div class="flex flex-wrap gap-2">
               <button
                 type="button"
-                class="btn-secondary !py-1 text-xs"
-                :disabled="!canCheck(row) || billingBusy[i]"
-                @click="checkOneBilling(i)"
+                class="btn-primary !py-1 text-xs"
+                :disabled="!canCheck(row) || checkBusy[i] || checkingAll"
+                @click="checkOne(i)"
               >
-                {{ billingBusy[i] ? t('inspect.checkingBilling') : t('inspect.checkBilling') }}
+                {{ checkBusy[i] ? t('inspect.checking') : t('inspect.check') }}
               </button>
               <button
                 type="button"
@@ -173,13 +183,12 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
-import { mapPool } from '../../lib/batch-session'
+import { planLabel } from '../../lib/plan'
 import {
-  checkSessionBilling,
-  planLabel,
+  precheckSession,
   refreshSessions,
   SESSION_TOOL_MAX,
-  type BillingSummary,
+  type PrecheckResult,
 } from '../../lib/session-api'
 import {
   collectSessionEntries,
@@ -204,15 +213,24 @@ const copiedAll = ref(false)
 const refreshingAll = ref(false)
 const checkingAll = ref(false)
 const batchError = ref('')
-const billing = reactive<Record<number, { summary?: BillingSummary; error?: string }>>({})
-const billingBusy = reactive<Record<number, boolean>>({})
+const verdict = reactive<Record<number, PrecheckResult | undefined>>({})
+const checkBusy = reactive<Record<number, boolean>>({})
 
 const refreshableCount = computed(() => rows.value.filter((r) => r.hasSessionToken).length)
 const checkableCount = computed(() => rows.value.filter(canCheck).length)
 const refreshedCount = computed(() => Object.values(refreshed).filter(Boolean).length)
 
+// 兑换只收含 sessionToken 的 Session，校验也一样；只有 AT 的行交给后端返回明确原因
 function canCheck(row: SessionInspectRow) {
   return row.hasAccessToken || row.hasSessionToken
+}
+
+function checkMsgs() {
+  return {
+    down: t('inspect.backendDown'),
+    fail: t('inspect.checkFailGeneric'),
+    limited: (secs: number) => t('inspect.checkLimited', { n: secs }),
+  }
 }
 
 function apiMsgs() {
@@ -263,8 +281,8 @@ function rebuildRows() {
   for (const key of Object.keys(refreshed)) delete refreshed[Number(key)]
   for (const key of Object.keys(errors)) delete errors[Number(key)]
   for (const key of Object.keys(status)) delete status[Number(key)]
-  for (const key of Object.keys(billing)) delete billing[Number(key)]
-  for (const key of Object.keys(billingBusy)) delete billingBusy[Number(key)]
+  for (const key of Object.keys(verdict)) delete verdict[Number(key)]
+  for (const key of Object.keys(checkBusy)) delete checkBusy[Number(key)]
   batchError.value = ''
 }
 
@@ -319,47 +337,44 @@ async function refreshAll() {
   }
 }
 
-async function checkOneBilling(index: number) {
+async function checkOne(index: number) {
   const row = rows.value[index]
   if (!row || !canCheck(row)) return
-  billingBusy[index] = true
+  checkBusy[index] = true
   batchError.value = ''
   try {
-    billing[index] = await checkSessionBilling(row.sessionRaw, {
-      down: t('inspect.backendDown'),
-      fail: t('inspect.billingFail'),
-    })
+    verdict[index] = await precheckSession(row.sessionRaw, checkMsgs())
   } finally {
-    billingBusy[index] = false
+    checkBusy[index] = false
   }
 }
 
-async function checkAllBilling() {
+// 逐条串行：后端按 IP 限流，并发只会更快撞上限。被限流就停下，剩下的不再发。
+async function checkAll() {
   const targets = rows.value
     .map((row, index) => ({ row, index }))
-    .filter((x) => canCheck(x.row))
+    .filter((x) => canCheck(x.row) && !verdict[x.index]?.valid)
     .slice(0, SESSION_TOOL_MAX)
   if (!targets.length) {
-    batchError.value = t('inspect.noCheckable')
+    batchError.value = rows.value.some(canCheck) ? '' : t('inspect.noCheckable')
     return
   }
   checkingAll.value = true
   batchError.value = ''
-  targets.forEach((x) => {
-    billingBusy[x.index] = true
-  })
   try {
-    await mapPool(targets, 3, async (x) => {
-      billing[x.index] = await checkSessionBilling(x.row.sessionRaw, {
-        down: t('inspect.backendDown'),
-        fail: t('inspect.billingFail'),
-      })
-    })
-  } catch (e) {
-    batchError.value = e instanceof Error ? e.message : t('inspect.billingFail')
+    for (const x of targets) {
+      checkBusy[x.index] = true
+      const res = await precheckSession(x.row.sessionRaw, checkMsgs())
+      checkBusy[x.index] = false
+      verdict[x.index] = res
+      if (res.retryAfter) {
+        batchError.value = t('inspect.checkLimitedBatch', { n: res.retryAfter })
+        break
+      }
+    }
   } finally {
     targets.forEach((x) => {
-      billingBusy[x.index] = false
+      checkBusy[x.index] = false
     })
     checkingAll.value = false
   }
@@ -374,6 +389,8 @@ function applyResult(index: number, item: { ok?: boolean; error?: string; sessio
   refreshed[index] = item.session
   status[index] = 'ok'
   errors[index] = ''
+  // Session 换了，旧的校验结论不再对应它
+  delete verdict[index]
   const next = inspectSessionsFromText(JSON.stringify(item.session))[0]
   if (next) {
     const copy = rows.value.slice()

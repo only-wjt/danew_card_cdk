@@ -230,6 +230,8 @@ func setupRoutes(r *gin.Engine) {
 		api.POST("/billing/check", billingRL, handler.SessionBillingCheck)
 		// Session 工具：用 sessionToken 换新 accessToken（不落库）
 		api.POST("/public/session/refresh", billingRL, handler.PublicSessionRefresh)
+		// Session 校验：主台凭据预检（不需要卡密）；限流、并发与缓存在 handler 内
+		api.POST("/public/session/precheck", handler.PublicSessionPrecheck)
 
 		// 代理门户 / API（账号由站长创建）
 		agent := api.Group("/agent")
