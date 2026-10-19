@@ -57,17 +57,32 @@
       <div v-if="rows.length" class="card space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <h2 class="text-xl font-semibold text-ink">{{ t('inspect.previewTitle') }}</h2>
-          <div class="flex flex-wrap gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <span class="rounded-full px-2.5 py-1 text-xs" style="background: var(--primary-soft); color: var(--primary)">
               {{ t('inspect.okCount', { n: rows.length }) }}
             </span>
+            <span
+              v-if="passCount || failCount"
+              class="rounded-full px-2.5 py-1 text-xs"
+              :style="tokenPill(!failCount)"
+            >
+              {{ t('inspect.checkSummary', { pass: passCount, fail: failCount }) }}
+            </span>
+            <button
+              type="button"
+              class="btn-primary !py-1.5 text-sm"
+              :disabled="checkingAll || !checkableCount"
+              @click="checkAll"
+            >
+              {{ checkingAll ? t('inspect.checking') : t('inspect.checkAll') }}
+            </button>
             <button
               type="button"
               class="btn-secondary !py-1.5 text-sm"
-              :disabled="checkingAll || !checkableCount"
+              :disabled="billingAll || !checkableCount"
               @click="checkAllBilling"
             >
-              {{ checkingAll ? t('inspect.checkingBilling') : t('inspect.checkAllBilling') }}
+              {{ billingAll ? t('inspect.checkingBilling') : t('inspect.checkAllBilling') }}
             </button>
             <button
               type="button"
@@ -76,6 +91,24 @@
               @click="refreshAll"
             >
               {{ refreshingAll ? t('inspect.refreshing') : t('inspect.refreshAll') }}
+            </button>
+            <button
+              v-if="passCount"
+              type="button"
+              class="btn-secondary !py-1.5 text-sm"
+              @click="copyPassed"
+            >
+              {{ copiedPassed ? t('inspect.copied') : t('inspect.copyPassed', { n: passCount }) }}
+            </button>
+            <button
+              v-if="failCount"
+              type="button"
+              class="btn-secondary !py-1.5 text-sm"
+              style="color: var(--err, #dc2626)"
+              :disabled="checkingAll"
+              @click="removeFailed"
+            >
+              {{ t('inspect.removeFailed', { n: failCount }) }}
             </button>
             <button
               v-if="refreshedCount"
@@ -92,8 +125,8 @@
 
         <div class="space-y-3">
           <div
-            v-for="(row, i) in rows"
-            :key="i"
+            v-for="{ row, key } in items"
+            :key="key"
             class="rounded-xl border p-3 space-y-2"
             style="border-color: var(--brd)"
           >
@@ -114,10 +147,15 @@
                   {{ row.accessExpired ? t('inspect.expired') : t('inspect.valid') }}
                 </span>
                 <span
-                  v-if="status[i] === 'ok'"
+                  v-if="status[key] === 'ok'"
                   class="rounded-full px-2 py-0.5"
                   style="background: var(--primary-soft); color: var(--primary)"
                 >{{ t('inspect.refreshed') }}</span>
+                <span
+                  v-if="verdict[key] && !verdict[key]!.error"
+                  class="rounded-full px-2 py-0.5 font-medium"
+                  :style="tokenPill(Boolean(verdict[key]!.valid))"
+                >{{ verdict[key]!.valid ? t('inspect.checkPass') : t('inspect.checkFail') }}</span>
               </div>
             </div>
             <div class="grid sm:grid-cols-3 gap-2 text-xs text-muted">
@@ -125,40 +163,61 @@
               <div>{{ t('inspect.expires') }}：{{ formatDisplayDate(row.accessExpiresAt) }}</div>
               <div class="truncate">{{ row.accountId || '—' }}</div>
             </div>
-            <p v-if="row.issues.length && status[i] !== 'ok'" class="text-xs" style="color: var(--err, #dc2626)">
+            <p v-if="row.issues.length && status[key] !== 'ok'" class="text-xs" style="color: var(--err, #dc2626)">
               {{ row.issues.join(' · ') }}
             </p>
-            <p v-if="errors[i]" class="text-xs" style="color: var(--err, #dc2626)">{{ errors[i] }}</p>
-            <div v-if="billing[i]?.summary" class="rounded-lg bg-soft px-3 py-2 text-xs text-muted flex flex-wrap gap-x-4 gap-y-1">
-              <span>{{ t('inspect.plan') }}：<b class="text-ink">{{ planLabel(billing[i]!.summary) }}</b></span>
-              <span>{{ billing[i]!.summary?.has_active_subscription ? t('inspect.billingActive') : t('inspect.billingInactive') }}</span>
-              <span>{{ t('inspect.billingUntil') }}：{{ billing[i]!.summary?.expires_at || billing[i]!.summary?.renews_at || '—' }}</span>
+            <p v-if="errors[key]" class="text-xs" style="color: var(--err, #dc2626)">{{ errors[key] }}</p>
+            <div
+              v-if="verdict[key]?.valid"
+              class="rounded-lg bg-soft px-3 py-2 text-xs text-muted flex flex-wrap gap-x-4 gap-y-1"
+            >
+              <span>{{ t('inspect.checkEmail') }}：<b class="text-ink font-mono">{{ verdict[key]!.email || '—' }}</b></span>
+              <span>{{ t('inspect.currentPlan') }}：<b class="text-ink">{{ verdict[key]!.current_plan ? planLabel(verdict[key]!.current_plan!) : '—' }}</b></span>
             </div>
-            <p v-if="billing[i]?.error" class="text-xs" style="color: var(--err, #dc2626)">{{ billing[i]!.error }}</p>
+            <p v-if="verdict[key]?.valid" class="text-[11px] text-subtle">{{ t('inspect.checkPassNote') }}</p>
+            <p v-if="verdict[key] && !verdict[key]!.valid" class="text-xs" style="color: var(--err, #dc2626)">
+              {{ verdict[key]!.error || verdict[key]!.message || t('inspect.checkFailGeneric') }}
+            </p>
+            <div v-if="billing[key]?.summary" class="rounded-lg bg-soft px-3 py-2 text-xs text-muted flex flex-wrap gap-x-4 gap-y-1">
+              <span>{{ t('inspect.subscription') }}：<b class="text-ink">{{ subscriptionLabel(billing[key]!.summary) }}</b></span>
+              <span>{{ billing[key]!.summary?.has_active_subscription ? t('inspect.billingActive') : t('inspect.billingInactive') }}</span>
+              <span>{{ t('inspect.billingUntil') }}：{{ billing[key]!.summary?.expires_at || billing[key]!.summary?.renews_at || '—' }}</span>
+              <span v-if="billing[key]!.summary?.will_renew != null">
+                {{ billing[key]!.summary?.will_renew ? t('inspect.willRenew') : t('inspect.wontRenew') }}
+              </span>
+            </div>
+            <p v-if="billing[key]?.error" class="text-xs" style="color: var(--err, #dc2626)">{{ billing[key]!.error }}</p>
             <div class="flex flex-wrap gap-2">
               <button
                 type="button"
-                class="btn-secondary !py-1 text-xs"
-                :disabled="!canCheck(row) || billingBusy[i]"
-                @click="checkOneBilling(i)"
+                class="btn-primary !py-1 text-xs"
+                :disabled="!canCheck(row) || checkBusy[key] || checkingAll"
+                @click="checkOne(key)"
               >
-                {{ billingBusy[i] ? t('inspect.checkingBilling') : t('inspect.checkBilling') }}
+                {{ checkBusy[key] ? t('inspect.checking') : t('inspect.check') }}
               </button>
               <button
                 type="button"
                 class="btn-secondary !py-1 text-xs"
-                :disabled="!row.hasSessionToken || busy[i]"
-                @click="refreshOne(i)"
+                :disabled="!canCheck(row) || billingBusy[key] || billingAll"
+                @click="checkOneBilling(key)"
               >
-                {{ busy[i] ? t('inspect.refreshing') : t('inspect.refresh') }}
+                {{ billingBusy[key] ? t('inspect.checkingBilling') : t('inspect.checkBilling') }}
               </button>
               <button
-                v-if="refreshed[i]"
                 type="button"
                 class="btn-secondary !py-1 text-xs"
-                @click="copyText(JSON.stringify(refreshed[i], null, 2), i)"
+                :disabled="!row.hasSessionToken || busy[key]"
+                @click="refreshOne(key)"
               >
-                {{ copied[i] ? t('inspect.copied') : t('inspect.copySession') }}
+                {{ busy[key] ? t('inspect.refreshing') : t('inspect.refresh') }}
+              </button>
+              <button
+                type="button"
+                class="btn-secondary !py-1 text-xs"
+                @click="copyText(sessionText(key), key)"
+              >
+                {{ copied[key] ? t('inspect.copied') : t('inspect.copySession') }}
               </button>
             </div>
           </div>
@@ -173,13 +232,15 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
+import { planLabel } from '../../lib/plan'
 import { mapPool } from '../../lib/batch-session'
 import {
   checkSessionBilling,
-  planLabel,
+  precheckSession,
   refreshSessions,
   SESSION_TOOL_MAX,
   type BillingSummary,
+  type PrecheckResult,
 } from '../../lib/session-api'
 import {
   collectSessionEntries,
@@ -191,28 +252,69 @@ import {
 
 const { t } = useI18n({ useScope: 'global' })
 
+// 每行的状态都按行 key 存，不按下标：增删行、再贴一条都不会把别的行的结果对错位置。
+// 行 key = 列表条目 key（来自 sessionEntryKey）+ 在原文里的路径，刷新后保持不变。
+type RowState<T> = Record<string, T | undefined>
+
 const pasteText = ref('')
 const accepted = ref<SessionEntry[]>([])
 const pasteHint = ref('')
 const rows = ref<SessionInspectRow[]>([])
-const refreshed = reactive<Record<number, Record<string, unknown> | undefined>>({})
-const errors = reactive<Record<number, string>>({})
-const status = reactive<Record<number, 'ok' | 'fail' | ''>>({})
-const busy = reactive<Record<number, boolean>>({})
-const copied = reactive<Record<number, boolean>>({})
+const refreshed = reactive<RowState<Record<string, unknown>>>({})
+const errors = reactive<RowState<string>>({})
+const status = reactive<RowState<'ok' | 'fail' | ''>>({})
+const busy = reactive<RowState<boolean>>({})
+const copied = reactive<RowState<boolean>>({})
 const copiedAll = ref(false)
 const refreshingAll = ref(false)
 const checkingAll = ref(false)
 const batchError = ref('')
-const billing = reactive<Record<number, { summary?: BillingSummary; error?: string }>>({})
-const billingBusy = reactive<Record<number, boolean>>({})
+const verdict = reactive<RowState<PrecheckResult>>({})
+const checkBusy = reactive<RowState<boolean>>({})
+const billing = reactive<RowState<{ summary?: BillingSummary; error?: string }>>({})
+const billingBusy = reactive<RowState<boolean>>({})
+const billingAll = ref(false)
+const copiedPassed = ref(false)
 
+const rowStates: Record<string, unknown>[] = [
+  refreshed, errors, status, busy, copied, verdict, checkBusy, billing, billingBusy,
+]
+
+function rowKey(row: SessionInspectRow) {
+  return `${row.sourceName}#${row.sourcePath}`
+}
+
+const items = computed(() => rows.value.map((row) => ({ row, key: rowKey(row) })))
 const refreshableCount = computed(() => rows.value.filter((r) => r.hasSessionToken).length)
 const checkableCount = computed(() => rows.value.filter(canCheck).length)
-const refreshedCount = computed(() => Object.values(refreshed).filter(Boolean).length)
+const refreshedCount = computed(() => items.value.filter((x) => refreshed[x.key]).length)
+const passedKeys = computed(() => items.value.filter((x) => verdict[x.key]?.valid).map((x) => x.key))
+const failedKeys = computed(() =>
+  items.value
+    .filter((x) => {
+      const v = verdict[x.key]
+      return v && !v.valid && !v.error
+    })
+    .map((x) => x.key),
+)
+const passCount = computed(() => passedKeys.value.length)
+const failCount = computed(() => failedKeys.value.length)
 
+// 兑换只收含 sessionToken 的 Session，校验也一样；只有 AT 的行交给后端返回明确原因
 function canCheck(row: SessionInspectRow) {
   return row.hasAccessToken || row.hasSessionToken
+}
+
+function rowOf(key: string) {
+  return items.value.find((x) => x.key === key)?.row
+}
+
+function checkMsgs() {
+  return {
+    down: t('inspect.backendDown'),
+    fail: t('inspect.checkFailGeneric'),
+    limited: (secs: number) => t('inspect.checkLimited', { n: secs }),
+  }
 }
 
 function apiMsgs() {
@@ -255,16 +357,35 @@ function clearAccepted() {
   rebuildRows()
 }
 
+// 未通过的行可能还在输入框里没加入列表：先收进列表并清空输入框，再一起移除，
+// 否则输入框里的内容下次一解析又会出现。
+function removeFailed() {
+  const failed = new Set(failedKeys.value.map((key) => rowOf(key)?.sourceName))
+  if (!failed.size) return
+  commitPaste(true)
+  // 输入框里的条目早就在列表里时 commitPaste 不会清空它，这里补上
+  if (collectSessionEntries(pasteText.value).some((e) => failed.has(e.key))) pasteText.value = ''
+  accepted.value = accepted.value.filter((item) => !failed.has(item.key))
+  rebuildRows()
+}
+
 function rebuildRows() {
   const fromList = accepted.value.flatMap((item) => inspectSessionsFromText(item.raw, item.key))
-  const leftover = collectSessionEntries(pasteText.value).filter((e) => !accepted.value.some((a) => a.key === e.key))
+  const seen = new Set(accepted.value.map((a) => a.key))
+  const leftover = collectSessionEntries(pasteText.value).filter((e) => {
+    if (seen.has(e.key)) return false
+    seen.add(e.key)
+    return true
+  })
   const extra = leftover.flatMap((e) => inspectSessionsFromText(e.raw, e.key))
   rows.value = [...fromList, ...extra]
-  for (const key of Object.keys(refreshed)) delete refreshed[Number(key)]
-  for (const key of Object.keys(errors)) delete errors[Number(key)]
-  for (const key of Object.keys(status)) delete status[Number(key)]
-  for (const key of Object.keys(billing)) delete billing[Number(key)]
-  for (const key of Object.keys(billingBusy)) delete billingBusy[Number(key)]
+  // 只清掉已经不在列表里的行，留下来的行结果保留
+  const live = new Set(rows.value.map(rowKey))
+  for (const state of rowStates) {
+    for (const key of Object.keys(state)) {
+      if (!live.has(key)) delete state[key]
+    }
+  }
   batchError.value = ''
 }
 
@@ -274,28 +395,25 @@ function tokenPill(ok: boolean) {
     : { background: 'color-mix(in srgb, var(--err, #dc2626) 12%, transparent)', color: 'var(--err, #dc2626)' }
 }
 
-async function refreshOne(index: number) {
-  const row = rows.value[index]
+async function refreshOne(key: string) {
+  const row = rowOf(key)
   if (!row?.hasSessionToken) return
-  busy[index] = true
-  errors[index] = ''
+  busy[key] = true
+  errors[key] = ''
   batchError.value = ''
   try {
     const results = await refreshSessions([row.sessionRaw], apiMsgs())
-    applyResult(index, results[0])
+    applyResult(key, results[0])
   } catch (e) {
-    errors[index] = e instanceof Error ? e.message : t('inspect.refreshFail')
-    status[index] = 'fail'
+    errors[key] = e instanceof Error ? e.message : t('inspect.refreshFail')
+    status[key] = 'fail'
   } finally {
-    busy[index] = false
+    busy[key] = false
   }
 }
 
 async function refreshAll() {
-  const targets = rows.value
-    .map((row, index) => ({ row, index }))
-    .filter((x) => x.row.hasSessionToken)
-    .slice(0, SESSION_TOOL_MAX)
+  const targets = items.value.filter((x) => x.row.hasSessionToken).slice(0, SESSION_TOOL_MAX)
   if (!targets.length) {
     batchError.value = t('inspect.noRefreshable')
     return
@@ -303,91 +421,100 @@ async function refreshAll() {
   refreshingAll.value = true
   batchError.value = ''
   targets.forEach((x) => {
-    busy[x.index] = true
-    errors[x.index] = ''
+    busy[x.key] = true
+    errors[x.key] = ''
   })
   try {
     const results = await refreshSessions(targets.map((x) => x.row.sessionRaw), apiMsgs())
-    targets.forEach((x, i) => applyResult(x.index, results[i]))
+    targets.forEach((x, i) => applyResult(x.key, results[i]))
   } catch (e) {
     batchError.value = e instanceof Error ? e.message : t('inspect.refreshFail')
   } finally {
     targets.forEach((x) => {
-      busy[x.index] = false
+      busy[x.key] = false
     })
     refreshingAll.value = false
   }
 }
 
-async function checkOneBilling(index: number) {
-  const row = rows.value[index]
+async function checkOne(key: string) {
+  const row = rowOf(key)
   if (!row || !canCheck(row)) return
-  billingBusy[index] = true
+  checkBusy[key] = true
   batchError.value = ''
   try {
-    billing[index] = await checkSessionBilling(row.sessionRaw, {
-      down: t('inspect.backendDown'),
-      fail: t('inspect.billingFail'),
-    })
+    verdict[key] = await precheckSession(row.sessionRaw, checkMsgs())
   } finally {
-    billingBusy[index] = false
+    checkBusy[key] = false
   }
 }
 
-async function checkAllBilling() {
-  const targets = rows.value
-    .map((row, index) => ({ row, index }))
-    .filter((x) => canCheck(x.row))
+// 逐条串行：后端按 IP 限流，并发只会更快撞上限。被限流就停下，剩下的不再发。
+async function checkAll() {
+  const targets = items.value
+    .filter((x) => canCheck(x.row) && !verdict[x.key]?.valid)
     .slice(0, SESSION_TOOL_MAX)
   if (!targets.length) {
-    batchError.value = t('inspect.noCheckable')
+    batchError.value = rows.value.some(canCheck) ? '' : t('inspect.noCheckable')
     return
   }
   checkingAll.value = true
   batchError.value = ''
-  targets.forEach((x) => {
-    billingBusy[x.index] = true
-  })
   try {
-    await mapPool(targets, 3, async (x) => {
-      billing[x.index] = await checkSessionBilling(x.row.sessionRaw, {
-        down: t('inspect.backendDown'),
-        fail: t('inspect.billingFail'),
-      })
-    })
-  } catch (e) {
-    batchError.value = e instanceof Error ? e.message : t('inspect.billingFail')
+    for (const x of targets) {
+      // 校验途中被移除的行跳过
+      if (!rowOf(x.key)) continue
+      checkBusy[x.key] = true
+      const res = await precheckSession(x.row.sessionRaw, checkMsgs())
+      checkBusy[x.key] = false
+      if (rowOf(x.key)) verdict[x.key] = res
+      if (res.retryAfter) {
+        batchError.value = t('inspect.checkLimitedBatch', { n: res.retryAfter })
+        break
+      }
+    }
   } finally {
     targets.forEach((x) => {
-      billingBusy[x.index] = false
+      checkBusy[x.key] = false
     })
     checkingAll.value = false
   }
 }
 
-function applyResult(index: number, item: { ok?: boolean; error?: string; session?: Record<string, unknown> } | undefined) {
+function applyResult(key: string, item: { ok?: boolean; error?: string; session?: Record<string, unknown> } | undefined) {
+  const row = rowOf(key)
+  if (!row) return
   if (!item?.ok || !item.session) {
-    status[index] = 'fail'
-    errors[index] = item?.error || t('inspect.refreshFail')
+    status[key] = 'fail'
+    errors[key] = item?.error || t('inspect.refreshFail')
     return
   }
-  refreshed[index] = item.session
-  status[index] = 'ok'
-  errors[index] = ''
-  const next = inspectSessionsFromText(JSON.stringify(item.session))[0]
+  refreshed[key] = item.session
+  status[key] = 'ok'
+  errors[key] = ''
+  // Session 换了，旧的校验结论不再对应它
+  delete verdict[key]
+  // 写回列表（还在输入框里的行顺手加入列表），之后再贴新内容重建时不会退回旧 Session。
+  // 列表条目 key 不变，行 key 也就不变，刷新标记和查订阅结果都还在。
+  const raw = JSON.stringify(item.session)
+  const next = inspectSessionsFromText(raw, row.sourceName)[0]
+  const email = next?.email || row.email
+  const list = accepted.value.slice()
+  const at = list.findIndex((a) => a.key === row.sourceName)
+  if (at >= 0) list[at] = { ...list[at], raw, email }
+  else list.push({ key: row.sourceName, email, raw })
+  accepted.value = list
   if (next) {
-    const copy = rows.value.slice()
-    copy[index] = { ...next, sourcePath: rows.value[index].sourcePath }
-    rows.value = copy
+    rows.value = rows.value.map((r) => (rowKey(r) === key ? { ...next, sourcePath: row.sourcePath } : r))
   }
 }
 
-async function copyText(text: string, index: number) {
+async function copyText(text: string, key: string) {
   try {
     await navigator.clipboard.writeText(text)
-    copied[index] = true
+    copied[key] = true
     setTimeout(() => {
-      copied[index] = false
+      copied[key] = false
     }, 1600)
   } catch {
     batchError.value = t('convert.copyFail')
@@ -395,8 +522,8 @@ async function copyText(text: string, index: number) {
 }
 
 async function copyAllRefreshed() {
-  const list = rows.value
-    .map((_, i) => refreshed[i])
+  const list = items.value
+    .map((x) => refreshed[x.key])
     .filter((x): x is Record<string, unknown> => Boolean(x))
   if (!list.length) return
   const payload = list.length === 1 ? list[0] : list
@@ -408,6 +535,82 @@ async function copyAllRefreshed() {
     }, 1600)
   } catch {
     batchError.value = t('convert.copyFail')
+  }
+}
+
+// 优先用刷新后的 Session，没刷新过就用原文
+function sessionValue(key: string): unknown {
+  if (refreshed[key]) return refreshed[key]
+  const raw = rowOf(key)?.sessionRaw || ''
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return raw
+  }
+}
+
+function sessionText(key: string): string {
+  const value = sessionValue(key)
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+async function copyPassed() {
+  const list = passedKeys.value.map(sessionValue)
+  if (!list.length) return
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(list.length === 1 ? list[0] : list, null, 2))
+    copiedPassed.value = true
+    setTimeout(() => {
+      copiedPassed.value = false
+    }, 1600)
+  } catch {
+    batchError.value = t('convert.copyFail')
+  }
+}
+
+function billingMsgs() {
+  return { down: t('inspect.backendDown'), fail: t('inspect.billingFail') }
+}
+
+function subscriptionLabel(summary: BillingSummary | undefined): string {
+  const raw = String(summary?.plan_type || summary?.subscription_plan || '').trim()
+  return raw ? planLabel(raw) : planLabel('free')
+}
+
+async function checkOneBilling(key: string) {
+  const row = rowOf(key)
+  if (!row || !canCheck(row)) return
+  billingBusy[key] = true
+  batchError.value = ''
+  try {
+    billing[key] = await checkSessionBilling(row.sessionRaw, billingMsgs())
+  } finally {
+    billingBusy[key] = false
+  }
+}
+
+async function checkAllBilling() {
+  const targets = items.value.filter((x) => canCheck(x.row)).slice(0, SESSION_TOOL_MAX)
+  if (!targets.length) {
+    batchError.value = t('inspect.noCheckable')
+    return
+  }
+  billingAll.value = true
+  batchError.value = ''
+  targets.forEach((x) => {
+    billingBusy[x.key] = true
+  })
+  try {
+    await mapPool(targets, 3, async (x) => {
+      const res = await checkSessionBilling(x.row.sessionRaw, billingMsgs())
+      if (rowOf(x.key)) billing[x.key] = res
+      billingBusy[x.key] = false
+    })
+  } finally {
+    targets.forEach((x) => {
+      billingBusy[x.key] = false
+    })
+    billingAll.value = false
   }
 }
 </script>

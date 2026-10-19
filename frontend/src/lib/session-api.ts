@@ -64,8 +64,40 @@ export async function checkSessionBilling(
   return { summary: data.summary || {} }
 }
 
-export function planLabel(summary: BillingSummary | undefined): string {
-  const raw = String(summary?.plan_type || summary?.subscription_plan || '').trim()
-  if (!raw || raw === 'free') return 'free'
-  return raw.replace('chatgpt', 'ChatGPT ').replace(/_/g, ' ')
+export type PrecheckResult = {
+  valid?: boolean
+  reason_code?: string
+  message?: string
+  email?: string
+  current_plan?: string
+  /** 网络或服务问题时才有；有 error 表示没拿到结论，可以稍后重试 */
+  error?: string
+  /** 被限流时的建议等待秒数 */
+  retryAfter?: number
+}
+
+/** 用卡台凭据预检校验 Session（不需要卡密）。只回结论，不落库。 */
+export async function precheckSession(
+  session: string,
+  messages: { down: string; fail: string; limited: (secs: number) => string },
+): Promise<PrecheckResult> {
+  let r: Response
+  try {
+    r = await fetch('/api/v1/public/session/precheck', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session }),
+    })
+  } catch {
+    return { error: messages.down }
+  }
+  const data = await r.json().catch(() => ({}))
+  if (r.status === 429) {
+    const secs = Number(data.retry_after || r.headers.get('Retry-After') || 30)
+    return { error: messages.limited(secs), retryAfter: secs }
+  }
+  if (!r.ok) {
+    return { error: r.status === 404 ? messages.down : String(data.error || messages.fail) }
+  }
+  return data as PrecheckResult
 }
