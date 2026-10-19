@@ -121,6 +121,7 @@ func TestPrecheckRejectionHidesUpstreamIdentity(t *testing.T) {
 		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "PRECHECK_REJECTED", Msg: "账号已被封禁"}, "账号暂不满足兑换条件：账号已被封禁"},
 		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "PRECHECK_REJECTED", Msg: "ZovoCard 卡台账户余额不足"}, "账号暂不满足兑换条件"},
 		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "SOME_NEW_CODE", Msg: "card pool empty"}, "Session 校验未通过"},
+		{&cardplatform.APIError{HTTPStatus: 400, ErrorCode: "GPT_X", Msg: "Session 已过期或无权访问，请重新获取后重试，未扣款"}, "Session 校验未通过：Session 已过期或无权访问，请重新获取后重试"},
 	}
 	for _, tc := range cases {
 		withPrecheckUpstream(t, func(context.Context, string) (*cardplatform.DirectPreflightResult, error) { return nil, tc.err })
@@ -142,6 +143,39 @@ func TestPrecheckSiteSideRejectionsAreUnavailable(t *testing.T) {
 		if code, _ := postPrecheck(t, precheckTestSession); code != http.StatusServiceUnavailable {
 			t.Fatalf("%s: code = %d", ec, code)
 		}
+	}
+}
+
+func TestPrecheckOneInFlightPerIP(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	calls := withPrecheckUpstream(t, func(context.Context, string) (*cardplatform.DirectPreflightResult, error) {
+		entered <- struct{}{}
+		<-release
+		return &cardplatform.DirectPreflightResult{Email: "onlyWjt.307@gmail.com"}, nil
+	})
+	done := make(chan int)
+	go func() {
+		code, _ := postPrecheck(t, precheckTestSession)
+		done <- code
+	}()
+	<-entered
+	// 同 IP 第二条（换一条 Session，避免命中缓存）要被挡回，且不计次
+	code, out := postPrecheck(t, `{"accessToken":"eyJa.eyJb.c","sessionToken":"st-2"}`)
+	if code != http.StatusTooManyRequests || out["error"] != "上一条还在校验中，请等它完成后再校验下一条" {
+		t.Fatalf("concurrent: code=%d out=%v", code, out)
+	}
+	close(release)
+	if code := <-done; code != 200 {
+		t.Fatalf("first: code=%d", code)
+	}
+	if *calls != 1 {
+		t.Fatalf("calls = %d", *calls)
+	}
+	// 第一条结束后放行
+	go func() { <-entered }()
+	if code, _ := postPrecheck(t, `{"accessToken":"eyJa.eyJb.c","sessionToken":"st-3"}`); code != 200 {
+		t.Fatalf("after release: code=%d", code)
 	}
 }
 
