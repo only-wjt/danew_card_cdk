@@ -171,6 +171,7 @@ export default {
     checkLimitedBatch: '校验太频繁，已暂停，剩余条目请 {n} 秒后再点「全部校验」',
     checkSummary: '通过 {pass} · 未通过 {fail}',
     copyPassed: '复制通过的 {n} 条',
+    removeFailed: '移除未通过的 {n} 条',
     checkBilling: '查订阅',
     checkingBilling: '查询中…',
     checkAllBilling: '查全部订阅',

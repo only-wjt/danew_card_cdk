@@ -171,6 +171,7 @@ export default {
     checkLimitedBatch: 'Too many checks, paused. Click “Check all” again in {n}s for the rest',
     checkSummary: '{pass} passed · {fail} failed',
     copyPassed: 'Copy {n} passed',
+    removeFailed: 'Remove {n} failed',
     checkBilling: 'Subscription',
     checkingBilling: 'Checking…',
     checkAllBilling: 'Check all subscriptions',
