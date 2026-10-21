@@ -174,6 +174,14 @@ func issueProduct(explicit, plan string) string {
 	return "gpt"
 }
 
+// upstreamPlanFilter 本站筛选键 → 卡台列表筛选键（卡台落库时去掉了 grok_ 前缀）。
+func upstreamPlanFilter(plan string) string {
+	if p := strings.TrimSpace(plan); strings.HasPrefix(strings.ToLower(p), "grok_") {
+		return cardplatform.GrokBarePlan(p)
+	}
+	return plan
+}
+
 // issueProductConflict 显式 product 与档位键明显矛盾时返回错误信息。
 // 否则 {"product":"gpt","plan":"basic_monthly"} 在拿不到档位表时会落进 DN- 双发。
 func issueProductConflict(product, plan string) string {
@@ -480,7 +488,7 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 		if prefix == "" && len(code) >= 14 {
 			prefix = code[:14]
 		}
-		if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, "unused", req.AccountID); err != nil {
+		if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, cardplatform.NormalizeListedPlan(it.Plan), it.FeeAmountMinor, "unused", req.AccountID); err != nil {
 			failed++
 			log.Printf("[cdk-store] save failed id=%d: %v", it.ID, err)
 			continue
@@ -799,7 +807,8 @@ func CardPlatformListCDKs(c *gin.Context) {
 	cli := cardClientOrSettings(primaryCardAccountID())
 	res, err := cli.ListCDKsQuery(c.Request.Context(), cardplatform.CDKListQuery{
 		Page: page, PageSize: ps,
-		Status: c.Query("status"), Plan: c.Query("plan"), Query: c.Query("q"),
+		// 卡台侧 Grok 档位不带前缀；本站筛选键是 grok_ 前缀
+		Status: c.Query("status"), Plan: upstreamPlanFilter(c.Query("plan")), Query: c.Query("q"),
 	})
 	if err != nil {
 		writeCardErr(c, err)
@@ -834,13 +843,13 @@ func CardPlatformListCDKs(c *gin.Context) {
 				if prefix == "" && len(up) >= 14 {
 					prefix = up[:14]
 				}
-				if err := db.SaveCardplatformCDKCodeForAccount(it.ID, up, prefix, it.Plan, it.FeeAmountMinor, it.Status, primaryCardAccountID(), it.PaymentCountry); err == nil {
+				if err := db.SaveCardplatformCDKCodeForAccount(it.ID, up, prefix, cardplatform.NormalizeListedPlan(it.Plan), it.FeeAmountMinor, it.Status, primaryCardAccountID(), it.PaymentCountry); err == nil {
 					full, ok = up, true
 				}
 			}
 		}
 		row := rowOut{
-			ID: it.ID, Plan: it.Plan, CodePrefix: it.CodePrefix, Status: it.Status,
+			ID: it.ID, Plan: cardplatform.NormalizeListedPlan(it.Plan), CodePrefix: it.CodePrefix, Status: it.Status,
 			PaymentCountry: strings.ToUpper(strings.TrimSpace(it.PaymentCountry)),
 			FeeAmountMinor: it.FeeAmountMinor, CreatedAt: it.CreatedAt,
 			HasFullCode: ok, Note: notes[it.ID],

@@ -378,6 +378,14 @@ export default {
     subtitle:
       'Operator-side direct top-up: the backend issues and redeems internally — no CDK on screen. Credentials for new batches are stored server-side for export only and never echoed in list/detail JSON.',
     createTitle: 'New Batch',
+    productLabel: 'Product',
+    productGpt: 'ChatGPT',
+    productGrok: 'Grok',
+    grokRegionFixed: 'Grok has fixed USD pricing and always pays in the United States (USD).',
+    grokCredLabel: 'Grok logins (one per line)',
+    grokCredPlaceholder: 'sso=… (the whole grok.com cookie, or just the sso value)',
+    grokCredHint: 'Sign in to grok.com → DevTools → Application → Cookies and copy sso. Logins are never shown on the page, only counted; invalid and duplicate lines are skipped.',
+    grokCredSkipped: 'Skipped {n} line(s) (invalid or duplicate)',
     planLabel: 'Plan',
     fee: 'Service fee',
     planHint: 'Plans follow the card-platform sellable list (including Pro 20x renew). The service fee is charged at issue time; the upstream subscription is paid by this account.',
@@ -476,6 +484,7 @@ export default {
       pro_20x: 'Pro 20x ({fee}/item)',
       pro_50x: 'Pro 50x ({fee}/item)',
       pro_20x_renew: 'Pro 20x renew ({fee}/item)',
+      pro_5x_renew: 'Pro 5x renew ({fee}/item)',
     },
     planHumanGeneric: '{name} ({fee}/item)',
     unknownBanner:

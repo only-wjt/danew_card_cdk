@@ -77,3 +77,15 @@ func GrokPlanLabel(plan string) string {
 	}
 	return "Grok " + tier + " " + period
 }
+
+// NormalizeListedPlan 卡台列表/同步回来的档位是裸键且不带产品信息。能确定是 Grok 的裸键
+// （plus_/super_/ultra_ 及旧 lite_/heavy_/monthly/yearly，X 没有这些键）补成 grok_ 前缀，
+// 与本站发码时落库的写法一致。裸 premium_* 与 X 同名，判不了，原样返回。
+func NormalizeListedPlan(plan string) string {
+	p := strings.TrimSpace(plan)
+	lower := strings.ToLower(p)
+	if lower == "" || strings.HasPrefix(lower, "grok_") || IsXPremiumPlan(lower) || !IsGrokPlan(lower) {
+		return p
+	}
+	return GrokIssuePlan(lower)
+}

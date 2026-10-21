@@ -70,3 +70,18 @@ func TestGrokPlanLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeListedPlan(t *testing.T) {
+	cases := map[string]string{
+		"super_monthly": "grok_super_monthly", "plus_yearly": "grok_plus_yearly", "ultra_monthly": "grok_ultra_monthly",
+		"heavy_yearly": "grok_ultra_yearly", "monthly": "grok_premium_monthly", "lite_monthly": "grok_plus_monthly",
+		// 与 X 同名、判不了的保持原样；GPT 档与已带前缀的不动
+		"premium_monthly": "premium_monthly", "premium_plus_yearly": "premium_plus_yearly", "basic_monthly": "basic_monthly",
+		"plus": "plus", "pro_20x_renew": "pro_20x_renew", "grok_premium_yearly": "grok_premium_yearly", "": "",
+	}
+	for in, want := range cases {
+		if got := NormalizeListedPlan(in); got != want {
+			t.Fatalf("NormalizeListedPlan(%q)=%q want %q", in, got, want)
+		}
+	}
+}

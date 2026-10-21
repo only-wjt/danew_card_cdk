@@ -868,7 +868,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 				prefix = code[:14]
 			}
 			_, existed := db.LookupCardplatformCDKCode(it.ID, prefix)
-			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status, c.cfg.AccountID, it.PaymentCountry); err != nil {
+			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, NormalizeListedPlan(it.Plan), it.FeeAmountMinor, it.Status, c.cfg.AccountID, it.PaymentCountry); err != nil {
 				continue
 			}
 			if existed {
