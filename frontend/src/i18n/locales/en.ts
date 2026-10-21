@@ -1,4 +1,11 @@
 export default {
+  grok: {
+    credential: 'Grok login',
+    hint: 'Sign in to grok.com, then copy the sso cookie value from DevTools → Application → Cookies → grok.com (or the whole cookie containing sso=). New subscriptions only, fixed USD price.',
+    placeholder: 'sso=… or the sso value',
+    invalid: 'Enter a valid Grok login (the grok.com sso cookie)',
+    batchHint: 'Pair Grok codes with a Grok login in the form sso=… (whole cookie), not a ChatGPT session.',
+  },
   grace: {
     title: 'Previous subscription needs attention',
     hint: 'The previous subscription is in a grace period or has an overdue renewal. Cancel it and refresh before recharging.',

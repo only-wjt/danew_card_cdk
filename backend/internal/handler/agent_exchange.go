@@ -228,11 +228,20 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		return
 	}
 
-	// 发一张同套餐新码（带本站选卡偏好，跳过未启动卡头）
-	var issuePrefs []cardplatform.IssueCardPref
-	if pref, ok := issuePrefFromSite(); ok {
-		issuePrefs = append(issuePrefs, pref)
+	// ★新码必须与旧码同一付款地区★：补发原来只带套餐，智利/日本等地区码补发出来全成了默认菲律宾区，
+	// 用户兑换时按 PHP 走、和原单完全不是一回事（2026-10-10 代理反馈）。地区以本站缓存为准，
+	// 老数据没记过地区就去卡台查；两边都拿不到就拒绝补发——宁可让代理找管理员，也不发错区的码。
+	country, known := db.LookupStoredCDKRegion(upstreamID)
+	if !known {
+		country, known = upstreamCDKRegion(c, cli, upstreamID)
 	}
+	if !known {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "无法确认原卡密的付款地区，暂不能补发，请联系管理员"})
+		return
+	}
+	// 发一张同套餐、同地区的新码（带本站选卡偏好；跳过未启动卡头）
+	sitePref, hasSitePref := issuePrefFromSite()
+	issuePrefs := agentSwapIssuePrefs(sitePref, hasSitePref, country)
 
 	// 先禁用旧码，再发新码：禁用失败就不发，避免新旧码同时可用。
 	if err := cli.DisableCDK(c.Request.Context(), upstreamID); err != nil {
@@ -267,13 +276,16 @@ func PublicAgentCDKExchange(c *gin.Context) {
 	if newPrefix == "" && len(newCode) >= 14 {
 		newPrefix = newCode[:14]
 	}
-	_ = db.SaveCardplatformCDKCodeForAccount(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor, "unused", primaryCardAccountID())
+	if got := strings.ToUpper(strings.TrimSpace(newIt.PaymentCountry)); got != "" && got != country {
+		log.Printf("[agent-exchange] 新码 %d 地区 %s 与旧码 %d 地区 %q 不一致", newIt.ID, got, upstreamID, country)
+	}
+	_ = db.SaveCardplatformCDKCodeForAccount(newIt.ID, newCode, newPrefix, plan, newIt.FeeAmountMinor, "unused", primaryCardAccountID(), country)
 
 	if err := db.CompleteAgentCDKExchange(codeHash, upstreamID, newIt.ID, prefix, newPrefix, plan, orderID, status); err != nil {
 		log.Printf("[agent-exchange] complete record failed old=%d new=%d: %v", upstreamID, newIt.ID, err)
 	}
 	db.WriteAudit("agent-swap", "agent_cdk_exchange",
-		"old="+strconv.FormatInt(upstreamID, 10)+" new="+strconv.FormatInt(newIt.ID, 10)+" plan="+plan+" order="+strconv.FormatInt(orderID, 10),
+		"old="+strconv.FormatInt(upstreamID, 10)+" new="+strconv.FormatInt(newIt.ID, 10)+" plan="+plan+" region="+country+" order="+strconv.FormatInt(orderID, 10),
 		ip)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -284,9 +296,37 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		"new_cdk_id":      newIt.ID,
 		"new_code":        newCode,
 		"new_code_prefix": newPrefix,
+		"payment_country": country,
 		"order_status":    status,
 		"message":         "已换发全新卡密，请妥善保存（仅显示一次）",
 	})
+}
+
+// agentSwapIssuePrefs 补发的发码偏好：地区与选卡偏好是两件独立的事，
+// 没有本站选卡配置时也要把非默认地区带上（与正常发码 PublicIssue 同一规则）。
+func agentSwapIssuePrefs(sitePref cardplatform.IssueCardPref, hasSitePref bool, country string) []cardplatform.IssueCardPref {
+	country = strings.ToUpper(strings.TrimSpace(country))
+	if !hasSitePref && country == "" {
+		return nil
+	}
+	sitePref.PaymentCountry = country
+	return []cardplatform.IssueCardPref{sitePref}
+}
+
+// upstreamCDKRegion 本站没记过地区的老码，从卡台按 id 查权威地区并回填缓存。
+func upstreamCDKRegion(c *gin.Context, cli *cardplatform.Client, upstreamID int64) (string, bool) {
+	res, err := cli.ListCDKsQuery(c.Request.Context(), cardplatform.CDKListQuery{Page: 1, PageSize: 50, Query: strconv.FormatInt(upstreamID, 10)})
+	if err != nil || res == nil {
+		return "", false
+	}
+	for _, it := range res.List {
+		if it.ID == upstreamID {
+			country := strings.ToUpper(strings.TrimSpace(it.PaymentCountry))
+			_ = db.UpdateCardplatformCDKRegion(upstreamID, country)
+			return country, true
+		}
+	}
+	return "", false
 }
 
 func parseCDKOrderList(raw json.RawMessage) (list []map[string]any, total int) {

@@ -56,7 +56,7 @@
         <input v-model="code" class="input mono" placeholder="SXC-XXXX-XXXX-XXXX-XXXX" @keyup.enter="doPreview" />
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div v-if="previewInfo" class="rounded-xl bg-soft p-4 text-sm space-y-1">
-          <div>套餐：<b>{{ previewInfo.plan || previewInfo.plan_type || '—' }}</b></div>
+          <div>套餐：<b>{{ targetPlan ? planLabel(targetPlan) : '—' }}</b></div>
           <div class="text-muted">{{ previewInfo.message || '码有效，可继续' }}</div>
         </div>
         <button class="btn-primary w-full" :disabled="busy" @click="doPreview">{{ busy ? '校验中…' : '预览 / 下一步' }}</button>
@@ -64,16 +64,17 @@
 
       <!-- 2 preflight -->
       <div v-show="step === 2" class="card space-y-4">
-        <h2 class="text-xl font-bold text-ink">{{ isXPremiumPlan(targetPlan) ? t('xPremium.credential') : 'ChatGPT 凭证' }}</h2>
+        <h2 class="text-xl font-bold text-ink">{{ isGrok ? t('grok.credential') : isXPremiumPlan(targetPlan) ? t('xPremium.credential') : 'ChatGPT 凭证' }}</h2>
         <!-- 只支持 Session：邮箱+密码兑换已下线（后端 preflight 也会拒绝 mailbox） -->
-        <p v-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}
+        <p v-if="isGrok" class="text-sm text-muted">{{ t('grok.hint') }}</p>
+        <p v-else-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}
           <button type="button" class="app-link" @click="cookieGuide = true">怎么获取 Cookie？</button>
         </p>
         <p v-else class="text-sm text-muted">打开
           <a class="app-link" href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener">chatgpt.com/api/auth/session</a>
           复制<strong>完整 JSON</strong>（必须含 <code>sessionToken</code>）。已禁用纯 Access Token。
         </p>
-        <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" :placeholder="isXPremiumPlan(targetPlan) ? t('xPremium.placeholder') : sessionPlaceholder" />
+        <textarea v-model="sessionRaw" class="input h-36 font-mono text-xs" :placeholder="isGrok ? t('grok.placeholder') : isXPremiumPlan(targetPlan) ? t('xPremium.placeholder') : sessionPlaceholder" />
         <XCookieGuide v-model="cookieGuide" @fill="sessionRaw = $event" />
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div class="flex gap-3">
@@ -100,7 +101,7 @@
             </div>
             <div>
               <dt>当前套餐</dt>
-              <dd>{{ planLabel(account.currentPlan) }}</dd>
+              <dd>{{ planLabel(isGrok && account.currentPlan ? 'grok_' + String(account.currentPlan).replace(/^grok_/i, '') : account.currentPlan) }}</dd>
             </div>
             <div>
               <dt>订阅状态</dt>
@@ -138,7 +139,11 @@
           预检未返回账号摘要，仍可尝试兑换（以卡台校验为准）。
         </div>
 
-        <div v-if="alreadySatisfied && !needsSubscriptionRecovery && !recoveryPending" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
+        <div v-if="grokBlockingReason" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
+          {{ grokBlockingReason }}
+        </div>
+
+        <div v-if="alreadySatisfied && !grokBlockingReason && !needsSubscriptionRecovery && !recoveryPending" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
           {{ alreadySatisfiedHint }}
         </div>
 
@@ -153,7 +158,7 @@
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div class="flex gap-3">
           <button class="btn-secondary flex-1" @click="step = 2">上一步</button>
-          <button class="btn-primary flex-1" :disabled="busy || recoveringSubscription || recoveryPending || needsSubscriptionRecovery || alreadySatisfied || !preflightToken" @click="doRedeem">
+          <button class="btn-primary flex-1" :disabled="busy || recoveringSubscription || recoveryPending || needsSubscriptionRecovery || alreadySatisfied || !canRedeem" @click="doRedeem">
             {{ busy ? '提交中…' : alreadySatisfied ? '当前套餐已满足' : '兑换' }}
           </button>
         </div>
@@ -268,6 +273,7 @@ import XCookieGuide from '../../components/XCookieGuide.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
+import { grokCredential, isGrokPlan } from '../../lib/grok'
 import { X_REDEEM_UI } from '../../lib/features'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -311,6 +317,9 @@ const previewInfo = ref<any>(null)
 const redemptionToken = ref('')
 const preflightToken = ref('')
 const sessionPlaceholder = '{"user":{...},"accessToken":"eyJ...","sessionToken":"eyJ...五段JWE..."}'
+// Grok 码不产预检票：预检通过后兑换直接带这份登录态（卡台按码上的产品分流）。
+const grokSession = ref('')
+const grokBlockingReason = ref('')
 const sessionRaw = ref('')
 const cookieGuide = ref(false)
 /** 预检成功后的账号/订阅摘要（与卡台 GPT 直充 preflight 字段对齐） */
@@ -463,9 +472,17 @@ watch(
 
 const resultPretty = computed(() => JSON.stringify(resultBody.value, null, 2))
 
-const targetPlan = computed(() =>
-  String(previewInfo.value?.plan || previewInfo.value?.plan_type || '').toLowerCase(),
-)
+const targetPlan = computed(() => {
+  const plan = String(previewInfo.value?.plan || previewInfo.value?.plan_type || '').toLowerCase()
+  // 新版卡台预览带 product：Grok / X 补上产品前缀再判，裸 premium_monthly 两家都有（2026-10-19 Grok 改名）。
+  const product = String(previewInfo.value?.product || '').toLowerCase()
+  if (plan && product === 'grok' && !plan.startsWith('grok_')) return 'grok_' + plan
+  if (plan && product === 'x' && !plan.startsWith('x_')) return 'x_' + plan
+  return plan
+})
+const isGrok = computed(() => isGrokPlan(targetPlan.value) && !isXPremiumPlan(targetPlan.value))
+// GPT / X：必须有预检票；Grok：预检通过且没有阻塞项即可。
+const canRedeem = computed(() => isGrok.value ? !!grokSession.value && !grokBlockingReason.value : !!preflightToken.value)
 
 const subscriptionStatusText = computed(() => {
   if (account.value.subscriptionHasActive === true) return '有效'
@@ -530,6 +547,8 @@ const needsSubscriptionRecovery = computed(() => account.value.checked &&
 function invalidatePreflight() {
   preflightSequence++
   preflightToken.value = ''
+  grokSession.value = ''
+  grokBlockingReason.value = ''
   recoveryPending.value = false
   clearAccount()
 }
@@ -890,9 +909,11 @@ async function doPreflight() {
   error.value = ''
   busy.value = true
   try {
-    const session = isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
+    const session = isGrok.value ? grokCredential(sessionRaw.value)
+      : isXPremiumPlan(targetPlan.value) ? xPremiumCredential(sessionRaw.value) : extractSession(sessionRaw.value)
     if (!session) {
-      error.value = isXPremiumPlan(targetPlan.value) ? t('xPremium.invalid') : '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
+      error.value = isGrok.value ? t('grok.invalid')
+        : isXPremiumPlan(targetPlan.value) ? t('xPremium.invalid') : '请粘贴完整 Session JSON（必须含 sessionToken），不能只用 Access Token'
       return
     }
     const credential = { mode: 'session', session }
@@ -911,6 +932,14 @@ async function doPreflight() {
       return
     }
     const body = data?.data && typeof data.data === 'object' ? data.data : data || {}
+    if (isGrok.value) {
+      // Grok：预检只查账号，没有 preflight_token。blocking_reason 是卡台的拦截判据（登录态失效 / 已有订阅等）。
+      grokSession.value = credential.session
+      grokBlockingReason.value = String(body.blocking_reason || '')
+      applyAccountFromPreflight(data)
+      step.value = 3
+      return
+    }
     preflightToken.value = body.preflight_token || data?.preflight_token || ''
     if (!preflightToken.value) {
       error.value = '未返回 preflight_token'
@@ -958,7 +987,7 @@ async function recoverGraceSubscription() {
 }
 
 async function doRedeem() {
-  if (busy.value || recoveringSubscription.value || recoveryPending.value || needsSubscriptionRecovery.value || alreadySatisfied.value || !preflightToken.value) return
+  if (busy.value || recoveringSubscription.value || recoveryPending.value || needsSubscriptionRecovery.value || alreadySatisfied.value || !canRedeem.value) return
   error.value = ''
   submitRejected.value = ''
   pollHalted.value = ''
@@ -967,11 +996,9 @@ async function doRedeem() {
     const client_request_id = 'web-' + deviceId.slice(0, 8) + '-' + Date.now()
     const { r, data } = await api('/api/v1/public/cdk/redeem', {
       method: 'POST',
-      body: JSON.stringify({
-        redemption_token: redemptionToken.value,
-        preflight_token: preflightToken.value,
-        client_request_id,
-      }),
+      body: JSON.stringify(isGrok.value
+        ? { redemption_token: redemptionToken.value, credential: { mode: 'session', session: grokSession.value }, client_request_id }
+        : { redemption_token: redemptionToken.value, preflight_token: preflightToken.value, client_request_id }),
     })
     applyResultPayload(data)
     // 这次请求只决定「要不要去查结果」，不决定兑换成败。

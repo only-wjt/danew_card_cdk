@@ -1,4 +1,11 @@
 export default {
+  grok: {
+    credential: 'Grok 登录态',
+    hint: '登录 grok.com 后，在浏览器开发者工具 → Application → Cookies → grok.com 复制 sso 的值（或整段含 sso= 的 Cookie）。仅新订阅，美元固定价。',
+    placeholder: 'sso=… 或 sso 的值',
+    invalid: '请填写有效的 Grok 登录态（grok.com 的 sso cookie）',
+    batchHint: 'Grok 卡密请配对 Grok 登录态，格式为 sso=…（整段 Cookie），不要使用 ChatGPT Session。',
+  },
   grace: {
     title: '原订阅续费异常',
     hint: '原订阅处于宽限期或欠费续费状态。请先取消原订阅，刷新状态后再充值。',

@@ -94,13 +94,13 @@ func CardPlatformPlans(c *gin.Context) {
 		"registry": sellable,
 		// 付款地区只认支持该能力的卡台下发的清单。Avanfinity 没有这个字段，
 		// 不能拿它的响应来填下拉，也不能在它没返回时假装两边都能选。
-		// X 订阅码的地区已经在 GetPlans 里收过，不再拿 GPT 双绑的地区清单替换。
+		// X / Grok 订阅码的地区已经在 GetPlans 里收过，不再拿 GPT 双绑的地区清单替换。
 		"payment_regions": planRegionsForResponse(c, product, plans),
 	})
 }
 
 func planRegionsForResponse(c *gin.Context, product string, plans *cardplatform.PlansResponse) []cardplatform.PaymentRegion {
-	if strings.EqualFold(strings.TrimSpace(product), "x") {
+	if p := strings.ToLower(strings.TrimSpace(product)); p == "x" || p == "grok" {
 		if plans == nil {
 			return nil
 		}
@@ -159,11 +159,28 @@ func CardPlatformBalance(c *gin.Context) {
 	c.JSON(http.StatusOK, bal)
 }
 
+// issueProduct 发码产品线：显式传入优先（只认 gpt / x / grok），否则按档位键推断。
+func issueProduct(explicit, plan string) string {
+	switch p := strings.ToLower(strings.TrimSpace(explicit)); p {
+	case "gpt", "x", "grok":
+		return p
+	}
+	if cardplatform.IsXPremiumPlan(plan) {
+		return "x"
+	}
+	if cardplatform.IsGrokPlan(plan) {
+		return "grok"
+	}
+	return "gpt"
+}
+
 // CardPlatformIssueCDKs POST /api/v1/admin/cardplatform/cdks
 // body: { plan, count, funding_confirmed }
 func CardPlatformIssueCDKs(c *gin.Context) {
 	var req struct {
-		Plan             string `json:"plan"`
+		Plan string `json:"plan"`
+		// Product gpt / x / grok。不传按档位键推断（老前端只传 plan）。
+		Product          string `json:"product"`
 		Count            int    `json:"count"`
 		FundingConfirmed bool   `json:"funding_confirmed"`
 		// PaymentCountry 这批码兑换时用哪个地区付款。空 = 菲律宾（存量行为）。
@@ -189,12 +206,12 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	// 里面有 claude_*（没有 CDK 兑换流程）也有 enabled=false 的档（兑换时被 ACC 挡）。
 	// 按 SellableKeys 校验，跟界面上能看到的是同一份，不会出现「看得见发不出」
 	// 或者「发得出兑不掉」。
-	planProduct := "gpt"
-	if cardplatform.IsXPremiumPlan(plan) {
-		planProduct = "x"
+	product := issueProduct(req.Product, plan)
+	if product == "grok" {
+		plan = cardplatform.GrokBarePlan(plan)
 	}
 	if cli := cardplatform.NewFromSettings(); cli != nil {
-		if plans, err := cli.GetPlans(c.Request.Context(), planProduct); err == nil && plans != nil && len(plans.Plans) > 0 {
+		if plans, err := cli.GetPlans(c.Request.Context(), product); err == nil && plans != nil && len(plans.Plans) > 0 {
 			sellable := plans.SellableKeys()
 			if len(sellable) > 0 && !sellable[plan] {
 				known := make([]string, 0, len(sellable))
@@ -233,8 +250,12 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		idem = "cdk-issue-" + hex.EncodeToString(b)
 	}
 	payCountry := strings.ToUpper(strings.TrimSpace(req.PaymentCountry))
-	xPlan := cardplatform.IsXPremiumPlan(plan)
-	if xPlan {
+	if product == "grok" {
+		payCountry = "US"
+	}
+	// X / Grok 订阅码是卡台自己的产品：只走主台，不进 DN-/DNX- 本站码。
+	platformOnly := product == "x" || product == "grok"
+	if product == "x" {
 		var regionErr error
 		payCountry, regionErr = cardplatform.XPaymentCountry(payCountry)
 		if regionErr != nil {
@@ -243,21 +264,22 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		}
 	}
 	// 单台发码只打主台。主台不支持地区时，选了地区不能静默按菲律宾发出去。
-	// X 订阅码始终带地区，而且不走本站 DN- 双发。
-	if (payCountry != "" && !siteDualBindEnabled()) || xPlan {
+	// X / Grok 订阅码始终带地区，而且不走本站 DN- 双发。
+	if (payCountry != "" && !siteDualBindEnabled()) || platformOnly {
 		acc, err := db.PrimaryCardPlatformAccount()
 		if err != nil || !provider.SupportsPaymentCountry(acc.Protocol) {
 			msg := "当前发码卡台不支持指定付款地区，请改为默认（菲律宾）"
-			if xPlan {
+			if product == "x" {
 				msg = "当前主台不支持 X 订阅码，需要支持付款地区的卡台"
+			} else if product == "grok" {
+				msg = "当前主台不支持 Grok 订阅码，需要支持付款地区的卡台"
 			}
 			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}
 	}
 	// 本站统一发码：生成 DN- 码并在各卡台各买一张，兑换时才决定打哪台。
-	// X 订阅码是卡台自己的产品，不进 DN-/DNX- 本站码。
-	if siteDualBindEnabled() && !xPlan {
+	if siteDualBindEnabled() && !platformOnly {
 		codes, derr := provider.DualIssueBatch(c.Request.Context(), plan, req.Count, allowDegradedSingleBind(), payCountry)
 		u, _ := c.Get("username")
 		username, _ := u.(string)
@@ -299,10 +321,14 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	}
 	var res *cardplatform.IssueCDKResult
 	var err error
+	wirePlan := plan
+	if product == "grok" {
+		wirePlan = cardplatform.GrokIssuePlan(plan)
+	}
 	if len(issuePrefs) > 0 {
-		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem, issuePrefs[0])
+		res, err = cli.IssueCDKs(c.Request.Context(), wirePlan, req.Count, idem, issuePrefs[0])
 	} else {
-		res, err = cli.IssueCDKs(c.Request.Context(), plan, req.Count, idem)
+		res, err = cli.IssueCDKs(c.Request.Context(), wirePlan, req.Count, idem)
 	}
 	if err != nil {
 		if isIssueTimeoutErr(err) {
@@ -340,6 +366,11 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	issued := make([]gin.H, 0, len(res.Issued))
 	stored, storeFailed := 0, 0
 	for _, it := range res.Issued {
+		// 卡台回的 Grok 档位是裸键，裸 premium_* 与 X 同名。本站落库带 grok_ 前缀，
+		// 列表显示与代理补发（按库里 plan 重新发码）才不会被当成 X。
+		if product == "grok" {
+			it.Plan = cardplatform.GrokIssuePlan(firstNonEmpty(it.Plan, plan))
+		}
 		code := strings.TrimSpace(it.Code)
 		prefix := strings.TrimSpace(it.CodePrefix)
 		if code == "" {
@@ -1212,6 +1243,10 @@ func bindableSession(status int, body map[string]any) string {
 	}
 	sess := extractCredentialSession(body["credential"])
 	if len(sess) > maxBoundSessionBytes {
+		return ""
+	}
+	// X / Grok 凭证不是 ChatGPT session，不绑到卡密上（账单页只认 ChatGPT）。
+	if cardplatform.IsXPremiumCredential(sess) || cardplatform.IsGrokCredential(sess) {
 		return ""
 	}
 	return sess
