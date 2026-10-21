@@ -119,6 +119,12 @@ func CardPlatformWebhook(c *gin.Context) {
 			return
 		}
 	}
+	// 失败终态也推回调：用户提交后关了页面、没人轮询时，只能靠这里知道失败了。
+	// 与轮询同一套 gpt-fail 去重键，两边都看到也只发一条；通知失败只记日志，不让卡台重推。
+	if isGPTDirectFailed(eventType) {
+		code, _ := gptNotificationCode(matchedAccountID, payload)
+		logGPTFailureNotice(notifyGPTFailure(matchedAccountID, code, payload, ""))
+	}
 	// 本站 CDK 状态：兑换完成 → consumed（避免列表仍显示「未使用」）
 	if strings.HasPrefix(strings.ToLower(eventType), "gpt_direct.") {
 		applyCDKStatusFromWebhook(payload, eventType, matchedAccountID)
@@ -195,6 +201,16 @@ func webhookEventType(payload map[string]interface{}) string {
 func isGPTDirectCompleted(eventType string) bool {
 	switch strings.ToLower(strings.TrimSpace(eventType)) {
 	case "gpt_direct.completed", "openai.direct.completed":
+		return true
+	default:
+		return false
+	}
+}
+
+// isGPTDirectFailed 卡台 GPT 直充的失败终态回调（docs/danew-cdk-zh.md：completed / failed / cancelled 为全终态）。
+func isGPTDirectFailed(eventType string) bool {
+	switch strings.ToLower(strings.TrimSpace(eventType)) {
+	case "gpt_direct.failed", "gpt_direct.cancelled", "openai.direct.failed", "openai.direct.cancelled":
 		return true
 	default:
 		return false

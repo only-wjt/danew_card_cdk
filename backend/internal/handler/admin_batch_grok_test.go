@@ -115,3 +115,42 @@ func TestBatchPlanAllowedGrok(t *testing.T) {
 		t.Fatal("Grok fallback wrong")
 	}
 }
+
+// Grok 预检 HTTP 200 但信封 code 非 0 是被拒；账号已是同档跳过。两种都不能提交兑换。
+func TestBatchRechargeGrokPreflightGate(t *testing.T) {
+	for _, tc := range []struct{ preflight, want string }{
+		{`{"code":40010,"msg":"sso 已失效"}`, itemStatusFailed},
+		{`{"code":0,"data":{"currentPlan":"premium_monthly"}}`, itemStatusSkipped},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			openHandlerTestDB(t)
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/v1/cdk/preview":
+					w.Write([]byte(`{"redemption_token":"rt","product":"grok","plan":"premium_monthly"}`))
+				case "/api/v1/cdk/preflight":
+					w.Write([]byte(tc.preflight))
+				default:
+					t.Errorf("unexpected endpoint %s", r.URL.Path)
+					w.WriteHeader(404)
+				}
+			}))
+			_ = db.SetSetting("card_api_base", s.URL)
+			_ = db.SetSetting("card_api_key", "fixture-key")
+			crid := "brc-gate-001"
+			if err := db.CreateAdminRechargeBatch(db.AdminRechargeBatch{BatchID: "brc-gate", Plan: "grok_premium_monthly", Total: 1, Status: "running"}, "fp-"+tc.want,
+				[]db.AdminRechargeItem{{BatchID: "brc-gate", Seq: 1, ClientRequestID: crid, Plan: "grok_premium_monthly", CredMode: "session", Status: itemStatusPending}}); err != nil {
+				t.Fatal(err)
+			}
+			job := &batchRechargeJob{seq: 1, clientRequestID: crid,
+				cred: batchRechargeCredential{CDKCode: "ZC-FAKE-GROK-GATE-0001", Mode: "session", Session: "sso=fixture"}}
+			submitOneRecharge(cardplatform.NewFromSettings(), "grok_premium_monthly", job)
+			it, err := db.GetAdminRechargeItemByClientRequestID(crid)
+			if err != nil || it.Status != tc.want {
+				t.Fatalf("preflight %s: status=%v err=%v", tc.preflight, it, err)
+			}
+			s.Close()
+		})
+	}
+}

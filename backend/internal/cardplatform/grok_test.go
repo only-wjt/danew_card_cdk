@@ -85,3 +85,15 @@ func TestNormalizeListedPlan(t *testing.T) {
 		}
 	}
 }
+
+// 与前端 lib/grok.ts 同一条规则（分号后可有任意空白）。
+func TestIsGrokCredentialMatchesFrontendRule(t *testing.T) {
+	for in, want := range map[string]bool{
+		"sso=abc": true, "sso-rw=abc": true, "a=1; sso=abc": true, "a=1;\tsso=abc": true, "a=1;  sso=abc": true,
+		"a=1;sso=abc": true, `{"sso":"abc"}`: false, "xsso=abc": false, "sso=": false, "sso=a\nb": false, "": false,
+	} {
+		if got := IsGrokCredential(in); got != want {
+			t.Fatalf("IsGrokCredential(%q)=%v want %v", in, got, want)
+		}
+	}
+}

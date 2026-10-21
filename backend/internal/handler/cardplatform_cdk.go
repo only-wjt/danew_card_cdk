@@ -837,6 +837,7 @@ func CardPlatformListCDKs(c *gin.Context) {
 	withFull := 0
 	for _, it := range res.List {
 		full, ok := db.LookupCardplatformCDKCode(it.ID, it.CodePrefix)
+		rowPlan := cardplatform.NormalizeListedPlan(it.Plan)
 		if !ok {
 			if up := it.FullCodeText(); up != "" {
 				prefix := strings.TrimSpace(it.CodePrefix)
@@ -848,8 +849,14 @@ func CardPlatformListCDKs(c *gin.Context) {
 				}
 			}
 		}
+		// 本站存过的码以本站档位为准：本站发的 Grok 码存 grok_ 前缀，卡台回的裸 premium_* 会被当成 X。
+		if ok {
+			if _, stored, _, _, found := db.LookupStoredCDKByCode(full); found && strings.TrimSpace(stored) != "" {
+				rowPlan = stored
+			}
+		}
 		row := rowOut{
-			ID: it.ID, Plan: cardplatform.NormalizeListedPlan(it.Plan), CodePrefix: it.CodePrefix, Status: it.Status,
+			ID: it.ID, Plan: rowPlan, CodePrefix: it.CodePrefix, Status: it.Status,
 			PaymentCountry: strings.ToUpper(strings.TrimSpace(it.PaymentCountry)),
 			FeeAmountMinor: it.FeeAmountMinor, CreatedAt: it.CreatedAt,
 			HasFullCode: ok, Note: notes[it.ID],
@@ -884,7 +891,7 @@ func CardPlatformSyncUpstreamCDKs(c *gin.Context) {
 		status = "unused"
 	}
 	cli := cardClientOrSettings(primaryCardAccountID())
-	res, err := cli.SyncUpstreamFullCodes(c.Request.Context(), status, strings.TrimSpace(req.Plan), 20)
+	res, err := cli.SyncUpstreamFullCodes(c.Request.Context(), status, upstreamPlanFilter(strings.TrimSpace(req.Plan)), 20)
 	if err != nil && (res == nil || res.Imported == 0) {
 		writeCardErr(c, err)
 		return

@@ -48,10 +48,11 @@ func IsGrokCredential(raw string) bool {
 	if s == "" || strings.HasPrefix(s, "{") {
 		return false
 	}
-	return strings.HasPrefix(s, "sso=") || strings.HasPrefix(s, "sso-rw=") ||
-		strings.Contains(s, "; sso=") || strings.Contains(s, ";sso=") ||
-		strings.Contains(s, "; sso-rw=") || strings.Contains(s, ";sso-rw=")
+	return len(s) <= 8192 && !strings.ContainsAny(s, "\r\n\x00") && grokSSOCookie.MatchString(s)
 }
+
+// grokSSOCookie 与前端 lib/grok.ts 的 SSO_COOKIE 同一条规则：前端认了、后端拒掉会让整批 400。
+var grokSSOCookie = regexp.MustCompile(`(?:^|;\s*)sso(?:-rw)?=[^;\s]+`)
 
 var grokTierLabels = map[string]string{"plus": "Plus", "premium": "Premium", "super": "Super", "ultra": "Ultra"}
 

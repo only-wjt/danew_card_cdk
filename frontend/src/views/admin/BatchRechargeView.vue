@@ -606,7 +606,9 @@ const selectedPlan = computed(() => planOptions.value.find((p) => p.key === plan
 const isHighPlan = computed(() => {
   const key = String(plan.value || '').toLowerCase()
   const flow = String(selectedPlan.value?.flow || '').toLowerCase()
-  return flow === 'card_attach' || key === 'pro_20x' || key === 'pro_50x' || key.includes('renew')
+  // Grok Super / Ultra 单张 $100 / $200（年付更高），与 Pro 20x/50x 一样给高价提醒
+  const grokHigh = isGrok.value && /^(?:grok_)?(?:super|ultra|heavy)_/.test(key)
+  return grokHigh || flow === 'card_attach' || key === 'pro_20x' || key === 'pro_50x' || key.includes('renew')
 })
 const planHumanLabel = computed(() =>
   t('batchRecharge.planHumanGeneric', {
@@ -636,6 +638,7 @@ function switchProduct(p: 'gpt' | 'grok') {
   clearCreds()
   fundingConfirmed.value = false
   planRegistry.value = []
+  paymentRegions.value = []
   plan.value = p === 'grok' ? 'premium_monthly' : 'plus'
   paymentCountry.value = ''
   void loadPlans()
@@ -885,14 +888,18 @@ function refreshAll() {
   void loadBatches()
 }
 
+let planLoadSeq = 0
 async function loadPlans() {
   planLoadError.value = ''
+  // 加载期间又切了产品（或又发了一次）：只认最后一次请求，每次 await 之后和 catch 里都要检查，
+  // 免得把另一产品的档位或报错写进来。
+  const seq = ++planLoadSeq
   const forProduct = product.value
   try {
     const r = await authFetch(`/api/v1/admin/cardplatform/plans?product=${forProduct}`)
-    // 加载期间又切了产品：丢掉这次结果，免得把另一产品的档位写进来
-    if (forProduct !== product.value) return
+    if (seq !== planLoadSeq) return
     const d = await r.json().catch(() => ({}))
+    if (seq !== planLoadSeq) return
     if (!r.ok) {
       planRegistry.value = []
       paymentRegions.value = []
@@ -918,6 +925,7 @@ async function loadPlans() {
       planLoadError.value = t('batchRecharge.planLoadFailed')
     }
   } catch (err: any) {
+    if (seq !== planLoadSeq) return
     planRegistry.value = []
     planLoadError.value = err?.message || t('batchRecharge.planLoadFailed')
   }

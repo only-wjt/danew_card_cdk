@@ -69,7 +69,8 @@ func TestRedeemRejectedQueuesFailureNotice(t *testing.T) {
 			gptQueueCount(t, tc.want)
 			if tc.want == 1 {
 				text := failureNoticeTexts(t)[0]
-				for _, want := range []string{"ChatGPT 兑换失败", "Plus", code, "美区", "card &lt;declined&gt;"} {
+				// 失败后码常放回可用，通知里打码：前 10 位 + 后 4 位
+				for _, want := range []string{"ChatGPT 兑换失败", "Plus", "GPT-REJECT…0001", "美区", "card &lt;declined&gt;"} {
 					if !strings.Contains(text, want) {
 						t.Fatalf("notice missing %q: %s", want, text)
 					}
@@ -133,13 +134,14 @@ func TestBatchItemFailureNotice(t *testing.T) {
 	notifyBatchItemFailure(&submitted, itemStatusFailed, "提交被拒绝：card declined")
 	gptQueueCount(t, 1)
 
+	// 提交时网络抖动落 unknown 不通知（几秒后通常就查到结果了）；只有轮询超时才发「结果未知」
 	other := base
 	other.ClientRequestID, other.UpstreamOrderID, other.Status = "brc-test-002", "", itemStatusSubmitted
 	notifyBatchItemFailure(&other, itemStatusUnknown, "提交结果未知（网络异常）")
-	stillUnknown := other
-	stillUnknown.Status = itemStatusUnknown
-	notifyBatchItemFailure(&stillUnknown, itemStatusUnknown, "提交结果未知（网络异常）")
 	notifyBatchItemFailure(&other, itemStatusSuccess, "开通完成")
+	gptQueueCount(t, 1)
+	enqueueBatchItemNotice(&other, itemStatusUnknown, "结果未知，请核对", "上游长时间未返回终态")
+	enqueueBatchItemNotice(&other, itemStatusUnknown, "结果未知，请核对", "上游长时间未返回终态")
 	gptQueueCount(t, 2)
 
 	texts := failureNoticeTexts(t)
@@ -148,5 +150,64 @@ func TestBatchItemFailureNotice(t *testing.T) {
 	}
 	if !strings.Contains(texts[1], "结果未知，请核对") {
 		t.Fatalf("batch unknown notice: %s", texts[1])
+	}
+}
+
+// 用户改了就会重试的拒绝（频率限制、会话/预检票失效、已有套餐）不通知；余额不足照常通知。
+func TestRedeemRejectedSkipsUserRetryErrors(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		skip   bool
+	}{
+		{429, `{"error":"slow down"}`, true},
+		{400, `{"error_code":"GPT_SESSION_INVALID","error":"session invalid"}`, true},
+		{400, `{"error_code":"PREFLIGHT_TOKEN_EXPIRED"}`, true},
+		{400, `{"error_code":"GPT_PLAN_ALREADY_ACTIVE"}`, true},
+		{400, `{"error_code":"INSUFFICIENT_BALANCE","error":"余额不足"}`, false},
+		{400, `{"error_code":"GPT_DIRECT_ORDER_REJECTED"}`, false},
+	}
+	for _, tc := range cases {
+		if got := gptUserRetryRejection(tc.status, gptTestPayload(t, tc.body)); got != tc.skip {
+			t.Fatalf("%d %s: skip=%v want %v", tc.status, tc.body, got, tc.skip)
+		}
+	}
+}
+
+// 卡台失败回调：用户关了页面也能收到；与轮询同一个订单只发一条。
+func TestWebhookFailedEventQueuesNoticeOnce(t *testing.T) {
+	openHandlerTestDB(t)
+	gptTestAccount(t, 101)
+	hook := `{"type":"gpt_direct.failed","data":{"object":{"orderId":"ord_hook_fail","status":"failed","failure_reason":"card declined","plan":"plus"}}}`
+	for i := 0; i < 2; i++ {
+		if got := gptWebhookRequest(t, 101, hook); got != 200 {
+			t.Fatalf("hook=%d", got)
+		}
+	}
+	gptQueueCount(t, 1)
+	if err := notifyGPTFailure(101, "", gptTestPayload(t, `{"data":{"order":{"id":"ord_hook_fail","status":"failed"}}}`), ""); err != nil {
+		t.Fatal(err)
+	}
+	gptQueueCount(t, 1)
+	if text := failureNoticeTexts(t)[0]; !strings.Contains(text, "card declined") {
+		t.Fatalf("webhook notice: %s", text)
+	}
+}
+
+func TestFailureNoticeLabelsAndStaleOrders(t *testing.T) {
+	if p, _ := cardProductPlan("premium_monthly", nil); p != "X" {
+		t.Fatalf("bare premium_* should be X, got %s", p)
+	}
+	if p, plan := cardProductPlan("premium_monthly", map[string]any{"product": "grok"}); p != "Grok" || plan != "grok_premium_monthly" {
+		t.Fatalf("grok product: %s %s", p, plan)
+	}
+	if got := gptPlanLabel("premium_plus_yearly"); got != "X Premium+ 年付" {
+		t.Fatalf("x label %q", got)
+	}
+	if got := gptFailureReason(gptTestPayload(t, `{"message":"success","data":{"order":{"status":"declined"}}}`)); got != "" {
+		t.Fatalf("generic envelope message used as reason: %q", got)
+	}
+	if !staleFailure(map[string]any{"updated_at": "2020-01-01T00:00:00Z"}) || staleFailure(map[string]any{}) {
+		t.Fatal("stale detection wrong")
 	}
 }

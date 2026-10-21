@@ -222,3 +222,21 @@ func TestTGFailureNotice(t *testing.T) {
 		t.Fatalf("manual resolution notified: %d", n)
 	}
 }
+
+// 钱已动后上游报失败：DecideStatus 落 uncertain 继续轮询，不结案，也要通知；超时类的不确定不通知。
+func TestTGFailureNoticeUncertainAfterFunding(t *testing.T) {
+	notificationDB(t)
+	code, red := notificationAttempt(t, 3)
+	red.FundingDispatched = true
+	code.Status, red.UpstreamStatus = "uncertain", "funding" // 付款超时：结果不确定，不是失败
+	notifyTGFailure(&code, &red)
+	if n := taskCount(t); n != 0 {
+		t.Fatalf("timeout uncertainty notified: %d", n)
+	}
+	red.UpstreamStatus = "failed_precharge"
+	notifyTGFailure(&code, &red)
+	notifyTGFailure(&code, &red)
+	if n := taskCount(t); n != 1 {
+		t.Fatalf("notices=%d want 1", n)
+	}
+}

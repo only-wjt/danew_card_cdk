@@ -46,3 +46,28 @@ func TestCDKRegionByCodeIgnoresUpstreamIDCollision(t *testing.T) {
 		t.Fatalf("account B region = %q", c)
 	}
 }
+
+// 启动迁移把之前以裸键落库、可确定是 Grok 的档位补成 grok_ 前缀；裸 premium_* 和 GPT 档不动。
+func TestMigrationBackfillsUnambiguousGrokPlans(t *testing.T) {
+	openTestDB(t)
+	for code, plan := range map[string]string{"ZC-MIG-0001": "super_monthly", "ZC-MIG-0002": "heavy_yearly",
+		"ZC-MIG-0003": "premium_monthly", "ZC-MIG-0004": "plus", "ZC-MIG-0005": "monthly"} {
+		if _, err := DB.Exec(`INSERT INTO cardplatform_cdk_codes (upstream_id, code, plan, status) VALUES (0, ?, ?, 'unused')`, code, plan); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := migrateCodeLookupIndexes(); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateCodeLookupIndexes(); err != nil { // 幂等
+		t.Fatal(err)
+	}
+	want := map[string]string{"ZC-MIG-0001": "grok_super_monthly", "ZC-MIG-0002": "grok_ultra_yearly",
+		"ZC-MIG-0003": "premium_monthly", "ZC-MIG-0004": "plus", "ZC-MIG-0005": "grok_premium_monthly"}
+	for code, plan := range want {
+		var got string
+		if err := DB.QueryRow(`SELECT plan FROM cardplatform_cdk_codes WHERE code = ?`, code).Scan(&got); err != nil || got != plan {
+			t.Fatalf("%s plan=%q err=%v want %q", code, got, err, plan)
+		}
+	}
+}

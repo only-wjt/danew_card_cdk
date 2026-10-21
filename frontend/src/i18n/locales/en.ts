@@ -384,7 +384,7 @@ export default {
     grokRegionFixed: 'Grok has fixed USD pricing and always pays in the United States (USD).',
     grokCredLabel: 'Grok logins (one per line)',
     grokCredPlaceholder: 'sso=… (the whole grok.com cookie, or just the sso value)',
-    grokCredHint: 'Sign in to grok.com → DevTools → Application → Cookies and copy sso. Logins are never shown on the page, only counted; invalid and duplicate lines are skipped.',
+    grokCredHint: 'Sign in to grok.com → DevTools → Application → Cookies and copy sso. After submitting, logins are kept server-side for export only and never shown in batch lists or details; invalid and duplicate lines are skipped.',
     grokCredSkipped: 'Skipped {n} line(s) (invalid or duplicate)',
     planLabel: 'Plan',
     fee: 'Service fee',

@@ -1054,6 +1054,9 @@ func notifyTGFailure(code *db.TGCode, red *db.TGRedemption) {
 	switch {
 	case red.FinishedAt != "" && code.Status != "completed":
 		key, title = fmt.Sprintf("tg:redemption:%d:failed", red.ID), "兑换失败"
+	case code.Status == "uncertain" && tgFailedUpstream(red.UpstreamStatus):
+		// 钱已动之后上游报失败，DecideStatus 不会结案，而是落 uncertain 继续轮询等人工核对。
+		key, title = fmt.Sprintf("tg:redemption:%d:failed", red.ID), "兑换失败，需核对"
 	case code.Status == "review_required" || code.Status == "requires_action":
 		key, title = fmt.Sprintf("tg:redemption:%d:attention", red.ID), "需人工核对"
 	default:
@@ -1080,6 +1083,15 @@ func notifyTGFailure(code *db.TGCode, red *db.TGRedemption) {
 	}); err != nil {
 		log.Printf("[tg-member] failure notice not queued redemption=%d: %v", red.ID, err)
 	}
+}
+
+// tgFailedUpstream 上游给出的是失败类状态（不是超时/网络不确定）。
+func tgFailedUpstream(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed", "declined", "failed_precharge", "ineligible", "cancelled", "canceled", "unused":
+		return true
+	}
+	return false
 }
 
 func firstNonEmptyStr(vals ...string) string {

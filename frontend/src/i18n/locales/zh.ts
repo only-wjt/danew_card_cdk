@@ -383,7 +383,7 @@ export default {
     grokRegionFixed: 'Grok 为美元固定价，一律按美国（USD）付款。',
     grokCredLabel: 'Grok 登录态（每行一个）',
     grokCredPlaceholder: 'sso=…（grok.com 的整段 Cookie，或只填 sso 的值）',
-    grokCredHint: '登录 grok.com → 开发者工具 → Application → Cookies 复制 sso。登录态不会显示在页面上，只统计条数；无效行和重复行会被跳过。',
+    grokCredHint: '登录 grok.com → 开发者工具 → Application → Cookies 复制 sso。提交后登录态只保存在服务端供导出，批次列表和详情里不会显示；无效行和重复行会被跳过。',
     grokCredSkipped: '已跳过 {n} 行（无效或重复）',
     planLabel: '套餐',
     fee: '服务费',

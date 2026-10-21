@@ -264,7 +264,7 @@ type RedeemFailure struct {
 	Title   string // 空 = 「兑换失败」
 	Plan    string
 	Who     string // 账号邮箱 / 用户名
-	Code    string // 完整卡密，运营要拿它去核对
+	Code    string // 卡密；通知里打码显示（失败后码常会放回可用，聊天里不留可兑换的完整码）
 	Region  string
 	Batch   string // 批量充值的批次号，非批量留空
 	Reason  string
@@ -295,7 +295,7 @@ func FormatRedeemFailed(f RedeemFailure) string {
 	fmt.Fprintf(&b, "❌ <b>%s %s</b>\n", escapeHTML(dash(f.Product)), escapeHTML(title))
 	fmt.Fprintf(&b, "套餐: %s\n", escapeHTML(dash(f.Plan)))
 	fmt.Fprintf(&b, "账号: %s\n", escapeHTML(dash(f.Who)))
-	fmt.Fprintf(&b, "卡密: <code>%s</code>\n", escapeHTML(dash(f.Code)))
+	fmt.Fprintf(&b, "卡密: <code>%s</code>\n", escapeHTML(dash(maskCode(f.Code))))
 	if strings.TrimSpace(f.Region) != "" {
 		fmt.Fprintf(&b, "地区: %s\n", escapeHTML(f.Region))
 	}
@@ -363,6 +363,15 @@ func extractAccountEmail(sessionJSON string) string {
 		return e
 	}
 	return ""
+}
+
+// maskCode 保留前 10 位和后 4 位，够在后台按前缀搜到这张码，又不在聊天里留下能直接兑换的完整码。
+func maskCode(code string) string {
+	r := []rune(strings.TrimSpace(code))
+	if len(r) <= 14 {
+		return string(r)
+	}
+	return string(r[:10]) + "…" + string(r[len(r)-4:])
 }
 
 func escapeHTML(s string) string {

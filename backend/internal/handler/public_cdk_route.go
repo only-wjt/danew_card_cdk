@@ -348,6 +348,20 @@ func gptPlanLabel(plan string) string {
 	if label := cardplatform.GrokPlanLabel(plan); label != "" {
 		return label
 	}
+	if p := strings.ToLower(strings.TrimSpace(plan)); cardplatform.IsXPremiumPlan(p) {
+		p = strings.TrimPrefix(p, "x_")
+		tier := "Premium"
+		switch {
+		case strings.HasPrefix(p, "premium_plus"):
+			tier = "Premium+"
+		case strings.HasPrefix(p, "basic"):
+			tier = "Basic"
+		}
+		if strings.HasSuffix(p, "_yearly") {
+			return "X " + tier + " 年付"
+		}
+		return "X " + tier + " 月付"
+	}
 	switch strings.ToLower(strings.TrimSpace(plan)) {
 	case "plus":
 		return "Plus"
@@ -545,16 +559,39 @@ func notifyGPTSuccess(accountID int64, code, email string, payload map[string]an
 // 本站库里 Grok 码带 grok_ 前缀；卡台回包是裸档位，带 product=grok 时补前缀，避免显示成 X。
 func cardProductPlan(plan string, payload map[string]any) (product, displayPlan string) {
 	p := strings.TrimSpace(plan)
-	if strings.HasPrefix(strings.ToLower(p), "grok_") {
+	lower := strings.ToLower(p)
+	if strings.HasPrefix(lower, "grok_") {
 		return "Grok", p
 	}
-	if strings.EqualFold(gptPayloadField(payload, "product"), "grok") {
+	switch strings.ToLower(gptPayloadField(payload, "product")) {
+	case "grok":
 		if p != "" {
 			p = "grok_" + p
 		}
 		return "Grok", p
+	case "x":
+		return "X", p
+	}
+	// 本站约定：裸 premium_* / basic_* 是 X（Grok 一律带 grok_ 前缀）
+	if cardplatform.IsXPremiumPlan(lower) {
+		return "X", p
 	}
 	return "ChatGPT", p
+}
+
+// staleFailure 订单早就结束了：上线后第一次轮询到很久以前失败的老订单时不补发通知。
+// 拿不到时间就当新的。
+func staleFailure(payload map[string]any) bool {
+	raw := gptPayloadField(payload, "finished_at", "completed_at", "failed_at", "updated_at")
+	if raw == "" {
+		return false
+	}
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02T15:04:05"} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return time.Since(t) > 24*time.Hour
+		}
+	}
+	return false
 }
 
 // gptFailureKeys 失败通知的去重身份：同一订单轮询多次只发一条，同一张码换凭据再失败是新订单、再发一条。
@@ -582,14 +619,45 @@ func gptFailureKeys(accountID int64, code, reason string, payload map[string]any
 }
 
 // gptFailureReason 卡台给出的失败原因，取最具体的那个字段。
+// 外层信封的 message 常是 "success"、error 可能是对象，这类不是原因，跳过。
 func gptFailureReason(payload map[string]any) string {
-	return gptPayloadField(payload, "failure_reason", "decline_reason", "error_message", "last_error",
-		"message", "error", "msg", "error_code")
+	for _, key := range []string{"failure_reason", "decline_reason", "error_message", "last_error",
+		"message", "error", "msg", "error_code"} {
+		v := gptPayloadField(payload, key)
+		if v == "" || strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") {
+			continue
+		}
+		switch strings.ToLower(v) {
+		case "success", "succeeded", "ok", "true", "false":
+			continue
+		}
+		return v
+	}
+	return ""
+}
+
+// gptUserRetryRejection 用户改一下就会重试的拒绝：频率限制、凭据/会话失效、预检票过期、
+// 账号已有套餐。这些和预检被挡下是一回事，通知了只会刷屏。
+// 余额不足、拒单等需要运营处理的照常通知。
+func gptUserRetryRejection(status int, payload map[string]any) bool {
+	if status == http.StatusTooManyRequests {
+		return true
+	}
+	ec := strings.ToUpper(gptPayloadField(payload, "error_code", "errorCode"))
+	for _, marker := range []string{"SESSION", "TOKEN", "PREFLIGHT", "CREDENTIAL", "ALREADY_ACTIVE"} {
+		if strings.Contains(ec, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // notifyGPTFailure 提交兑换之后的失败通知（卡台拒单 / 订单失败终态）。
 // 尽力而为：通知入队失败不能影响兑换结果，更不能诱导用户重新兑换，调用方只记日志。
 func notifyGPTFailure(accountID int64, code string, payload map[string]any, reason string, extraClientIDs ...string) error {
+	if staleFailure(payload) {
+		return nil
+	}
 	accountID, err := notificationAccountID(accountID, code)
 	if err != nil {
 		return err
@@ -640,6 +708,9 @@ func notifyGPTRedeemRejected(accountID int64, code string, status int, raw []byt
 	}
 	var payload map[string]any
 	_ = json.Unmarshal(raw, &payload)
+	if gptUserRetryRejection(status, payload) {
+		return
+	}
 	reason := upstreamErrText(raw)
 	if reason == "" {
 		reason = fmt.Sprintf("卡台拒绝兑换（HTTP %d）", status)

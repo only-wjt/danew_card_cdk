@@ -902,28 +902,28 @@ func batchItemSubmitted(status string) bool {
 	return false
 }
 
-// notifyBatchItemFailure 批量充值每条在提交兑换之后失败（或结果未知）发一条 TG 通知。
-// before 是改状态前的明细；只有它已提交、这次落到 failed / unknown 才发。
+// notifyBatchItemFailure 批量充值每条在提交兑换之后失败，发一条 TG 通知。
+// before 是改状态前的明细；只有它已提交、这次落到 failed 才发。「结果未知」只在轮询超时时通知。
 // 同一明细同一结局只发一次；订单号作为别名，客户在兑换页查到同一笔失败不会再发一条。
 func notifyBatchItemFailure(before *db.AdminRechargeItem, status, message string) {
-	if before == nil || !batchItemSubmitted(before.Status) {
+	if before == nil || status != itemStatusFailed || !batchItemSubmitted(before.Status) {
 		return
 	}
-	title := ""
-	switch status {
-	case itemStatusFailed:
-	case itemStatusUnknown:
-		if before.Status == itemStatusUnknown {
-			return // 已经是未知，轮询里重复落 unknown 不再发
-		}
-		title = "结果未知，请核对"
-	default:
-		return
-	}
-	accountID := primaryCardAccountID()
+	enqueueBatchItemNotice(before, status, "", message)
+}
+
+func enqueueBatchItemNotice(before *db.AdminRechargeItem, status, title, message string) {
 	keys := []string{fmt.Sprintf("batch-fail:item:%s:%s", before.ClientRequestID, status)}
-	if orderID := strings.TrimSpace(before.UpstreamOrderID); orderID != "" && status == itemStatusFailed {
-		keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:order:%s", accountID, orderID))
+	if status == itemStatusFailed {
+		// 与兑换页轮询同一套别名（码实际所属账户 + 订单号 / 请求号），客户查到同一笔失败不会再发一条。
+		accountID, err := notificationAccountID(0, before.CDKCode)
+		if err != nil || accountID <= 0 {
+			accountID = primaryCardAccountID()
+		}
+		if orderID := strings.TrimSpace(before.UpstreamOrderID); orderID != "" {
+			keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:order:%s", accountID, orderID))
+		}
+		keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:client:%s", accountID, before.ClientRequestID))
 	}
 	plan := before.Plan
 	var country *string
@@ -1073,9 +1073,18 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 	}
 	preflightToken := pickNested(fm, "preflight_token")
 	if grok {
+		// Grok 没有预检票可以兜底，必须正向确认预检通过：信封 code 非 0 就是被拒（HTTP 仍是 200）。
+		if c, ok := fm["code"].(float64); ok && c != 0 {
+			return endJob(job, itemStatusFailed, "账号预检失败："+nonEmptyMsg(upstreamMessage(fm), fmt.Sprintf("code %v", c)))
+		}
 		// blocking_reason 是卡台对 Grok 账号的拦截判据（登录态失效 / 已有订阅等），有就不能兑换。
 		if reason := pickNested(fm, "blocking_reason"); reason != "" {
 			return endJob(job, itemStatusFailed, "账号预检未通过："+reason)
+		}
+		// 已是同一档：与 GPT 的 ALREADY_ACTIVE 一样跳过，不扣款（Grok 各档并列，只认完全相同）。
+		if cur := pickNested(fm, "currentPlan", "current_plan"); cur != "" && isGrokBatchPlan(plan) &&
+			cardplatform.GrokBarePlan(cur) == cardplatform.GrokBarePlan(plan) {
+			return endJob(job, itemStatusSkipped, "账号已是目标套餐，已跳过")
 		}
 	} else if preflightToken == "" {
 		return endJob(job, itemStatusFailed, "上游未返回 preflight_token："+upstreamMessage(fm))
@@ -1161,8 +1170,14 @@ func pollBatchRecharge(cli *cardplatform.Client, jobs []batchRechargeJob) {
 		pending = next
 	}
 	for _, j := range pending {
-		patchItem(j.clientRequestID, itemStatusUnknown,
-			"上游长时间未返回终态，请到「兑换对账」按订单号核对，切勿重复提交")
+		const msg = "上游长时间未返回终态，请到「兑换对账」按订单号核对，切勿重复提交"
+		before, _ := db.GetAdminRechargeItemByClientRequestID(j.clientRequestID)
+		patchItem(j.clientRequestID, itemStatusUnknown, msg)
+		// 只在轮询超时这里通知「结果未知」：提交时的网络抖动也会先落 unknown，
+		// 但几秒后通常就查到结果了，那时通知只会留下一条过时的告警。
+		if before != nil && batchItemSubmitted(before.Status) {
+			enqueueBatchItemNotice(before, itemStatusUnknown, "结果未知，请核对", msg)
+		}
 	}
 }
 
