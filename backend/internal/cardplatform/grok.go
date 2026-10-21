@@ -52,3 +52,28 @@ func IsGrokCredential(raw string) bool {
 		strings.Contains(s, "; sso=") || strings.Contains(s, ";sso=") ||
 		strings.Contains(s, "; sso-rw=") || strings.Contains(s, ";sso-rw=")
 }
+
+var grokTierLabels = map[string]string{"plus": "Plus", "premium": "Premium", "super": "Super", "ultra": "Ultra"}
+
+// GrokPlanLabel 带 grok_ 前缀的档位可读名（如 "Grok Premium 月付"）；不是 Grok 档位返回空串。
+// 裸 premium_* 归 X，这里不认。
+func GrokPlanLabel(plan string) string {
+	p := strings.ToLower(strings.TrimSpace(plan))
+	if !strings.HasPrefix(p, "grok_") || !IsGrokPlan(p) {
+		return ""
+	}
+	bare := GrokBarePlan(p)
+	i := strings.LastIndex(bare, "_")
+	if i < 0 {
+		return ""
+	}
+	tier, ok := grokTierLabels[bare[:i]]
+	if !ok {
+		return ""
+	}
+	period := "月付"
+	if bare[i+1:] == "yearly" {
+		period = "年付"
+	}
+	return "Grok " + tier + " " + period
+}

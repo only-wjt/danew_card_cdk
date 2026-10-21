@@ -84,3 +84,18 @@ func TestIssueProductKeepsGPTDefault(t *testing.T) {
 		}
 	}
 }
+
+func TestIssueProductConflict(t *testing.T) {
+	bad := [][2]string{{"gpt", "basic_monthly"}, {"gpt", "grok_premium_monthly"}, {"gpt", "super_monthly"}, {"x", "grok_premium_monthly"}, {"x", "plus"}, {"grok", "plus"}, {"grok", "basic_monthly"}}
+	for _, c := range bad {
+		if issueProductConflict(c[0], c[1]) == "" {
+			t.Fatalf("%v should conflict", c)
+		}
+	}
+	ok := [][2]string{{"gpt", "plus"}, {"gpt", "pro_5x_renew"}, {"x", "premium_monthly"}, {"grok", "premium_monthly"}, {"grok", "grok_monthly"}, {"grok", "plus_yearly"}}
+	for _, c := range ok {
+		if msg := issueProductConflict(c[0], c[1]); msg != "" {
+			t.Fatalf("%v: %s", c, msg)
+		}
+	}
+}

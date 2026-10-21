@@ -270,6 +270,7 @@ import ThemeToggle from '../../components/ThemeToggle.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import ExcelImportBlock from '../../components/ExcelImportBlock.vue'
 import { isGrokCredential } from '../../lib/grok'
+import { planLabel } from '../../lib/plan'
 import {
   AUTO_SUBMIT_CONCURRENCY,
   BATCH_MAX_KEYS,
@@ -436,7 +437,11 @@ function isFailStatus(st: string) {
 }
 
 function planLabelOf(data: any): string {
-  return String(data?.plan || data?.plan_type || data?.plan_label || data?.data?.plan || '')
+  const raw = String(data?.plan || data?.plan_type || data?.plan_label || data?.data?.plan || '')
+  if (!raw) return ''
+  // 卡台预览回裸档位，裸 premium_* 与 X 同名：带 product 时补上 Grok 前缀再取文案。
+  const product = String(data?.product || data?.data?.product || '').toLowerCase()
+  return planLabel(product === 'grok' && !/^grok_/i.test(raw) ? 'grok_' + raw : raw)
 }
 
 function stopAllPolls() {

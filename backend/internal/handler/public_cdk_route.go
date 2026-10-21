@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
 	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/danew/cdk-recharge-system/internal/provider"
@@ -322,6 +323,9 @@ func gptResultEmail(payload map[string]any) string {
 }
 
 func gptPlanLabel(plan string) string {
+	if label := cardplatform.GrokPlanLabel(plan); label != "" {
+		return label
+	}
 	switch strings.ToLower(strings.TrimSpace(plan)) {
 	case "plus":
 		return "Plus"

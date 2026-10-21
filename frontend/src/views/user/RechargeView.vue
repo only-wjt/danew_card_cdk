@@ -106,7 +106,7 @@
             </div>
             <div>
               <dt>当前套餐</dt>
-              <dd>{{ planLabel(isGrok && account.currentPlan ? 'grok_' + String(account.currentPlan).replace(/^grok_/i, '') : account.currentPlan) }}</dd>
+              <dd>{{ planLabel(currentPlanKey) }}</dd>
             </div>
             <div>
               <dt>订阅状态</dt>
@@ -244,7 +244,7 @@
         </details>
 
         <!-- 结论只有一条，且以轮询到的订单状态为准：提交环节的报错不在这里回显 -->
-        <div v-if="resultStatus === 'completed'" class="alert alert-success">开通完成，请到 ChatGPT 账号确认套餐。</div>
+        <div v-if="resultStatus === 'completed'" class="alert alert-success">开通完成，请到 {{ isGrok ? 'Grok' : 'ChatGPT' }} 账号确认套餐。</div>
         <div v-else-if="submitRejected" class="alert alert-error">{{ submitRejected }}</div>
         <div v-else-if="acceptedNotice" class="alert" style="background: var(--warn-soft, #fef3c7); color: var(--warn, #b45309); border-color: var(--warn, #d97706)">
           {{ acceptedNotice }}
@@ -316,6 +316,8 @@ function onSwitchGpt(raw: string) {
     return
   }
   product.value = 'gpt'
+  // 带着别的码过来：清掉上一张码的预览，从第一步开始。
+  if (code.value.trim() !== raw.trim()) resetAll()
   code.value = raw
 }
 const previewInfo = ref<any>(null)
@@ -451,6 +453,11 @@ function loadProgress(): boolean {
       step.value = 3
       return true
     }
+    // 其余情况下确认页没有可用的预检结果（Grok 登录态不落盘、GPT 没拿到预检票），退回凭证步骤重新预检。
+    if (s === 3) {
+      step.value = 2
+      return true
+    }
     if (s >= 1 && s <= 4) {
       step.value = s
       return s > 1
@@ -491,15 +498,28 @@ const canRedeem = computed(() => isGrok.value ? !!grokSession.value && !grokBloc
 
 // ChatGPT 和 Grok 卡片共用同一套卡台兑换流程，卡片只是入口。码属于哪个产品以卡台预览为准：
 // 在 ChatGPT 卡片里粘了 Grok 码（或反过来），预览后卡片跟着码走，不让用户退回去重选。
+// 当前套餐的显示键：Grok 预检回裸档位，能构成 Grok 档位时才补前缀（free 等保持原样）。
+const currentPlanKey = computed(() => {
+  const p = String(account.value.currentPlan || '').replace(/^grok_/i, '')
+  return isGrok.value && p && isGrokPlan('grok_' + p) ? 'grok_' + p : account.value.currentPlan
+})
+
 const flowKind = computed<'gpt' | 'grok' | ''>(() => (previewInfo.value ? (isGrok.value ? 'grok' : 'gpt') : ''))
 watch(flowKind, (kind) => {
   if (kind && (product.value === 'gpt' || product.value === 'grok')) product.value = kind
 })
 
-function pickProduct(p: 'gpt' | 'grok' | 'x' | 'tg') {
-  if (p === product.value) return
-  // 手动切到另一个卡台产品时，正在进行的是另一种码，从头开始。
-  if ((p === 'gpt' || p === 'grok') && flowKind.value && flowKind.value !== p) resetAll()
+async function pickProduct(p: 'gpt' | 'grok' | 'x' | 'tg') {
+  if (p === product.value || busy.value) return
+  // 手动切到另一个卡台产品：正在进行的是另一种码，只能从头开始。
+  // 已预检或已提交的流程先确认，避免误点把进行中的兑换/结果页清掉。
+  if ((p === 'gpt' || p === 'grok') && flowKind.value && flowKind.value !== p) {
+    if (step.value >= 3) {
+      const ok = await dialog.confirm('当前卡密的兑换进度会被清空（已提交的兑换不受影响，可用卡密重新查询结果）。确定切换？', { title: '切换产品' })
+      if (!ok || busy.value) return
+    }
+    resetAll()
+  }
   product.value = p
 }
 
@@ -560,7 +580,8 @@ const paymentMethodText = computed(() => {
   return [label, expiry, isDefault ? '默认支付方式' : ''].filter(Boolean).join(' · ') || '上游未提供'
 })
 
-const needsSubscriptionRecovery = computed(() => account.value.checked &&
+// 宽限期处理要用预检票去卡台取消原订阅，Grok 没有预检票，这条路不适用。
+const needsSubscriptionRecovery = computed(() => account.value.checked && !isGrok.value &&
   (account.value.subscriptionRecoveryRequired || account.value.subscriptionIsDelinquent === true))
 
 function invalidatePreflight() {
@@ -581,17 +602,19 @@ const alreadySatisfied = computed(() => {
 
 const alreadySatisfiedHint = computed(() => {
   const plan = planLabel(targetPlan.value)
+  // Grok 各档是并列商品（planSatisfied 只认完全相同），不存在「更高套餐」。
+  const planText = isGrok.value ? plan : `${plan} 或更高套餐`
   const until = account.value.canPurchaseAt || account.value.subscriptionActiveUntil
   if (until && account.value.subscriptionWillRenew === true) {
-    return `账号已有 ${plan} 或更高套餐，当前周期至 ${fmtTime(until)} 并会自动续费，取消并到期前不能重复购买。`
+    return `账号已有 ${planText}，当前周期至 ${fmtTime(until)} 并会自动续费，取消并到期前不能重复购买。`
   }
   if (until && account.value.subscriptionWillRenew === false) {
-    return `账号已有 ${plan} 或更高套餐，最早可在 ${fmtTime(until)} 后再次购买。`
+    return `账号已有 ${planText}，最早可在 ${fmtTime(until)} 后再次购买。`
   }
   if (until) {
-    return `账号已有 ${plan} 或更高套餐，当前周期至 ${fmtTime(until)}，暂不能重复购买。`
+    return `账号已有 ${planText}，当前周期至 ${fmtTime(until)}，暂不能重复购买。`
   }
-  return `账号已有 ${plan} 或更高套餐，本次不能重复购买。`
+  return `账号已有 ${planText}，本次不能重复购买。`
 })
 
 // 档位判定抽到 lib/plan.ts：纯函数、有单测，「绑卡档不能被判成已满足」与卡台同源。

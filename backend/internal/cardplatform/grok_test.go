@@ -57,3 +57,16 @@ func TestGrokPlansAndCredentials(t *testing.T) {
 		t.Fatal("grok credential detection")
 	}
 }
+
+func TestGrokPlanLabel(t *testing.T) {
+	cases := map[string]string{
+		"grok_premium_monthly": "Grok Premium 月付", "GROK_ultra_yearly": "Grok Ultra 年付",
+		"grok_monthly": "Grok Premium 月付", "grok_heavy_yearly": "Grok Ultra 年付",
+		"premium_monthly": "", "plus": "", "": "",
+	}
+	for in, want := range cases {
+		if got := GrokPlanLabel(in); got != want {
+			t.Fatalf("GrokPlanLabel(%q)=%q want %q", in, got, want)
+		}
+	}
+}

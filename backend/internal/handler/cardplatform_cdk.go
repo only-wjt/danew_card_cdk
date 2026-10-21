@@ -174,6 +174,27 @@ func issueProduct(explicit, plan string) string {
 	return "gpt"
 }
 
+// issueProductConflict 显式 product 与档位键明显矛盾时返回错误信息。
+// 否则 {"product":"gpt","plan":"basic_monthly"} 在拿不到档位表时会落进 DN- 双发。
+func issueProductConflict(product, plan string) string {
+	p := strings.ToLower(strings.TrimSpace(plan))
+	switch product {
+	case "gpt":
+		if cardplatform.IsXPremiumPlan(p) || strings.HasPrefix(p, "grok_") || cardplatform.IsGrokPlan(p) {
+			return "plan " + plan + " is not a ChatGPT plan"
+		}
+	case "x":
+		if !cardplatform.IsXPremiumPlan(p) {
+			return "plan " + plan + " is not an X Premium plan"
+		}
+	case "grok":
+		if !cardplatform.IsGrokPlan(cardplatform.GrokIssuePlan(p)) {
+			return "plan " + plan + " is not a Grok plan"
+		}
+	}
+	return ""
+}
+
 // CardPlatformIssueCDKs POST /api/v1/admin/cardplatform/cdks
 // body: { plan, count, funding_confirmed }
 func CardPlatformIssueCDKs(c *gin.Context) {
@@ -207,6 +228,10 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 	// 按 SellableKeys 校验，跟界面上能看到的是同一份，不会出现「看得见发不出」
 	// 或者「发得出兑不掉」。
 	product := issueProduct(req.Product, plan)
+	if msg := issueProductConflict(product, plan); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		return
+	}
 	if product == "grok" {
 		plan = cardplatform.GrokBarePlan(plan)
 	}
@@ -331,7 +356,8 @@ func CardPlatformIssueCDKs(c *gin.Context) {
 		res, err = cli.IssueCDKs(c.Request.Context(), wirePlan, req.Count, idem)
 	}
 	if err != nil {
-		if isIssueTimeoutErr(err) {
+		// 只对 GPT 自动找回：卡台列表按裸档位过滤，X / Grok 的 premium_* 同名，会把另一个产品的码当成本批找回来。
+		if isIssueTimeoutErr(err) && product == "gpt" {
 			recCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 			recovered, recErr := cli.SyncUpstreamFullCodes(recCtx, "unused", plan, 10)
 			cancel()
@@ -1294,6 +1320,11 @@ func PublicCDKRedeem(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
+	// Grok 兑换直接带 credential，同 preflight 一样挡住已下线的邮箱密码方式。
+	if credentialIsMailbox(body["credential"]) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "已不支持邮箱密码兑换，请改用 Session"})
+		return
+	}
 	// 分配给代理后才 preview 的码也要挡住，这里按 token 反查
 	redeemCode := str(body["code"])
 	if redeemCode == "" {
@@ -1560,9 +1591,9 @@ func docsDefaultPlans() map[string]cardplatform.SellablePlan {
 
 // 公开展示服务费参考价（不暴露 API Key；若未配置 Key 则返回文档默认价）
 func PublicCDKPlans(c *gin.Context) {
-	if c.Query("product") == "x" {
-		// X 没有可以安全回落的 GPT 价目，老卡台没返回 X 档时也不要列出 Plus。
-		plans, err := cardplatform.NewFromSettings().GetPlans(c.Request.Context(), "x")
+	if p := strings.ToLower(strings.TrimSpace(c.Query("product"))); p == "x" || p == "grok" {
+		// X / Grok 没有可以安全回落的 GPT 价目，老卡台没返回对应档时也不要列出 Plus。
+		plans, err := cardplatform.NewFromSettings().GetPlans(c.Request.Context(), p)
 		if err != nil {
 			writeCardErr(c, err)
 			return

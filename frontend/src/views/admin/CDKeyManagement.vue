@@ -217,7 +217,7 @@
           <el-option v-for="s in statusOptions" :key="s" :label="statusLabel(s)" :value="s" />
         </el-select>
         <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[120px]" @change="searchList">
-          <el-option v-for="k in planKeys" :key="k" :label="planLabel(k)" :value="k" />
+          <el-option v-for="k in planKeys" :key="k" :label="planLabel(k)" :value="listPlanValue(k)" />
         </el-select>
         <template v-if="listMode === 'stored'">
           <el-select v-model="listCodeKind" clearable placeholder="种类" class="!w-[120px]" @change="searchList">
@@ -357,7 +357,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="plan" label="套餐" width="100">
-          <template #default="{ row }">{{ planLabel(row.plan) }}</template>
+          <template #default="{ row }">{{ rowPlanLabel(row.plan) }}</template>
         </el-table-column>
         <el-table-column label="区域" min-width="145">
           <template #default="{ row }">
@@ -451,7 +451,8 @@ import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 import { useMaxWidth } from '../../lib/media'
-import { isCardAttachPlan } from '../../lib/plan'
+import { isCardAttachPlan, planLabel as genericPlanLabel } from '../../lib/plan'
+import { isXPremiumPlan } from '../../lib/x-premium'
 import { AGENT_ENABLED } from '../../lib/features'
 import { parsePaymentRegions, regionLabel, type PaymentRegion } from '../../lib/region'
 
@@ -554,9 +555,19 @@ const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', '
 // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里直接用，不要再加回落分支。
 const planRegistry = ref<any[]>([])
 const planKeys = computed(() => planRegistry.value.map((r: any) => r.key))
-// Grok 档位在表单里是裸键（premium_monthly 与 X 同名），显示时补上 grok_ 前缀。
-const issuePlanLabel = computed(() =>
-  planLabel(directProduct.value === 'grok' && form.plan ? 'grok_' + form.plan : form.plan))
+// 发码表单里的档位键与当前产品的注册表同源（Grok/X 都是裸键），直接查注册表文案。
+const issuePlanLabel = computed(() => planLabel(form.plan))
+// 列表行的档位跨产品：本站 Grok 码存 grok_ 前缀，X 码是裸 premium_* 等。
+// 注册表只对应当前所选产品，跨产品的行用通用文案，避免 X 码被套上 Grok 注册表的名字。
+function rowPlanLabel(k: string) {
+  const p = String(k || '').toLowerCase()
+  if (p.startsWith('grok_') || isXPremiumPlan(p) || directProduct.value !== 'gpt') return genericPlanLabel(p)
+  return planLabel(k)
+}
+// 本站库里 Grok 码带 grok_ 前缀，按套餐筛选时要用同样的键。
+function listPlanValue(k: string) {
+  return directProduct.value === 'grok' ? 'grok_' + k : k
+}
 function planMeta(k: string) {
   return planRegistry.value.find((r: any) => r.key === k) || null
 }
@@ -594,7 +605,8 @@ const canIssue = computed(() =>
 
 const isCreditPlan = computed(() => String(form.plan).toLowerCase().startsWith('credit'))
 const dualIssueHint = computed(() => {
-  if (!dualBindEnabled.value) return ''
+  // X / Grok 只从主台发码，不走 DN- 双发
+  if (!dualBindEnabled.value || directProduct.value !== 'gpt') return ''
   const n = Math.max(1, Math.min(ISSUE_MAX, form.count || 1))
   if (isCreditPlan.value) return `credit* 仅向主台购 ${n} 张，无自动切台`
   const slow = n >= 20 ? '。数量较大时整批可能超过 3 分钟，超时请用「从卡台同步完整码」，不要重复购买' : ''
@@ -1563,7 +1575,8 @@ async function syncFromCardplatform() {
       method: 'POST',
       body: JSON.stringify({
         status: listStatus.value || 'unused',
-        plan: listPlan.value || form.plan || '',
+        // 卡台侧的 Grok 档位不带前缀
+        plan: (listPlan.value || form.plan || '').replace(/^grok_/i, ''),
       }),
     })
     const d = await r.json().catch(() => ({}))

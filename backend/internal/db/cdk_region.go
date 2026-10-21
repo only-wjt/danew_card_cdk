@@ -117,6 +117,31 @@ func migrateCodeLookupIndexes() error {
 	return nil
 }
 
+// LookupStoredCDKRegionByCode 按完整码读本站缓存的付款地区，语义同 LookupStoredCDKRegion。
+// 多卡台账户时各台的 upstream_id 各自编号、可能重复，已知完整码时必须按码查。
+func LookupStoredCDKRegionByCode(code string) (country string, known bool) {
+	code = strings.TrimSpace(code)
+	if DB == nil || code == "" {
+		return "", false
+	}
+	var v sql.NullString
+	if err := DB.QueryRow(`SELECT payment_country FROM cardplatform_cdk_codes WHERE upper(trim(code)) = upper(trim(?)) ORDER BY created_at DESC LIMIT 1`, code).Scan(&v); err != nil || !v.Valid {
+		return "", false
+	}
+	return strings.ToUpper(strings.TrimSpace(v.String)), true
+}
+
+// UpdateCardplatformCDKRegionByCode 按完整码回填付款地区（不碰同 upstream_id 的其它账户的码）。
+func UpdateCardplatformCDKRegionByCode(code, country string) error {
+	code = strings.TrimSpace(code)
+	if DB == nil || code == "" {
+		return nil
+	}
+	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET payment_country = ? WHERE upper(trim(code)) = upper(trim(?))`,
+		strings.ToUpper(strings.TrimSpace(country)), code)
+	return err
+}
+
 // LookupStoredCDKRegion 读本站缓存的付款地区。known=false 表示老数据没记过地区（NULL），
 // 调用方必须去卡台取权威值，不能把未知当成默认菲律宾。空串+known=true 才是明确的默认区。
 func LookupStoredCDKRegion(upstreamID int64) (country string, known bool) {
