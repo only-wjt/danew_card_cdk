@@ -2,7 +2,7 @@
   <div class="space-y-4">
     <div>
       <h2 class="text-xl font-bold text-ink">通知</h2>
-      <p class="text-sm text-muted mt-1">ChatGPT、X、Telegram 开通成功，以及 X 超时，都会发到这个 Telegram 聊天。</p>
+      <p class="text-sm text-muted mt-1">ChatGPT、Grok、X、Telegram 开通成功，提交兑换后失败（含批量充值每条失败、结果未知），以及 X 超时，都会发到这个 Telegram 聊天。</p>
     </div>
     <div class="card max-w-xl space-y-3">
       <el-form label-position="top">

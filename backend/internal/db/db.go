@@ -1206,7 +1206,12 @@ func saveCardplatformCDKCode(ex sqlExecer, upstreamID int64, code, prefix, plan 
 		ON CONFLICT(code) DO UPDATE SET
 			upstream_id = excluded.upstream_id,
 			code_prefix = excluded.code_prefix,
-			plan = CASE WHEN excluded.plan != '' THEN excluded.plan ELSE cardplatform_cdk_codes.plan END,
+			-- 卡台列表回的 Grok 档位不带前缀（裸 premium_* 与 X 同名），已存的 grok_ 前缀不能被同步冲掉。
+			plan = CASE
+				WHEN excluded.plan = '' THEN cardplatform_cdk_codes.plan
+				WHEN lower(cardplatform_cdk_codes.plan) = 'grok_' || lower(excluded.plan) THEN cardplatform_cdk_codes.plan
+				ELSE excluded.plan
+			END,
 			fee_amount_minor = CASE WHEN excluded.fee_amount_minor > 0 THEN excluded.fee_amount_minor ELSE cardplatform_cdk_codes.fee_amount_minor END,
 			status = CASE WHEN excluded.status != '' THEN excluded.status ELSE cardplatform_cdk_codes.status END,
 			code_kind = CASE WHEN excluded.code_kind = 'site' THEN 'site' ELSE cardplatform_cdk_codes.code_kind END,

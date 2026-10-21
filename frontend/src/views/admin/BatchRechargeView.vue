@@ -14,6 +14,30 @@
     <div class="card space-y-4">
       <h2 class="text-base font-semibold text-ink">{{ t('batchRecharge.createTitle') }}</h2>
 
+      <div class="form-group">
+        <label>{{ t('batchRecharge.productLabel') }}</label>
+        <div class="flex gap-2 max-w-sm">
+          <button
+            type="button"
+            class="btn-secondary !py-1.5 flex-1"
+            :class="{ 'mode-on': product === 'gpt' }"
+            :disabled="creating"
+            @click="switchProduct('gpt')"
+          >
+            {{ t('batchRecharge.productGpt') }}
+          </button>
+          <button
+            type="button"
+            class="btn-secondary !py-1.5 flex-1"
+            :class="{ 'mode-on': product === 'grok' }"
+            :disabled="creating"
+            @click="switchProduct('grok')"
+          >
+            {{ t('batchRecharge.productGrok') }}
+          </button>
+        </div>
+      </div>
+
       <div class="grid gap-4 md:grid-cols-2">
         <div class="form-group">
           <label>{{ t('batchRecharge.planLabel') }}</label>
@@ -27,14 +51,15 @@
               @click="plan = p.key"
             >
               <span class="plan-name">{{ p.label }}</span>
-              <span class="plan-key">{{ p.key }}</span>
+              <span class="plan-key">{{ wirePlanKey(p.key) }}</span>
               <span class="plan-fee">{{ t('batchRecharge.fee') }} {{ usd(DISPLAY_FEE_MINOR) }}</span>
             </button>
           </div>
           <p v-if="planLoadError" class="text-xs text-warn">{{ planLoadError }}</p>
           <p class="text-xs text-subtle">{{ t('batchRecharge.planHint') }}</p>
           <!-- 地区清单只认卡台下发；主台不支持付款地区时清单为空，整块隐藏 -->
-          <template v-if="paymentRegions.length">
+          <p v-if="isGrok" class="text-xs text-subtle mt-2">{{ t('batchRecharge.grokRegionFixed') }}</p>
+          <template v-else-if="paymentRegions.length">
             <label class="mt-2">{{ t('batchRecharge.regionLabel') }}</label>
             <!-- Element Plus 不把空字符串当「已选中」，placeholder 写明不选就是菲律宾 -->
             <el-select v-model="paymentCountry" style="width: 200px" :placeholder="t('batchRecharge.regionDefault')">
@@ -50,7 +75,8 @@
           </template>
         </div>
 
-        <div class="form-group">
+        <!-- Grok 只认 grok.com 的登录态，没有邮箱密码方式 -->
+        <div v-if="!isGrok" class="form-group">
           <label>{{ t('batchRecharge.credMode') }}</label>
           <div class="flex gap-2">
             <button
@@ -74,7 +100,23 @@
         </div>
       </div>
 
-      <div v-if="credMode === 'session'" class="form-group">
+      <div v-if="isGrok" class="form-group">
+        <label>{{ t('batchRecharge.grokCredLabel') }}</label>
+        <textarea
+          v-model="grokText"
+          rows="5"
+          class="input mono text-xs"
+          autocomplete="off"
+          spellcheck="false"
+          :placeholder="t('batchRecharge.grokCredPlaceholder')"
+        />
+        <p class="text-xs text-subtle">{{ t('batchRecharge.grokCredHint') }}</p>
+        <p v-if="grokParsed.skipped > 0" class="text-xs text-warn">
+          {{ t('batchRecharge.grokCredSkipped', { n: grokParsed.skipped }) }}
+        </p>
+      </div>
+
+      <div v-else-if="credMode === 'session'" class="form-group">
         <label>{{ t('batchRecharge.sessionLabel') }}</label>
         <input
           ref="sessionFileRef"
@@ -346,7 +388,7 @@
       :close-on-click-modal="!creating"
     >
       <div class="confirm-box">
-        <div class="confirm-code" :class="{ 'is-high': isHighPlan }">{{ plan }}</div>
+        <div class="confirm-code" :class="{ 'is-high': isHighPlan }">{{ wirePlanKey(plan) }}</div>
         <div class="confirm-human">{{ planHumanLabel }}</div>
         <p class="confirm-stop">{{ t('batchRecharge.confirmCannotStop') }}</p>
         <p v-if="isHighPlan" class="confirm-extra">{{ t('batchRecharge.confirmHighPrice') }}</p>
@@ -355,9 +397,9 @@
             <dt>{{ t('batchRecharge.confirmCount') }}</dt>
             <dd>{{ itemCount }}</dd>
           </div>
-          <div v-if="paymentRegions.length">
+          <div v-if="isGrok || paymentRegions.length">
             <dt>{{ t('batchRecharge.regionLabel') }}</dt>
-            <dd>{{ batchRegionText(paymentCountry) }}</dd>
+            <dd>{{ isGrok ? batchRegionText('US') : batchRegionText(paymentCountry) }}</dd>
           </div>
           <div>
             <dt>{{ t('batchRecharge.confirmUnitFee') }}</dt>
@@ -375,7 +417,7 @@
           {{ t('batchRecharge.confirmCancel') }}
         </button>
         <button type="button" class="btn-primary" :disabled="creating || itemCount === 0" @click="submitBatch">
-          {{ creating ? t('batchRecharge.submitting') : t('batchRecharge.confirmOk', { plan }) }}
+          {{ creating ? t('batchRecharge.submitting') : t('batchRecharge.confirmOk', { plan: wirePlanKey(plan) }) }}
         </button>
       </template>
     </el-dialog>
@@ -388,6 +430,7 @@ import { useI18n } from 'vue-i18n'
 import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { planLabel } from '../../lib/plan'
+import { grokCredential } from '../../lib/grok'
 import { parsePaymentRegions, regionLabel, type PaymentRegion } from '../../lib/region'
 import { AGENT_ENABLED } from '../../lib/features'
 import {
@@ -421,6 +464,13 @@ const FALLBACK_PLANS: SellablePlan[] = [
   { key: 'pro_5x', label: 'Pro 5x' },
   { key: 'pro_20x', label: 'Pro 20x' },
   { key: 'pro_50x', label: 'Pro 50x' },
+]
+// Grok 目录键是裸键（premium_monthly 与 X 同名），批次里由后端补成 grok_ 前缀。
+const GROK_FALLBACK_PLANS: SellablePlan[] = [
+  { key: 'plus_monthly', label: 'Grok Plus / 月' },
+  { key: 'premium_monthly', label: 'Grok Premium / 月' },
+  { key: 'super_monthly', label: 'Grok Super / 月' },
+  { key: 'ultra_monthly', label: 'Grok Ultra / 月' },
 ]
 
 interface BatchRow {
@@ -466,6 +516,8 @@ interface ResubmitRow {
   message: string
 }
 
+const product = ref<'gpt' | 'grok'>('gpt')
+const isGrok = computed(() => product.value === 'grok')
 const plan = ref('plus')
 const planRegistry = ref<SellablePlan[]>([])
 const paymentRegions = ref<PaymentRegion[]>([])
@@ -479,6 +531,7 @@ const planLoadError = ref('')
 const credMode = ref<'session' | 'mailbox'>('session')
 const mailboxText = ref('')
 const sessionPool = ref<ImportedSession[]>([])
+const grokText = ref('')
 const importMsg = ref('')
 const importing = ref(false)
 const fundingConfirmed = ref(false)
@@ -506,14 +559,34 @@ const exporting = ref(false)
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
 const mailboxPool = computed<ImportedMailbox[]>(() => parseMailboxLines(mailboxText.value))
-const itemCount = computed(() =>
-  credMode.value === 'session' ? sessionPool.value.length : mailboxPool.value.length,
-)
-const previewRows = computed(() =>
-  credMode.value === 'session'
+// 每行一个 Grok 登录态：只粘了 sso 值的补成 sso=…；无效行与重复行跳过并计数。
+const grokParsed = computed(() => {
+  const seen = new Set<string>()
+  const sessions: string[] = []
+  let skipped = 0
+  for (const line of grokText.value.split(/\r?\n/)) {
+    if (!line.trim()) continue
+    const cred = grokCredential(line)
+    if (!cred || seen.has(cred)) {
+      skipped++
+      continue
+    }
+    seen.add(cred)
+    sessions.push(cred)
+  }
+  return { sessions, skipped }
+})
+const itemCount = computed(() => {
+  if (isGrok.value) return grokParsed.value.sessions.length
+  return credMode.value === 'session' ? sessionPool.value.length : mailboxPool.value.length
+})
+const previewRows = computed(() => {
+  // Grok 登录态里没有邮箱，只列序号
+  if (isGrok.value) return grokParsed.value.sessions.map(() => ({ email: '' }))
+  return credMode.value === 'session'
     ? sessionPool.value.map((s) => ({ email: s.email }))
-    : mailboxPool.value.map((m) => ({ email: m.email })),
-)
+    : mailboxPool.value.map((m) => ({ email: m.email }))
+})
 const overLimit = computed(() => itemCount.value > MAX_ITEMS)
 const estimatedFee = computed(() => (DISPLAY_FEE_MINOR / 100).toFixed(2))
 const canSubmit = computed(
@@ -527,13 +600,15 @@ const canSubmit = computed(
 const unknownCount = computed(() => detail.value?.stats?.unknown ?? 0)
 const planOptions = computed(() => {
   if (planRegistry.value.length) return planRegistry.value
-  return FALLBACK_PLANS
+  return isGrok.value ? GROK_FALLBACK_PLANS : FALLBACK_PLANS
 })
 const selectedPlan = computed(() => planOptions.value.find((p) => p.key === plan.value))
 const isHighPlan = computed(() => {
   const key = String(plan.value || '').toLowerCase()
   const flow = String(selectedPlan.value?.flow || '').toLowerCase()
-  return flow === 'card_attach' || key === 'pro_20x' || key === 'pro_50x' || key.includes('renew')
+  // Grok Super / Ultra 单张 $100 / $200（年付更高），与 Pro 20x/50x 一样给高价提醒
+  const grokHigh = isGrok.value && /^(?:grok_)?(?:super|ultra|heavy)_/.test(key)
+  return grokHigh || flow === 'card_attach' || key === 'pro_20x' || key === 'pro_50x' || key.includes('renew')
 })
 const planHumanLabel = computed(() =>
   t('batchRecharge.planHumanGeneric', {
@@ -550,6 +625,24 @@ watch(
     }
   },
 )
+
+/** 批次里实际使用的档位键：Grok 带 grok_ 前缀（与批次列表、本站码库一致）。 */
+function wirePlanKey(key: string) {
+  return isGrok.value && key && !/^grok_/i.test(key) ? 'grok_' + key : key
+}
+
+function switchProduct(p: 'gpt' | 'grok') {
+  if (product.value === p || creating.value) return
+  product.value = p
+  credMode.value = 'session'
+  clearCreds()
+  fundingConfirmed.value = false
+  planRegistry.value = []
+  paymentRegions.value = []
+  plan.value = p === 'grok' ? 'premium_monthly' : 'plus'
+  paymentCountry.value = ''
+  void loadPlans()
+}
 
 function planDisplayName(key: string) {
   const hit =
@@ -629,6 +722,7 @@ function switchMode(m: 'session' | 'mailbox') {
 
 function clearCreds() {
   sessionPool.value = []
+  grokText.value = ''
   mailboxText.value = ''
   importMsg.value = ''
   createError.value = ''
@@ -699,6 +793,9 @@ async function onPickMailboxFile(e: Event) {
 }
 
 function buildItems() {
+  if (isGrok.value) {
+    return grokParsed.value.sessions.map((session) => ({ mode: 'session', session }))
+  }
   if (credMode.value === 'session') {
     return sessionPool.value.map((s) => ({
       mode: 'session',
@@ -739,8 +836,10 @@ async function submitBatch() {
       method: 'POST',
       body: JSON.stringify({
         plan: plan.value,
+        product: product.value,
         funding_confirmed: fundingConfirmed.value,
-        payment_country: paymentCountry.value,
+        // Grok 一律美国（后端也会强制）
+        payment_country: isGrok.value ? 'US' : paymentCountry.value,
         items: buildItems(),
       }),
     })
@@ -789,11 +888,18 @@ function refreshAll() {
   void loadBatches()
 }
 
+let planLoadSeq = 0
 async function loadPlans() {
   planLoadError.value = ''
+  // 加载期间又切了产品（或又发了一次）：只认最后一次请求，每次 await 之后和 catch 里都要检查，
+  // 免得把另一产品的档位或报错写进来。
+  const seq = ++planLoadSeq
+  const forProduct = product.value
   try {
-    const r = await authFetch('/api/v1/admin/cardplatform/plans')
+    const r = await authFetch(`/api/v1/admin/cardplatform/plans?product=${forProduct}`)
+    if (seq !== planLoadSeq) return
     const d = await r.json().catch(() => ({}))
+    if (seq !== planLoadSeq) return
     if (!r.ok) {
       planRegistry.value = []
       paymentRegions.value = []
@@ -819,6 +925,7 @@ async function loadPlans() {
       planLoadError.value = t('batchRecharge.planLoadFailed')
     }
   } catch (err: any) {
+    if (seq !== planLoadSeq) return
     planRegistry.value = []
     planLoadError.value = err?.message || t('batchRecharge.planLoadFailed')
   }

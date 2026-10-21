@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/danew/cdk-recharge-system/internal/provider"
 	"github.com/danew/cdk-recharge-system/internal/xlsxsheet"
 	"github.com/gin-gonic/gin"
@@ -91,7 +93,9 @@ type batchRechargeCredential struct {
 }
 
 type batchRechargeCreateReq struct {
-	Plan             string                    `json:"plan"`
+	Plan string `json:"plan"`
+	// Product gpt / grok。不传按档位键推断；X 不支持批量充值。
+	Product          string                    `json:"product"`
 	FundingConfirmed bool                      `json:"funding_confirmed"`
 	Items            []batchRechargeCredential `json:"items"`
 	// PaymentCountry 付款地区（国家码，空 = 卡台默认菲律宾）；只作用于本批自动发出的码
@@ -245,6 +249,21 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "plan is required"})
 		return
 	}
+	product := issueProduct(req.Product, plan)
+	if product == "x" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "批量充值不支持 X 订阅"})
+		return
+	}
+	if msg := issueProductConflict(product, plan); msg != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+		return
+	}
+	// 批次与明细里的 Grok 档位一律带 grok_ 前缀：裸 premium_* 与 X 同名，前缀键也正是发码要传的键。
+	catalogKey := plan
+	if product == "grok" {
+		plan = cardplatform.GrokIssuePlan(plan)
+		catalogKey = cardplatform.GrokBarePlan(plan)
+	}
 	if !req.FundingConfirmed {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "funding_confirmed must be true（确认承担开卡/充值/订阅实付与服务费）",
@@ -294,15 +313,27 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("第 %d 条 mode 必须是 session 或 mailbox", i+1)})
 			return
 		}
+		if msg := batchCredentialProductMismatch(product, it); msg != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("第 %d 条%s", i+1, msg)})
+			return
+		}
 		cleaned = append(cleaned, it)
 	}
 
 	// 付款地区：与单张发码同一规则——主台不支持地区时不能静默按菲律宾发出去。
 	payCountry := strings.ToUpper(strings.TrimSpace(req.PaymentCountry))
+	if product == "grok" {
+		// Grok 美元固定价，卡台一律按 US/USD 收单
+		payCountry = "US"
+	}
 	if payCountry != "" {
 		acc, err := db.PrimaryCardPlatformAccount()
 		if err != nil || !provider.SupportsPaymentCountry(acc.Protocol) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "当前发码卡台不支持指定付款地区，请改为默认（菲律宾）"})
+			msg := "当前发码卡台不支持指定付款地区，请改为默认（菲律宾）"
+			if product == "grok" {
+				msg = "当前主台不支持 Grok 订阅码，需要支持付款地区的卡台"
+			}
+			c.JSON(http.StatusBadRequest, gin.H{"error": msg})
 			return
 		}
 	}
@@ -329,7 +360,7 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 	}
 	cli := cardplatform.NewFromSettings()
 	var sellable map[string]bool
-	if plans, err := cli.GetPlans(c.Request.Context()); err == nil && plans != nil {
+	if plans, err := cli.GetPlans(c.Request.Context(), product); err == nil && plans != nil {
 		// nil 表示没拿到清单，走三个订阅档回落；空 map 表示卡台有响应但没有可批量充值的档。
 		sellable = map[string]bool{}
 		for _, p := range plans.SellablePlans() {
@@ -338,16 +369,16 @@ func AdminBatchRechargeCreate(c *gin.Context) {
 			}
 		}
 	}
-	if !batchPlanAllowed(plan, sellable) {
+	if !batchPlanAllowed(product, catalogKey, sellable) {
 		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "plan not open for CDK: " + plan + "; available: " + strings.Join(batchPlanAvailable(sellable), " | "),
+			"error": "plan not open for CDK: " + plan + "; available: " + strings.Join(batchPlanAvailable(product, sellable), " | "),
 		})
 		return
 	}
 
 	// 余额预检：服务费在发码时即时扣款，必须用 spendable_balance
 	// （20U 风险保证金含在 balance 里但不可消费，docs/danew-openapi-zh.md:29）
-	feeMinor := batchRechargeServiceFeeMinor(c.Request.Context(), cli, plan)
+	feeMinor := batchRechargeServiceFeeMinor(c.Request.Context(), cli, product, catalogKey)
 	needUSD := float64(feeMinor) * float64(len(cleaned)) / 100.0
 	bal, balErr := cli.GetBalance(c.Request.Context())
 	if balErr != nil {
@@ -452,13 +483,18 @@ func isBatchCreditPlan(plan string) bool {
 
 // batchPlanAllowed 批量充值档位：卡台下发了可卖清单就按清单；拿不到时只回落常用订阅档。
 // sellable == nil 表示没拿到清单。空 map 表示拿到了，但没有可批量充值的档。
-func batchPlanAllowed(plan string, sellable map[string]bool) bool {
+// plan 是产品目录里的键（Grok 为裸键，与 GetPlans(grok) 一致）。
+func batchPlanAllowed(product, plan string, sellable map[string]bool) bool {
 	plan = strings.TrimSpace(plan)
 	if plan == "" || isBatchCreditPlan(plan) {
 		return false
 	}
 	if sellable != nil {
 		return sellable[plan]
+	}
+	if product == "grok" {
+		// 拿不到 Grok 目录时不替卡台判档位，发码时卡台会按实际开放情况拒绝。
+		return cardplatform.IsGrokPlan(cardplatform.GrokIssuePlan(plan))
 	}
 	switch plan {
 	case "plus", "pro_5x", "pro_20x", "pro_50x":
@@ -468,8 +504,11 @@ func batchPlanAllowed(plan string, sellable map[string]bool) bool {
 	}
 }
 
-func batchPlanAvailable(sellable map[string]bool) []string {
+func batchPlanAvailable(product string, sellable map[string]bool) []string {
 	if sellable == nil {
+		if product == "grok" {
+			return []string{"plus_monthly", "premium_monthly", "super_monthly", "ultra_monthly"}
+		}
 		return []string{"plus", "pro_5x", "pro_20x", "pro_50x"}
 	}
 	out := make([]string, 0, len(sellable))
@@ -484,11 +523,16 @@ func batchPlanAvailable(sellable map[string]bool) []string {
 }
 
 // batchRechargeServiceFeeMinor 取套餐服务费（美分）。拉不到实时价就退回文档默认价。
-func batchRechargeServiceFeeMinor(ctx context.Context, cli *cardplatform.Client, plan string) int64 {
-	if plans, err := cli.GetPlans(ctx); err == nil && plans != nil {
+// plan 是产品目录里的键（Grok 为裸键）。
+func batchRechargeServiceFeeMinor(ctx context.Context, cli *cardplatform.Client, product, plan string) int64 {
+	if plans, err := cli.GetPlans(ctx, product); err == nil && plans != nil {
 		if p, ok := plans.Plans[plan]; ok && p.ServiceFeeUsdMinor > 0 {
 			return p.ServiceFeeUsdMinor
 		}
+	}
+	if product == "grok" {
+		// 卡台文档：Grok 各档服务费 1 U
+		return 100
 	}
 	if v, ok := batchRechargePlanFallbackFeeMinor[plan]; ok {
 		return v
@@ -831,8 +875,10 @@ func mustListItems(batchID string) []db.AdminRechargeItem {
 // 所以代理回调也统一挂在这一个点上，不必在每个终态分支各埋一次。
 func patchItem(crid, status, message string) {
 	var cdkCode string
+	var before *db.AdminRechargeItem
 	if it, err := db.GetAdminRechargeItemByClientRequestID(crid); err == nil && it != nil {
 		cdkCode = it.CDKCode
+		before = it
 	}
 	if err := db.PatchAdminRechargeItem(crid, db.AdminRechargeItemPatch{
 		Status: strPtr(status), Message: strPtr(message),
@@ -843,7 +889,74 @@ func patchItem(crid, status, message string) {
 	if isTerminalItemStatus(status) && cdkCode != "" {
 		db.ReconcileCDKAfterItemTerminal(cdkCode, status)
 	}
+	notifyBatchItemFailure(before, status, message)
 	enqueueAgentItemEvent(crid, status)
+}
+
+// batchItemSubmitted 明细是否已经走到兑换提交（之后的失败才通知；发码/预检阶段的失败不通知）。
+func batchItemSubmitted(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case itemStatusSubmitted, itemStatusRunning, itemStatusUnknown:
+		return true
+	}
+	return false
+}
+
+// notifyBatchItemFailure 批量充值每条在提交兑换之后失败，发一条 TG 通知。
+// before 是改状态前的明细；只有它已提交、这次落到 failed 才发。「结果未知」只在轮询超时时通知。
+// 同一明细同一结局只发一次；订单号作为别名，客户在兑换页查到同一笔失败不会再发一条。
+func notifyBatchItemFailure(before *db.AdminRechargeItem, status, message string) {
+	if before == nil || status != itemStatusFailed || !batchItemSubmitted(before.Status) {
+		return
+	}
+	enqueueBatchItemNotice(before, status, "", message)
+}
+
+func enqueueBatchItemNotice(before *db.AdminRechargeItem, status, title, message string) {
+	keys := []string{fmt.Sprintf("batch-fail:item:%s:%s", before.ClientRequestID, status)}
+	if status == itemStatusFailed {
+		// 与兑换页轮询同一套别名（码实际所属账户 + 订单号 / 请求号），客户查到同一笔失败不会再发一条。
+		accountID, err := notificationAccountID(0, before.CDKCode)
+		if err != nil || accountID <= 0 {
+			accountID = primaryCardAccountID()
+		}
+		if orderID := strings.TrimSpace(before.UpstreamOrderID); orderID != "" {
+			keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:order:%s", accountID, orderID))
+		}
+		keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:client:%s", accountID, before.ClientRequestID))
+	}
+	plan := before.Plan
+	var country *string
+	if code := strings.TrimSpace(before.CDKCode); code != "" && db.DB != nil {
+		var storedPlan string
+		var storedCountry sql.NullString
+		if err := db.DB.QueryRow("SELECT COALESCE(plan,''), payment_country FROM cardplatform_cdk_codes WHERE code = ? COLLATE NOCASE LIMIT 1", code).Scan(&storedPlan, &storedCountry); err == nil {
+			if storedPlan != "" {
+				plan = storedPlan
+			}
+			if storedCountry.Valid {
+				v := storedCountry.String
+				country = &v
+			}
+		}
+	}
+	product, plan := cardProductPlan(plan, nil)
+	region := ""
+	if country != nil {
+		region = notify.RegionLabel(country)
+	}
+	if err := notify.EnqueueRedeemFailedAliases(keys, notify.RedeemFailure{
+		Product: product,
+		Title:   title,
+		Plan:    gptPlanLabel(plan),
+		Who:     before.AccountEmail,
+		Code:    before.CDKCode,
+		Region:  region,
+		Batch:   before.BatchID,
+		Reason:  message,
+	}); err != nil {
+		log.Printf("[batch-recharge] failure notice not queued crid=%s: %v", before.ClientRequestID, err)
+	}
 }
 
 func isTerminalItemStatus(st string) bool {
@@ -893,8 +1006,13 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 		if prefix == "" && len(code) >= 14 {
 			prefix = code[:14]
 		}
-		// 落本站码库，保证即使本条失败，这张码也能在 CDK 页面被找回复用
-		if err := db.SaveCardplatformCDKCodeForAccount(one.ID, code, prefix, one.Plan, one.FeeAmountMinor, "unused", primaryCardAccountID(), job.paymentCountry); err != nil {
+		// 落本站码库，保证即使本条失败，这张码也能在 CDK 页面被找回复用。
+		// 卡台回的 Grok 档位是裸键，本站与单张发码一样存 grok_ 前缀。
+		storedPlan := one.Plan
+		if isGrokBatchPlan(plan) {
+			storedPlan = cardplatform.GrokIssuePlan(firstNonEmpty(one.Plan, plan))
+		}
+		if err := db.SaveCardplatformCDKCodeForAccount(one.ID, code, prefix, storedPlan, one.FeeAmountMinor, "unused", primaryCardAccountID(), job.paymentCountry); err != nil {
 			log.Printf("[batch-recharge] save cdk failed seq=%d: %v", job.seq, err)
 		}
 	} else {
@@ -915,6 +1033,8 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 		return endJob(job, itemStatusFailed, "上游未返回 redemption_token："+upstreamMessage(pm))
 	}
 	job.redemptionToken = token
+	// Grok 码：预检不产 preflight_token，兑换直接带登录态。以卡台预览的 product 为准，批次档位兜底。
+	grok := isGrokBatchPlan(plan) || strings.EqualFold(pickNested(pm, "product"), "grok")
 	// 绑定 码↔token：客户凭卡密就能查兑换进度。只写 token，凭据仍不落库。
 	if err := db.BindCDKRedemptionToken(code, token); err != nil {
 		log.Printf("[batch-recharge] bind token failed seq=%d: %v", job.seq, err)
@@ -952,7 +1072,21 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 		return endJob(job, itemStatusFailed, "账号预检失败："+msg)
 	}
 	preflightToken := pickNested(fm, "preflight_token")
-	if preflightToken == "" {
+	if grok {
+		// Grok 没有预检票可以兜底，必须正向确认预检通过：信封 code 非 0 就是被拒（HTTP 仍是 200）。
+		if c, ok := fm["code"].(float64); ok && c != 0 {
+			return endJob(job, itemStatusFailed, "账号预检失败："+nonEmptyMsg(upstreamMessage(fm), fmt.Sprintf("code %v", c)))
+		}
+		// blocking_reason 是卡台对 Grok 账号的拦截判据（登录态失效 / 已有订阅等），有就不能兑换。
+		if reason := pickNested(fm, "blocking_reason"); reason != "" {
+			return endJob(job, itemStatusFailed, "账号预检未通过："+reason)
+		}
+		// 已是同一档：与 GPT 的 ALREADY_ACTIVE 一样跳过，不扣款（Grok 各档并列，只认完全相同）。
+		if cur := pickNested(fm, "currentPlan", "current_plan"); cur != "" && isGrokBatchPlan(plan) &&
+			cardplatform.GrokBarePlan(cur) == cardplatform.GrokBarePlan(plan) {
+			return endJob(job, itemStatusSkipped, "账号已是目标套餐，已跳过")
+		}
+	} else if preflightToken == "" {
 		return endJob(job, itemStatusFailed, "上游未返回 preflight_token："+upstreamMessage(fm))
 	}
 	if email := pickNested(fm, "email", "account_email"); email != "" {
@@ -963,11 +1097,16 @@ func submitOneRecharge(cli *cardplatform.Client, plan string, job *batchRecharge
 
 	// 4) redeem —— 结果不确定时绝不重试（docs/danew-cdk-zh.md:72）
 	patchItem(job.clientRequestID, itemStatusSubmitted, "已提交，等待开通…")
-	rdStatus, rdRaw, err := cli.Redeem(ctx, map[string]any{
+	redeemBody := map[string]any{
 		"redemption_token":  token,
 		"preflight_token":   preflightToken,
 		"client_request_id": job.clientRequestID,
-	}, "admin-batch-recharge")
+	}
+	if grok {
+		delete(redeemBody, "preflight_token")
+		redeemBody["credential"] = credBody
+	}
+	rdStatus, rdRaw, err := cli.Redeem(ctx, redeemBody, "admin-batch-recharge")
 	if err != nil {
 		// 传输层失败 = 结果未知：可能上游已受理并扣款，只能轮询确认
 		patchItem(job.clientRequestID, itemStatusUnknown, "提交结果未知（网络异常），正在向上游确认，请勿重复提交")
@@ -1031,8 +1170,14 @@ func pollBatchRecharge(cli *cardplatform.Client, jobs []batchRechargeJob) {
 		pending = next
 	}
 	for _, j := range pending {
-		patchItem(j.clientRequestID, itemStatusUnknown,
-			"上游长时间未返回终态，请到「兑换对账」按订单号核对，切勿重复提交")
+		const msg = "上游长时间未返回终态，请到「兑换对账」按订单号核对，切勿重复提交"
+		before, _ := db.GetAdminRechargeItemByClientRequestID(j.clientRequestID)
+		patchItem(j.clientRequestID, itemStatusUnknown, msg)
+		// 只在轮询超时这里通知「结果未知」：提交时的网络抖动也会先落 unknown，
+		// 但几秒后通常就查到结果了，那时通知只会留下一条过时的告警。
+		if before != nil && batchItemSubmitted(before.Status) {
+			enqueueBatchItemNotice(before, itemStatusUnknown, "结果未知，请核对", msg)
+		}
 	}
 }
 
@@ -1131,6 +1276,25 @@ func batchIssuePrefs(country string) []cardplatform.IssueCardPref {
 	}
 	pref.PaymentCountry = country
 	return []cardplatform.IssueCardPref{pref}
+}
+
+// isGrokBatchPlan 批次档位是否 Grok（批次里的 Grok 档位一律带 grok_ 前缀）。
+func isGrokBatchPlan(plan string) bool {
+	p := strings.ToLower(strings.TrimSpace(plan))
+	return strings.HasPrefix(p, "grok_") && cardplatform.IsGrokPlan(p)
+}
+
+// batchCredentialProductMismatch 凭据类型与批次产品对不上时返回说明（不回显凭据）。
+// Grok 只认 grok.com 的 sso Cookie；ChatGPT 批次混进 Grok Cookie 一定预检失败，提前挡掉。
+func batchCredentialProductMismatch(product string, cred batchRechargeCredential) string {
+	isGrokCred := cred.Mode == "session" && cardplatform.IsGrokCredential(cred.Session)
+	if product == "grok" && !isGrokCred {
+		return "不是 Grok 登录态（需 grok.com 的 sso Cookie，形如 sso=…）"
+	}
+	if product != "grok" && isGrokCred {
+		return "是 Grok 登录态，请把产品切换为 Grok"
+	}
+	return ""
 }
 
 func regionOrDefault(country string) string {

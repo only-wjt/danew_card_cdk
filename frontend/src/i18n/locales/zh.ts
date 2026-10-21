@@ -1,4 +1,11 @@
 export default {
+  grok: {
+    credential: 'Grok 登录态',
+    hint: '登录 grok.com 后，在浏览器开发者工具 → Application → Cookies → grok.com 复制 sso 的值（或整段含 sso= 的 Cookie）。仅新订阅，美元固定价。',
+    placeholder: 'sso=… 或 sso 的值',
+    invalid: '请填写有效的 Grok 登录态（grok.com 的 sso cookie）',
+    batchHint: 'Grok 卡密请配对 Grok 登录态，格式为 sso=…（整段 Cookie），不要使用 ChatGPT Session。',
+  },
   grace: {
     title: '原订阅续费异常',
     hint: '原订阅处于宽限期或欠费续费状态。请先取消原订阅，刷新状态后再充值。',
@@ -61,7 +68,7 @@ export default {
       },
     },
     services: {
-      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', p1: '输入卡密', p2: '选择 ChatGPT 或 Telegram', p3: '按对应流程确认开通' },
+      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', p1: '输入卡密', p2: '选择 ChatGPT、Grok 或 Telegram', p3: '按对应流程确认开通' },
       x: { title: 'X Premium', en: 'X Premium', cta: '开通 X', p1: '输入 DNX- 卡密', p2: '填写 X 用户名', p3: '确认后自动开通' },
       batch: { title: '批量兑换', en: 'Batch Redeem', cta: '批量开始', p1: '批量验证 CDK', p2: '导入 Excel Session', p3: '按序配对自动提交' },
       lookup: { title: '卡密查询', en: 'CDK Status', cta: '查询卡密', p1: '单张或批量粘贴卡密', p2: '查看是否已使用', p3: '显示充值邮箱' },
@@ -244,6 +251,9 @@ export default {
     lead: '先选择要开通的产品，再输入对应卡密。',
     productGpt: 'ChatGPT',
     productGptHint: '兑换 ChatGPT 套餐，提交 Session',
+    productGrok: 'Grok',
+    productGrokHint: '兑换 Grok 套餐，提交 grok.com 登录态',
+    grokStepHint: '预览通过后，下一步需要 grok.com 的登录态（sso Cookie）。',
     productX: 'X Premium',
     productXHint: '填写要开通会员的 X 用户名',
     productTg: 'Telegram Premium',
@@ -367,6 +377,14 @@ export default {
     title: '批量充值',
     subtitle: '管理端直充：后端自动完成发码与兑换，界面不出现卡密。新批次凭据仅服务端保存供导出，列表/详情不回显。',
     createTitle: '新建批次',
+    productLabel: '产品',
+    productGpt: 'ChatGPT',
+    productGrok: 'Grok',
+    grokRegionFixed: 'Grok 为美元固定价，一律按美国（USD）付款。',
+    grokCredLabel: 'Grok 登录态（每行一个）',
+    grokCredPlaceholder: 'sso=…（grok.com 的整段 Cookie，或只填 sso 的值）',
+    grokCredHint: '登录 grok.com → 开发者工具 → Application → Cookies 复制 sso。提交后登录态只保存在服务端供导出，批次列表和详情里不会显示；无效行和重复行会被跳过。',
+    grokCredSkipped: '已跳过 {n} 行（无效或重复）',
     planLabel: '套餐',
     fee: '服务费',
     planHint: '套餐与卡台可卖清单同步（含 Pro 20x 续费等新档）。服务费在发码时即时扣除；上游订阅实付由本账户承担。',
@@ -463,6 +481,7 @@ export default {
       pro_20x: 'Pro 20x（{fee}/条）',
       pro_50x: 'Pro 50x（{fee}/条）',
       pro_20x_renew: 'Pro 20x 续费（{fee}/条）',
+      pro_5x_renew: 'Pro 5x 续费（{fee}/条）',
     },
     planHumanGeneric: '{name}（{fee}/条）',
     unknownBanner:

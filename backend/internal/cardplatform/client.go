@@ -302,15 +302,18 @@ type PlansResponse struct {
 }
 
 // GetPlans GET /gpt-direct/plans — 实时服务费与套餐开关。
-// products 传 "x" 时只取卡台 X 订阅目录，并丢掉 GPT 回落。
+// products 传 "x" / "grok" 时只取卡台对应订阅目录，并丢掉 GPT 回落。
 func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansResponse, error) {
 	product := "gpt"
-	if len(products) > 0 && strings.EqualFold(strings.TrimSpace(products[0]), "x") {
-		product = "x"
+	if len(products) > 0 {
+		switch p := strings.ToLower(strings.TrimSpace(products[0])); p {
+		case "x", "grok":
+			product = p
+		}
 	}
 	path := "/gpt-direct/plans"
-	if product == "x" {
-		path += "?product=x"
+	if product != "gpt" {
+		path += "?product=" + product
 	}
 	data, err := c.doOpenAPI(ctx, http.MethodGet, path, nil, "")
 	if err != nil {
@@ -345,7 +348,7 @@ func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansRespon
 	}
 	plansRaw, ok := raw["plans"]
 	if !ok {
-		return scopeXCatalogue(product, out), nil
+		return scopeCatalogue(product, out), nil
 	}
 	if plans := parsePlanList(plansRaw); plans != nil {
 		for _, p := range plans {
@@ -354,7 +357,7 @@ func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansRespon
 			}
 			out.Plans[p.Key] = p
 		}
-		return scopeXCatalogue(product, out), nil
+		return scopeCatalogue(product, out), nil
 	}
 	var plansMap map[string]map[string]interface{}
 	if err := json.Unmarshal(plansRaw, &plansMap); err != nil {
@@ -363,7 +366,7 @@ func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansRespon
 		if err2 := json.Unmarshal(data, &std); err2 != nil {
 			return nil, err
 		}
-		return scopeXCatalogue(product, &std), nil
+		return scopeCatalogue(product, &std), nil
 	}
 	for k, m := range plansMap {
 		p := PlanInfo{Key: k, Enabled: true}
@@ -385,14 +388,24 @@ func (c *Client) GetPlans(ctx context.Context, products ...string) (*PlansRespon
 		p.MaxAmountMinor = jsonInt64(m, "maxAmountMinor", "max_amount_minor")
 		out.Plans[k] = p
 	}
-	return scopeXCatalogue(product, out), nil
+	return scopeCatalogue(product, out), nil
 }
 
-// scopeXCatalogue 把 product=x 的响应收成 X 订阅档，老卡台忽略 product 参数时也不回落成 Plus。
-func scopeXCatalogue(product string, out *PlansResponse) *PlansResponse {
-	if product != "x" || out == nil {
+// scopeCatalogue 把 product=x / grok 的响应收成对应订阅档，老卡台忽略 product 参数时也不回落成 Plus。
+func scopeCatalogue(product string, out *PlansResponse) *PlansResponse {
+	if out == nil {
 		return out
 	}
+	switch product {
+	case "x":
+		return scopeXCatalogue(out)
+	case "grok":
+		return scopeGrokCatalogue(out)
+	}
+	return out
+}
+
+func scopeXCatalogue(out *PlansResponse) *PlansResponse {
 	all := out.Plans
 	if all == nil {
 		all = map[string]PlanInfo{}
@@ -417,6 +430,28 @@ func scopeXCatalogue(product string, out *PlansResponse) *PlansResponse {
 		regions = []PaymentRegion{{Country: "JP", Currency: "JPY"}}
 	}
 	out.PaymentRegions = regions
+	return out
+}
+
+// scopeGrokCatalogue 与 X 同构：定价表键是 grok_premium_monthly，注册表键是裸 premium_monthly。本站统一用裸键。
+// 判 Grok 要带前缀：裸 premium_* 也是 X 的键（2026-10-19 Grok 改名）。
+func scopeGrokCatalogue(out *PlansResponse) *PlansResponse {
+	all := out.Plans
+	if all == nil {
+		all = map[string]PlanInfo{}
+	}
+	out.Plans = map[string]PlanInfo{}
+	registry := make([]PlanRegistryItem, 0)
+	for _, entry := range out.Registry {
+		if info, ok := all["grok_"+entry.Key]; ok && IsGrokPlan("grok_"+entry.Key) {
+			info.Key = entry.Key
+			out.Plans[entry.Key] = info
+			registry = append(registry, entry)
+		}
+	}
+	out.Registry = registry
+	// Grok 美元固定价：卡台兑换时一律按 US/USD 收单，别的地区选了也不生效。
+	out.PaymentRegions = []PaymentRegion{{Country: "US", Currency: "USD"}}
 	return out
 }
 
@@ -833,7 +868,7 @@ func (c *Client) SyncUpstreamFullCodes(ctx context.Context, status, plan string,
 				prefix = code[:14]
 			}
 			_, existed := db.LookupCardplatformCDKCode(it.ID, prefix)
-			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, it.Plan, it.FeeAmountMinor, it.Status, c.cfg.AccountID, it.PaymentCountry); err != nil {
+			if err := db.SaveCardplatformCDKCodeForAccount(it.ID, code, prefix, NormalizeListedPlan(it.Plan), it.FeeAmountMinor, it.Status, c.cfg.AccountID, it.PaymentCountry); err != nil {
 				continue
 			}
 			if existed {

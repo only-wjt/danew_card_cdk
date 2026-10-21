@@ -44,7 +44,7 @@
       <button type="button" class="fold-head" @click="issueOpen = !issueOpen">
         <span class="font-semibold text-ink">购买并生成</span>
         <span class="text-xs text-muted">
-          {{ planLabel(form.plan) }} · {{ form.count }} 张 · ${{ estimatedTotal }}
+          {{ issuePlanLabel }} · {{ form.count }} 张 · ${{ estimatedTotal }}
         </span>
         <span class="fold-caret">{{ issueOpen ? '收起' : '展开' }}</span>
       </button>
@@ -54,8 +54,10 @@
           <select v-model="directProduct" class="input !w-48 !py-1" :disabled="issuing || loadingMeta" @change="onDirectProductChange">
             <option value="gpt">ChatGPT</option>
             <option value="x">X 订阅码</option>
+            <option value="grok">Grok</option>
           </select>
           <span v-if="directProduct === 'x'" class="text-xs">卡台 Cookie 兑换，和本站 DNX- 用户名开通不是同一条线</span>
+          <span v-else-if="directProduct === 'grok'" class="text-xs">卡台 grok.com 登录态（sso cookie）兑换，美元固定价</span>
         </label>
         <div class="grid gap-2 sm:grid-cols-3">
           <button
@@ -88,17 +90,17 @@
           <!-- Element Plus 不把空字符串当「已选中」，未选时不会显示 value="" 那条，
                会回落到内置英文 placeholder「Select」。显式写明不选就是菲律宾。 -->
           <el-select v-model="form.payment_country" size="small" style="width: 150px"
-                     :placeholder="directProduct === 'x' ? '默认(日本)' : '默认(菲律宾)'">
-            <el-option v-if="directProduct !== 'x'" label="默认(菲律宾)" value="" />
+                     :placeholder="directProduct === 'x' ? '默认(日本)' : directProduct === 'grok' ? '美国(USD 固定价)' : '默认(菲律宾)'">
+            <el-option v-if="directProduct === 'gpt'" label="默认(菲律宾)" value="" />
             <el-option v-for="r in paymentRegions" :key="r.country"
                        :label="`${regionLabel(r.country)} (${r.currency})`" :value="r.country" />
           </el-select>
-          <span v-if="dualBindEnabled && directProduct !== 'x' && form.payment_country" class="text-xs text-muted">
+          <span v-if="dualBindEnabled && directProduct === 'gpt' && form.payment_country" class="text-xs text-muted">
             只传给支持付款地区的卡台，另一台仍按默认菲律宾出码
           </span>
           <el-checkbox v-model="form.funding_confirmed">确认承担兑换资金</el-checkbox>
           <el-button type="primary" :loading="issuing" :disabled="!canIssue" @click="issue">
-            {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${planLabel(form.plan)} · $${estimatedTotal}` }}
+            {{ issuing ? '购买中…' : `购买 ${form.count} 张 ${issuePlanLabel} · $${estimatedTotal}` }}
           </el-button>
         </div>
         <p v-if="isRenewPlan" class="text-xs font-semibold" style="color: var(--err)">续费完成后请联系客户取消自动续费，不取消次月可能会连续扣款</p>
@@ -215,7 +217,7 @@
           <el-option v-for="s in statusOptions" :key="s" :label="statusLabel(s)" :value="s" />
         </el-select>
         <el-select v-model="listPlan" clearable placeholder="套餐" class="!w-[120px]" @change="searchList">
-          <el-option v-for="k in planKeys" :key="k" :label="planLabel(k)" :value="k" />
+          <el-option v-for="k in planKeys" :key="k" :label="planLabel(k)" :value="listPlanValue(k)" />
         </el-select>
         <template v-if="listMode === 'stored'">
           <el-select v-model="listCodeKind" clearable placeholder="种类" class="!w-[120px]" @change="searchList">
@@ -355,7 +357,7 @@
           </template>
         </el-table-column>
         <el-table-column prop="plan" label="套餐" width="100">
-          <template #default="{ row }">{{ planLabel(row.plan) }}</template>
+          <template #default="{ row }">{{ rowPlanLabel(row.plan) }}</template>
         </el-table-column>
         <el-table-column label="区域" min-width="145">
           <template #default="{ row }">
@@ -449,7 +451,8 @@ import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 import { useMaxWidth } from '../../lib/media'
-import { isCardAttachPlan } from '../../lib/plan'
+import { isCardAttachPlan, planLabel as genericPlanLabel } from '../../lib/plan'
+import { isXPremiumPlan } from '../../lib/x-premium'
 import { AGENT_ENABLED } from '../../lib/features'
 import { parsePaymentRegions, regionLabel, type PaymentRegion } from '../../lib/region'
 
@@ -494,7 +497,7 @@ const configured = ref(false)
 const dualBindEnabled = ref(false)
 const activePlatformN = ref(0)
 
-const directProduct = ref<'gpt' | 'x'>('gpt')
+const directProduct = ref<'gpt' | 'x' | 'grok'>('gpt')
 const form = reactive({
   plan: 'plus',
   count: 1,
@@ -552,6 +555,19 @@ const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', '
 // 服务端已按「卡台注册表 ∩ ACC 定价开关」过滤，这里直接用，不要再加回落分支。
 const planRegistry = ref<any[]>([])
 const planKeys = computed(() => planRegistry.value.map((r: any) => r.key))
+// 发码表单里的档位键与当前产品的注册表同源（Grok/X 都是裸键），直接查注册表文案。
+const issuePlanLabel = computed(() => planLabel(form.plan))
+// 列表行的档位跨产品：本站 Grok 码存 grok_ 前缀，X 码是裸 premium_* 等。
+// 注册表只对应当前所选产品，跨产品的行用通用文案，避免 X 码被套上 Grok 注册表的名字。
+function rowPlanLabel(k: string) {
+  const p = String(k || '').toLowerCase()
+  if (p.startsWith('grok_') || isXPremiumPlan(p) || directProduct.value !== 'gpt') return genericPlanLabel(p)
+  return planLabel(k)
+}
+// 本站库里 Grok 码带 grok_ 前缀，按套餐筛选时要用同样的键。
+function listPlanValue(k: string) {
+  return directProduct.value === 'grok' ? 'grok_' + k : k
+}
 function planMeta(k: string) {
   return planRegistry.value.find((r: any) => r.key === k) || null
 }
@@ -589,7 +605,8 @@ const canIssue = computed(() =>
 
 const isCreditPlan = computed(() => String(form.plan).toLowerCase().startsWith('credit'))
 const dualIssueHint = computed(() => {
-  if (!dualBindEnabled.value) return ''
+  // X / Grok 只从主台发码，不走 DN- 双发
+  if (!dualBindEnabled.value || directProduct.value !== 'gpt') return ''
   const n = Math.max(1, Math.min(ISSUE_MAX, form.count || 1))
   if (isCreditPlan.value) return `credit* 仅向主台购 ${n} 张，无自动切台`
   const slow = n >= 20 ? '。数量较大时整批可能超过 3 分钟，超时请用「从卡台同步完整码」，不要重复购买' : ''
@@ -1397,8 +1414,8 @@ async function copyRowCode(row: any) {
 }
 
 function onDirectProductChange() {
-  form.plan = directProduct.value === 'x' ? '' : 'plus'
-  form.payment_country = directProduct.value === 'x' ? 'JP' : ''
+  form.plan = directProduct.value === 'gpt' ? 'plus' : ''
+  form.payment_country = directProduct.value === 'x' ? 'JP' : directProduct.value === 'grok' ? 'US' : ''
   void loadMeta()
 }
 
@@ -1441,10 +1458,12 @@ async function loadMeta() {
       paymentRegions.value = parsePaymentRegions(d.payment_regions)
       // 卡台不再下发某个地区时，把已选中的收回到「默认」。
       if (form.payment_country && !paymentRegions.value.some((r) => r.country === form.payment_country)) {
-        form.payment_country = directProduct.value === 'x' ? 'JP' : ''
+        form.payment_country = directProduct.value === 'x' ? 'JP' : directProduct.value === 'grok' ? 'US' : ''
       }
       if (directProduct.value === 'x' && !form.payment_country) form.payment_country = 'JP'
-      if (directProduct.value === 'x' && !planKeys.value.includes(form.plan)) {
+      // Grok 是美元固定价，卡台兑换时一律按 US/USD 收单；这里固定为 US，免得码上印着别的地区。
+      if (directProduct.value === 'grok') form.payment_country = 'US'
+      if (directProduct.value !== 'gpt' && !planKeys.value.includes(form.plan)) {
         form.plan = planKeys.value[0] || ''
       }
       pricingVersion.value = d.version ?? null
@@ -1482,6 +1501,7 @@ async function issue() {
       method: 'POST',
       body: JSON.stringify({
         plan: form.plan,
+        product: directProduct.value,
         count: form.count,
         funding_confirmed: true,
         // 只传国家，币种由卡台按它的唯一真相源补。
@@ -1555,7 +1575,8 @@ async function syncFromCardplatform() {
       method: 'POST',
       body: JSON.stringify({
         status: listStatus.value || 'unused',
-        plan: listPlan.value || form.plan || '',
+        // 卡台侧的 Grok 档位不带前缀
+        plan: (listPlan.value || form.plan || '').replace(/^grok_/i, ''),
       }),
     })
     const d = await r.json().catch(() => ({}))

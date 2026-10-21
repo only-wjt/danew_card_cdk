@@ -14,7 +14,8 @@
       </div>
 
       <RedeemModeTabs />
-      <p class="text-sm text-muted mb-4">{{ t('xPremium.batchHint') }}</p>
+      <p class="text-sm text-muted mb-1">{{ t('xPremium.batchHint') }}</p>
+      <p class="text-sm text-muted mb-4">{{ t('grok.batchHint') }}</p>
 
       <div class="card space-y-4">
         <div class="flex items-start gap-3 pb-3 border-b bd">
@@ -268,6 +269,8 @@ import LanguageToggle from '../../components/LanguageToggle.vue'
 import ThemeToggle from '../../components/ThemeToggle.vue'
 import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import ExcelImportBlock from '../../components/ExcelImportBlock.vue'
+import { isGrokCredential } from '../../lib/grok'
+import { planLabel } from '../../lib/plan'
 import {
   AUTO_SUBMIT_CONCURRENCY,
   BATCH_MAX_KEYS,
@@ -434,7 +437,11 @@ function isFailStatus(st: string) {
 }
 
 function planLabelOf(data: any): string {
-  return String(data?.plan || data?.plan_type || data?.plan_label || data?.data?.plan || '')
+  const raw = String(data?.plan || data?.plan_type || data?.plan_label || data?.data?.plan || '')
+  if (!raw) return ''
+  // 卡台预览回裸档位，裸 premium_* 与 X 同名：带 product 时补上 Grok 前缀再取文案。
+  const product = String(data?.product || data?.data?.product || '').toLowerCase()
+  return planLabel(product === 'grok' && !/^grok_/i.test(raw) ? 'grok_' + raw : raw)
 }
 
 function stopAllPolls() {
@@ -739,7 +746,14 @@ async function runPreflightRedeem(
     }
     const body = data?.data && typeof data.data === 'object' ? data.data : data || {}
     const preflightToken = String(body.preflight_token || data?.preflight_token || '')
-    if (!preflightToken) {
+    // Grok 码：预检不产票，兑换直接带登录态；卡台给出的拦截原因（登录态失效/已有订阅）直接判失败。
+    const grok = credential.mode === 'session' && isGrokCredential(credential.session)
+    const blocking = grok ? String(body.blocking_reason || '') : ''
+    if (blocking) {
+      updateItem(item.id, { status: 'failed', progressMsg: blocking, error: blocking })
+      return 'fail'
+    }
+    if (!preflightToken && !grok) {
       updateItem(item.id, {
         status: 'failed',
         progressMsg: '未返回 preflight_token',
@@ -753,11 +767,9 @@ async function runPreflightRedeem(
     const client_request_id = `batch-${deviceId.slice(0, 8)}-${Date.now()}-${item.id}`
     const redeem = await api('/api/v1/public/cdk/redeem', {
       method: 'POST',
-      body: JSON.stringify({
-        redemption_token: redemptionToken,
-        preflight_token: preflightToken,
-        client_request_id,
-      }),
+      body: JSON.stringify(grok
+        ? { redemption_token: redemptionToken, credential, client_request_id }
+        : { redemption_token: redemptionToken, preflight_token: preflightToken, client_request_id }),
     })
     const order =
       redeem.data?.order || redeem.data?.data?.order || redeem.data?.data || redeem.data || {}

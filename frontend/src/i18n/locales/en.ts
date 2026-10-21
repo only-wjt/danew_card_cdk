@@ -1,4 +1,11 @@
 export default {
+  grok: {
+    credential: 'Grok login',
+    hint: 'Sign in to grok.com, then copy the sso cookie value from DevTools → Application → Cookies → grok.com (or the whole cookie containing sso=). New subscriptions only, fixed USD price.',
+    placeholder: 'sso=… or the sso value',
+    invalid: 'Enter a valid Grok login (the grok.com sso cookie)',
+    batchHint: 'Pair Grok codes with a Grok login in the form sso=… (whole cookie), not a ChatGPT session.',
+  },
   grace: {
     title: 'Previous subscription needs attention',
     hint: 'The previous subscription is in a grace period or has an overdue renewal. Cancel it and refresh before recharging.',
@@ -61,7 +68,7 @@ export default {
       },
     },
     services: {
-      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start', p1: 'Enter the code', p2: 'Choose ChatGPT or Telegram', p3: 'Confirm on the matching flow' },
+      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start', p1: 'Enter the code', p2: 'Choose ChatGPT, Grok, or Telegram', p3: 'Confirm on the matching flow' },
       x: { title: 'X Premium', en: 'X Premium', cta: 'Activate X', p1: 'Enter a DNX- code', p2: 'Enter the X username', p3: 'Confirm to activate' },
       batch: { title: 'Batch Redeem', en: 'Batch Redeem', cta: 'Start Batch', p1: 'Verify CDK list', p2: 'Import Excel sessions', p3: 'Match and submit in order' },
       lookup: { title: 'CDK Status', en: 'CDK Status', cta: 'Check CDK', p1: 'Paste one or many CDKs', p2: 'See if used', p3: 'Show recharge email' },
@@ -244,6 +251,9 @@ export default {
     lead: 'Choose the product, then enter the matching code.',
     productGpt: 'ChatGPT',
     productGptHint: 'Redeem a ChatGPT plan with a session',
+    productGrok: 'Grok',
+    productGrokHint: 'Redeem a Grok plan with your grok.com login',
+    grokStepHint: 'After the preview, the next step asks for your grok.com login (the sso cookie).',
     productX: 'X Premium',
     productXHint: 'Enter the X username to activate',
     productTg: 'Telegram Premium',
@@ -368,6 +378,14 @@ export default {
     subtitle:
       'Operator-side direct top-up: the backend issues and redeems internally — no CDK on screen. Credentials for new batches are stored server-side for export only and never echoed in list/detail JSON.',
     createTitle: 'New Batch',
+    productLabel: 'Product',
+    productGpt: 'ChatGPT',
+    productGrok: 'Grok',
+    grokRegionFixed: 'Grok has fixed USD pricing and always pays in the United States (USD).',
+    grokCredLabel: 'Grok logins (one per line)',
+    grokCredPlaceholder: 'sso=… (the whole grok.com cookie, or just the sso value)',
+    grokCredHint: 'Sign in to grok.com → DevTools → Application → Cookies and copy sso. After submitting, logins are kept server-side for export only and never shown in batch lists or details; invalid and duplicate lines are skipped.',
+    grokCredSkipped: 'Skipped {n} line(s) (invalid or duplicate)',
     planLabel: 'Plan',
     fee: 'Service fee',
     planHint: 'Plans follow the card-platform sellable list (including Pro 20x renew). The service fee is charged at issue time; the upstream subscription is paid by this account.',
@@ -466,6 +484,7 @@ export default {
       pro_20x: 'Pro 20x ({fee}/item)',
       pro_50x: 'Pro 50x ({fee}/item)',
       pro_20x_renew: 'Pro 20x renew ({fee}/item)',
+      pro_5x_renew: 'Pro 5x renew ({fee}/item)',
     },
     planHumanGeneric: '{name} ({fee}/item)',
     unknownBanner:

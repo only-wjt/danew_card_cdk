@@ -183,3 +183,60 @@ func TestManualMembershipDurableSuccess(t *testing.T) {
 		t.Fatal("manual repeat duplicated task")
 	}
 }
+
+// 付款已启动后失败 / 需人工核对各通知一次；报价阶段被拒（钱没动）和管理员结案不通知。
+func TestTGFailureNotice(t *testing.T) {
+	notificationDB(t)
+	code, red := notificationAttempt(t, 1)
+
+	code.Status, red.FinishedAt, red.Message = "unused", "2026-01-01 00:00:00", "handle not eligible"
+	notifyTGFailure(&code, &red)
+	if n := taskCount(t); n != 0 {
+		t.Fatalf("quote-stage rejection notified: %d", n)
+	}
+
+	red.PaymentAttempted = true
+	code.Status, red.FinishedAt = "review_required", ""
+	notifyTGFailure(&code, &red)
+	notifyTGFailure(&code, &red)
+	code.Status, red.FinishedAt, red.ErrorCode = "unused", "2026-01-01 00:00:00", "PAY_DECLINED"
+	notifyTGFailure(&code, &red)
+	if n := taskCount(t); n != 2 {
+		t.Fatalf("notices=%d want 2", n)
+	}
+	var text string
+	if err := db.DB.QueryRow(`SELECT text FROM telegram_notifications ORDER BY id DESC LIMIT 1`).Scan(&text); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Telegram 兑换失败", "@recipient", code.Code, "PAY_DECLINED"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("notice missing %q: %s", want, text)
+		}
+	}
+
+	code2, red2 := notificationAttempt(t, 2)
+	red2.PaymentAttempted, red2.ResolvedAt = true, "2026-01-01 00:00:00"
+	code2.Status, red2.FinishedAt = "unused", "2026-01-01 00:00:00"
+	notifyTGFailure(&code2, &red2)
+	if n := taskCount(t); n != 2 {
+		t.Fatalf("manual resolution notified: %d", n)
+	}
+}
+
+// 钱已动后上游报失败：DecideStatus 落 uncertain 继续轮询，不结案，也要通知；超时类的不确定不通知。
+func TestTGFailureNoticeUncertainAfterFunding(t *testing.T) {
+	notificationDB(t)
+	code, red := notificationAttempt(t, 3)
+	red.FundingDispatched = true
+	code.Status, red.UpstreamStatus = "uncertain", "funding" // 付款超时：结果不确定，不是失败
+	notifyTGFailure(&code, &red)
+	if n := taskCount(t); n != 0 {
+		t.Fatalf("timeout uncertainty notified: %d", n)
+	}
+	red.UpstreamStatus = "failed_precharge"
+	notifyTGFailure(&code, &red)
+	notifyTGFailure(&code, &red)
+	if n := taskCount(t); n != 1 {
+		t.Fatalf("notices=%d want 1", n)
+	}
+}

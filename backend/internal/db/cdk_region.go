@@ -108,6 +108,18 @@ func migrateCodeLookupIndexes() error {
 		`CREATE INDEX IF NOT EXISTS idx_scb_site_code_upper ON site_cdk_bindings(upper(trim(site_code)))`,
 		`CREATE INDEX IF NOT EXISTS idx_cdkeys_code_upper ON cd_keys(upper(trim(code)))`,
 		`CREATE INDEX IF NOT EXISTS idx_recharge_tasks_cdk_upper ON recharge_tasks(upper(trim(cdk_code)))`,
+		// 通知按 code = ? COLLATE NOCASE 读档位/地区（成功与失败通知、结果轮询都会走），
+		// BINARY 的 UNIQUE 索引用不上，需要同排序规则的索引。
+		`CREATE INDEX IF NOT EXISTS idx_cpk_code_nocase ON cardplatform_cdk_codes(code COLLATE NOCASE)`,
+		// 卡台同步曾以裸键落库的 Grok 档位：X 没有这些键，补成 grok_ 前缀（与 NormalizeListedPlan 同一规则）。
+		// 裸 premium_* 与 X 同名，判不了，不动。幂等。
+		`UPDATE cardplatform_cdk_codes SET plan = 'grok_' || CASE lower(plan)
+			WHEN 'lite_monthly' THEN 'plus_monthly' WHEN 'lite_yearly' THEN 'plus_yearly'
+			WHEN 'heavy_monthly' THEN 'ultra_monthly' WHEN 'heavy_yearly' THEN 'ultra_yearly'
+			WHEN 'monthly' THEN 'premium_monthly' WHEN 'yearly' THEN 'premium_yearly'
+			ELSE lower(plan) END
+		WHERE lower(plan) IN ('plus_monthly','plus_yearly','super_monthly','super_yearly','ultra_monthly','ultra_yearly',
+			'lite_monthly','lite_yearly','heavy_monthly','heavy_yearly','monthly','yearly')`,
 	}
 	for _, q := range stmts {
 		if _, err := DB.Exec(q); err != nil {
@@ -115,4 +127,42 @@ func migrateCodeLookupIndexes() error {
 		}
 	}
 	return nil
+}
+
+// LookupStoredCDKRegionByCode 按完整码读本站缓存的付款地区，语义同 LookupStoredCDKRegion。
+// 多卡台账户时各台的 upstream_id 各自编号、可能重复，已知完整码时必须按码查。
+func LookupStoredCDKRegionByCode(code string) (country string, known bool) {
+	code = strings.TrimSpace(code)
+	if DB == nil || code == "" {
+		return "", false
+	}
+	var v sql.NullString
+	if err := DB.QueryRow(`SELECT payment_country FROM cardplatform_cdk_codes WHERE upper(trim(code)) = upper(trim(?)) ORDER BY created_at DESC LIMIT 1`, code).Scan(&v); err != nil || !v.Valid {
+		return "", false
+	}
+	return strings.ToUpper(strings.TrimSpace(v.String)), true
+}
+
+// UpdateCardplatformCDKRegionByCode 按完整码回填付款地区（不碰同 upstream_id 的其它账户的码）。
+func UpdateCardplatformCDKRegionByCode(code, country string) error {
+	code = strings.TrimSpace(code)
+	if DB == nil || code == "" {
+		return nil
+	}
+	_, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET payment_country = ? WHERE upper(trim(code)) = upper(trim(?))`,
+		strings.ToUpper(strings.TrimSpace(country)), code)
+	return err
+}
+
+// LookupStoredCDKRegion 读本站缓存的付款地区。known=false 表示老数据没记过地区（NULL），
+// 调用方必须去卡台取权威值，不能把未知当成默认菲律宾。空串+known=true 才是明确的默认区。
+func LookupStoredCDKRegion(upstreamID int64) (country string, known bool) {
+	if DB == nil || upstreamID <= 0 {
+		return "", false
+	}
+	var v sql.NullString
+	if err := DB.QueryRow(`SELECT payment_country FROM cardplatform_cdk_codes WHERE upstream_id = ? ORDER BY created_at DESC LIMIT 1`, upstreamID).Scan(&v); err != nil || !v.Valid {
+		return "", false
+	}
+	return strings.ToUpper(strings.TrimSpace(v.String)), true
 }
