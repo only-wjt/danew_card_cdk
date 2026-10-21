@@ -68,7 +68,7 @@ export default {
       },
     },
     services: {
-      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start', p1: 'Enter the code', p2: 'Choose ChatGPT or Telegram', p3: 'Confirm on the matching flow' },
+      recharge: { title: 'Recharge', en: 'Recharge', cta: 'Start', p1: 'Enter the code', p2: 'Choose ChatGPT, Grok, or Telegram', p3: 'Confirm on the matching flow' },
       x: { title: 'X Premium', en: 'X Premium', cta: 'Activate X', p1: 'Enter a DNX- code', p2: 'Enter the X username', p3: 'Confirm to activate' },
       batch: { title: 'Batch Redeem', en: 'Batch Redeem', cta: 'Start Batch', p1: 'Verify CDK list', p2: 'Import Excel sessions', p3: 'Match and submit in order' },
       lookup: { title: 'CDK Status', en: 'CDK Status', cta: 'Check CDK', p1: 'Paste one or many CDKs', p2: 'See if used', p3: 'Show recharge email' },
@@ -251,6 +251,9 @@ export default {
     lead: 'Choose the product, then enter the matching code.',
     productGpt: 'ChatGPT',
     productGptHint: 'Redeem a ChatGPT plan with a session',
+    productGrok: 'Grok',
+    productGrokHint: 'Redeem a Grok plan with your grok.com login',
+    grokStepHint: 'After the preview, the next step asks for your grok.com login (the sso cookie).',
     productX: 'X Premium',
     productXHint: 'Enter the X username to activate',
     productTg: 'Telegram Premium',

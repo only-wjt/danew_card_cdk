@@ -15,16 +15,20 @@
 
       <RedeemModeTabs />
 
-      <div class="grid gap-3 mb-6" :class="X_REDEEM_UI ? 'sm:grid-cols-3' : 'sm:grid-cols-2'">
-        <button type="button" class="product-card" :class="{ on: product === 'gpt' }" @click="product = 'gpt'">
+      <div class="grid gap-3 mb-6" :class="X_REDEEM_UI ? 'sm:grid-cols-2' : 'sm:grid-cols-3'">
+        <button type="button" class="product-card" :class="{ on: product === 'gpt' }" @click="pickProduct('gpt')">
           <div class="font-semibold text-ink">{{ t('recharge.productGpt') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productGptHint') }}</p>
         </button>
-        <button v-if="X_REDEEM_UI" type="button" class="product-card" :class="{ on: product === 'x' }" @click="product = 'x'">
+        <button type="button" class="product-card" :class="{ on: product === 'grok' }" @click="pickProduct('grok')">
+          <div class="font-semibold text-ink">{{ t('recharge.productGrok') }}</div>
+          <p class="mt-1 text-sm text-muted">{{ t('recharge.productGrokHint') }}</p>
+        </button>
+        <button v-if="X_REDEEM_UI" type="button" class="product-card" :class="{ on: product === 'x' }" @click="pickProduct('x')">
           <div class="font-semibold text-ink">{{ t('recharge.productX') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productXHint') }}</p>
         </button>
-        <button type="button" class="product-card" :class="{ on: product === 'tg' }" @click="product = 'tg'">
+        <button type="button" class="product-card" :class="{ on: product === 'tg' }" @click="pickProduct('tg')">
           <div class="font-semibold text-ink">{{ t('recharge.productTg') }}</div>
           <p class="mt-1 text-sm text-muted">{{ t('recharge.productTgHint') }}</p>
         </button>
@@ -54,6 +58,7 @@
           >{{ t('recharge.shopHint') }}</a>
         </div>
         <input v-model="code" class="input mono" placeholder="SXC-XXXX-XXXX-XXXX-XXXX" @keyup.enter="doPreview" />
+        <p v-if="product === 'grok'" class="text-sm text-muted">{{ t('recharge.grokStepHint') }}</p>
         <div v-if="error" class="alert alert-error">{{ error }}</div>
         <div v-if="previewInfo" class="rounded-xl bg-soft p-4 text-sm space-y-1">
           <div>套餐：<b>{{ targetPlan ? planLabel(targetPlan) : '—' }}</b></div>
@@ -287,7 +292,7 @@ const recoveryPending = ref(false)
 let preflightSequence = 0
 const error = ref('')
 const code = ref('')
-const product = ref<'gpt' | 'x' | 'tg'>('gpt')
+const product = ref<'gpt' | 'grok' | 'x' | 'tg'>('gpt')
 const xSeed = ref('')
 const tgSeed = ref('')
 
@@ -483,6 +488,20 @@ const targetPlan = computed(() => {
 const isGrok = computed(() => isGrokPlan(targetPlan.value) && !isXPremiumPlan(targetPlan.value))
 // GPT / X：必须有预检票；Grok：预检通过且没有阻塞项即可。
 const canRedeem = computed(() => isGrok.value ? !!grokSession.value && !grokBlockingReason.value : !!preflightToken.value)
+
+// ChatGPT 和 Grok 卡片共用同一套卡台兑换流程，卡片只是入口。码属于哪个产品以卡台预览为准：
+// 在 ChatGPT 卡片里粘了 Grok 码（或反过来），预览后卡片跟着码走，不让用户退回去重选。
+const flowKind = computed<'gpt' | 'grok' | ''>(() => (previewInfo.value ? (isGrok.value ? 'grok' : 'gpt') : ''))
+watch(flowKind, (kind) => {
+  if (kind && (product.value === 'gpt' || product.value === 'grok')) product.value = kind
+})
+
+function pickProduct(p: 'gpt' | 'grok' | 'x' | 'tg') {
+  if (p === product.value) return
+  // 手动切到另一个卡台产品时，正在进行的是另一种码，从头开始。
+  if ((p === 'gpt' || p === 'grok') && flowKind.value && flowKind.value !== p) resetAll()
+  product.value = p
+}
 
 const subscriptionStatusText = computed(() => {
   if (account.value.subscriptionHasActive === true) return '有效'
@@ -1116,6 +1135,7 @@ onMounted(() => {
     tgSeed.value = q
     return
   }
+  if (route.query.product === 'grok') product.value = 'grok'
   if (loadProgress()) {
     if (q && code.value.trim() !== q) {
       resetAll()

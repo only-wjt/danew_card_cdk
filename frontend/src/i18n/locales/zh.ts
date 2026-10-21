@@ -68,7 +68,7 @@ export default {
       },
     },
     services: {
-      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', p1: '输入卡密', p2: '选择 ChatGPT 或 Telegram', p3: '按对应流程确认开通' },
+      recharge: { title: '充值提交', en: 'Recharge', cta: '开始充值', p1: '输入卡密', p2: '选择 ChatGPT、Grok 或 Telegram', p3: '按对应流程确认开通' },
       x: { title: 'X Premium', en: 'X Premium', cta: '开通 X', p1: '输入 DNX- 卡密', p2: '填写 X 用户名', p3: '确认后自动开通' },
       batch: { title: '批量兑换', en: 'Batch Redeem', cta: '批量开始', p1: '批量验证 CDK', p2: '导入 Excel Session', p3: '按序配对自动提交' },
       lookup: { title: '卡密查询', en: 'CDK Status', cta: '查询卡密', p1: '单张或批量粘贴卡密', p2: '查看是否已使用', p3: '显示充值邮箱' },
@@ -251,6 +251,9 @@ export default {
     lead: '先选择要开通的产品，再输入对应卡密。',
     productGpt: 'ChatGPT',
     productGptHint: '兑换 ChatGPT 套餐，提交 Session',
+    productGrok: 'Grok',
+    productGrokHint: '兑换 Grok 套餐，提交 grok.com 登录态',
+    grokStepHint: '预览通过后，下一步需要 grok.com 的登录态（sso Cookie）。',
     productX: 'X Premium',
     productXHint: '填写要开通会员的 X 用户名',
     productTg: 'Telegram Premium',
