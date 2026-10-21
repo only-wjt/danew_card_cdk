@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,7 @@ import (
 
 	"github.com/danew/cdk-recharge-system/internal/cardplatform"
 	"github.com/danew/cdk-recharge-system/internal/db"
+	"github.com/danew/cdk-recharge-system/internal/notify"
 	"github.com/danew/cdk-recharge-system/internal/provider"
 	"github.com/danew/cdk-recharge-system/internal/xlsxsheet"
 	"github.com/gin-gonic/gin"
@@ -873,8 +875,10 @@ func mustListItems(batchID string) []db.AdminRechargeItem {
 // 所以代理回调也统一挂在这一个点上，不必在每个终态分支各埋一次。
 func patchItem(crid, status, message string) {
 	var cdkCode string
+	var before *db.AdminRechargeItem
 	if it, err := db.GetAdminRechargeItemByClientRequestID(crid); err == nil && it != nil {
 		cdkCode = it.CDKCode
+		before = it
 	}
 	if err := db.PatchAdminRechargeItem(crid, db.AdminRechargeItemPatch{
 		Status: strPtr(status), Message: strPtr(message),
@@ -885,7 +889,74 @@ func patchItem(crid, status, message string) {
 	if isTerminalItemStatus(status) && cdkCode != "" {
 		db.ReconcileCDKAfterItemTerminal(cdkCode, status)
 	}
+	notifyBatchItemFailure(before, status, message)
 	enqueueAgentItemEvent(crid, status)
+}
+
+// batchItemSubmitted 明细是否已经走到兑换提交（之后的失败才通知；发码/预检阶段的失败不通知）。
+func batchItemSubmitted(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case itemStatusSubmitted, itemStatusRunning, itemStatusUnknown:
+		return true
+	}
+	return false
+}
+
+// notifyBatchItemFailure 批量充值每条在提交兑换之后失败（或结果未知）发一条 TG 通知。
+// before 是改状态前的明细；只有它已提交、这次落到 failed / unknown 才发。
+// 同一明细同一结局只发一次；订单号作为别名，客户在兑换页查到同一笔失败不会再发一条。
+func notifyBatchItemFailure(before *db.AdminRechargeItem, status, message string) {
+	if before == nil || !batchItemSubmitted(before.Status) {
+		return
+	}
+	title := ""
+	switch status {
+	case itemStatusFailed:
+	case itemStatusUnknown:
+		if before.Status == itemStatusUnknown {
+			return // 已经是未知，轮询里重复落 unknown 不再发
+		}
+		title = "结果未知，请核对"
+	default:
+		return
+	}
+	accountID := primaryCardAccountID()
+	keys := []string{fmt.Sprintf("batch-fail:item:%s:%s", before.ClientRequestID, status)}
+	if orderID := strings.TrimSpace(before.UpstreamOrderID); orderID != "" && status == itemStatusFailed {
+		keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:order:%s", accountID, orderID))
+	}
+	plan := before.Plan
+	var country *string
+	if code := strings.TrimSpace(before.CDKCode); code != "" && db.DB != nil {
+		var storedPlan string
+		var storedCountry sql.NullString
+		if err := db.DB.QueryRow("SELECT COALESCE(plan,''), payment_country FROM cardplatform_cdk_codes WHERE code = ? COLLATE NOCASE LIMIT 1", code).Scan(&storedPlan, &storedCountry); err == nil {
+			if storedPlan != "" {
+				plan = storedPlan
+			}
+			if storedCountry.Valid {
+				v := storedCountry.String
+				country = &v
+			}
+		}
+	}
+	product, plan := cardProductPlan(plan, nil)
+	region := ""
+	if country != nil {
+		region = notify.RegionLabel(country)
+	}
+	if err := notify.EnqueueRedeemFailedAliases(keys, notify.RedeemFailure{
+		Product: product,
+		Title:   title,
+		Plan:    gptPlanLabel(plan),
+		Who:     before.AccountEmail,
+		Code:    before.CDKCode,
+		Region:  region,
+		Batch:   before.BatchID,
+		Reason:  message,
+	}); err != nil {
+		log.Printf("[batch-recharge] failure notice not queued crid=%s: %v", before.ClientRequestID, err)
+	}
 }
 
 func isTerminalItemStatus(st string) bool {

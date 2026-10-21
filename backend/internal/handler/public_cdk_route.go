@@ -138,6 +138,7 @@ func siteRedeem(c *gin.Context, route *provider.Route, siteCode string, body map
 		// 兑换成功：另一台那张必须立刻收回，否则同一本站码能兑两次。
 		goSafe("mark-consumed", func() { provider.MarkConsumed(context.Background(), route) })
 	case st >= 400 && st < 500:
+		notifyGPTRedeemRejected(route.Account.ID, siteCode, st, raw, clientIDs...)
 		// 业务拒绝（码无效/凭证不对），码没被消耗，允许改参数重试。
 		// 清掉幂等键：用户会改凭证重来，复用旧键会拿回同一个被拒的订单。
 		_ = db.ResetBindingForRetry(route.BindingID, upstreamErrText(raw))
@@ -166,6 +167,12 @@ func enqueueImmediateGPTResult(c *gin.Context, accountID int64, code string, bod
 		return true
 	}
 	status, explicit := gptOrderStatus(payload)
+	clientIDs := append([]string{strAny(body["client_request_id"]), strAny(body["clientRequestId"])}, extraClientIDs...)
+	if explicit && gptFailureStatus(status) {
+		// 兑换回包当场就是失败终态（同步拒卡等），后面不会再有 result 轮询。
+		logGPTFailureNotice(notifyGPTFailure(accountID, code, payload, "", clientIDs...))
+		return false
+	}
 	if !explicit || !gptSuccessStatus(status) {
 		return false
 	}
@@ -174,7 +181,6 @@ func enqueueImmediateGPTResult(c *gin.Context, accountID int64, code string, bod
 	if status != "completed" && !gptExplicitOrderSuccess(payload) {
 		return false
 	}
-	clientIDs := append([]string{strAny(body["client_request_id"]), strAny(body["clientRequestId"])}, extraClientIDs...)
 	if err := notifyGPTSuccess(accountID, code, gptResultEmail(payload), payload, clientIDs...); err != nil {
 		writeGPTAcceptedRetry(c)
 		return true
@@ -272,6 +278,22 @@ func gptOrderStatus(payload map[string]any) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// gptFailureStatus 卡台订单的失败终态（兑换页 TERMINAL 里 completed 以外的几种）。
+func gptFailureStatus(status string) bool {
+	switch status {
+	case "failed", "declined", "failed_precharge", "cancelled", "canceled", "rejected":
+		return true
+	}
+	return false
+}
+
+// isTerminalRedeemFailure 回包是否明确表示订单已失败终态。只认显式订单状态，
+// 没有状态字段的回包（受理中、网关错误）不算失败。
+func isTerminalRedeemFailure(payload map[string]any) bool {
+	status, explicit := gptOrderStatus(payload)
+	return explicit && gptFailureStatus(status)
 }
 
 func gptSuccessStatus(status string) bool {
@@ -509,13 +531,126 @@ func notifyGPTSuccess(accountID int64, code, email string, payload map[string]an
 		}
 		email = extractEmailFromSession(sess)
 	}
-	if err := notify.EnqueueChatGPTRedeemedAliases(keys, gptPlanLabel(plan), email, displayCode, notify.RegionLabel(country)); err != nil {
+	product, plan := cardProductPlan(plan, payload)
+	if err := notify.EnqueueCardRedeemedAliases(keys, product, gptPlanLabel(plan), email, displayCode, notify.RegionLabel(country)); err != nil {
 		return err
 	}
 	if code != "" {
 		db.ClaimCDKSuccessNotice(code)
 	}
 	return nil
+}
+
+// cardProductPlan 卡台码属于哪个产品（通知标题用）以及用于显示的档位键。
+// 本站库里 Grok 码带 grok_ 前缀；卡台回包是裸档位，带 product=grok 时补前缀，避免显示成 X。
+func cardProductPlan(plan string, payload map[string]any) (product, displayPlan string) {
+	p := strings.TrimSpace(plan)
+	if strings.HasPrefix(strings.ToLower(p), "grok_") {
+		return "Grok", p
+	}
+	if strings.EqualFold(gptPayloadField(payload, "product"), "grok") {
+		if p != "" {
+			p = "grok_" + p
+		}
+		return "Grok", p
+	}
+	return "ChatGPT", p
+}
+
+// gptFailureKeys 失败通知的去重身份：同一订单轮询多次只发一条，同一张码换凭据再失败是新订单、再发一条。
+// 所以只在拿不到订单号和请求号时才退回按码去重。命名空间与成功通知分开，失败后重试成功照常通知。
+func gptFailureKeys(accountID int64, code, reason string, payload map[string]any, extraClientIDs ...string) []string {
+	keys := []string{}
+	if orderID := gptOrderID(payload); orderID != "" {
+		keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:order:%s", accountID, orderID))
+	}
+	seen := map[string]bool{}
+	for _, id := range append([]string{gptPayloadField(payload, "client_request_id", "clientRequestId")}, extraClientIDs...) {
+		if id = strings.TrimSpace(id); id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:client:%s", accountID, id))
+	}
+	if len(keys) == 0 {
+		if normalized := strings.ToUpper(strings.TrimSpace(code)); normalized != "" {
+			sum := sha256.Sum256([]byte(normalized + "\x00" + reason))
+			keys = append(keys, fmt.Sprintf("gpt-fail:account:%d:code:%x", accountID, sum))
+		}
+	}
+	return keys
+}
+
+// gptFailureReason 卡台给出的失败原因，取最具体的那个字段。
+func gptFailureReason(payload map[string]any) string {
+	return gptPayloadField(payload, "failure_reason", "decline_reason", "error_message", "last_error",
+		"message", "error", "msg", "error_code")
+}
+
+// notifyGPTFailure 提交兑换之后的失败通知（卡台拒单 / 订单失败终态）。
+// 尽力而为：通知入队失败不能影响兑换结果，更不能诱导用户重新兑换，调用方只记日志。
+func notifyGPTFailure(accountID int64, code string, payload map[string]any, reason string, extraClientIDs ...string) error {
+	accountID, err := notificationAccountID(accountID, code)
+	if err != nil {
+		return err
+	}
+	if reason == "" {
+		reason = gptFailureReason(payload)
+	}
+	keys := gptFailureKeys(accountID, code, reason, payload, extraClientIDs...)
+	if len(keys) == 0 {
+		return errors.New("failed GPT order missing order, client or code identity")
+	}
+	plan := gptPayloadField(payload, "plan")
+	country := countryFromCurrency(gptPayloadField(payload, "currency"))
+	displayCode := strings.TrimSpace(code)
+	email := gptResultEmail(payload)
+	if displayCode != "" && db.DB != nil {
+		var storedPlan string
+		var storedCountry sql.NullString
+		if err := db.DB.QueryRow("SELECT COALESCE(plan,''), payment_country FROM cardplatform_cdk_codes WHERE code = ? COLLATE NOCASE LIMIT 1", displayCode).Scan(&storedPlan, &storedCountry); err == nil {
+			if storedPlan != "" {
+				plan = storedPlan
+			}
+			if storedCountry.Valid {
+				v := storedCountry.String
+				country = &v
+			}
+		}
+		if email == "" {
+			email, _ = db.GetEmailByCDK(displayCode)
+		}
+	}
+	product, plan := cardProductPlan(plan, payload)
+	return notify.EnqueueRedeemFailedAliases(keys, notify.RedeemFailure{
+		Product: product,
+		Plan:    gptPlanLabel(plan),
+		Who:     email,
+		Code:    displayCode,
+		Region:  notify.RegionLabel(country),
+		Reason:  reason,
+	})
+}
+
+// notifyGPTRedeemRejected 卡台直接拒绝了兑换请求（4xx）。409 是「已兑换/在兑换」，
+// 兑换页会去查原订单，不是失败，不通知。
+func notifyGPTRedeemRejected(accountID int64, code string, status int, raw []byte, clientIDs ...string) {
+	if status < 400 || status >= 500 || status == http.StatusConflict {
+		return
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(raw, &payload)
+	reason := upstreamErrText(raw)
+	if reason == "" {
+		reason = fmt.Sprintf("卡台拒绝兑换（HTTP %d）", status)
+	}
+	logGPTFailureNotice(notifyGPTFailure(accountID, code, payload, reason, clientIDs...))
+}
+
+func logGPTFailureNotice(err error) {
+	if err != nil {
+		log.Printf("[notify] redeem failure notice not queued: %v", err)
+	}
 }
 
 func notifyChatGPTCompleted(accountID int64, payload map[string]any) error {

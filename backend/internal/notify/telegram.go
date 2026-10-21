@@ -211,10 +211,23 @@ func EnqueueChatGPTRedeemed(key, plan, email, code, region string) error {
 
 // EnqueueChatGPTRedeemedAliases persists one notification for related business keys without HTTP delivery.
 func EnqueueChatGPTRedeemedAliases(keys []string, plan, email, code, region string) error {
-	return db.EnqueueTelegramNotificationAliases(keys, formatChatGPTRedeemed(plan, email, code, region))
+	return EnqueueCardRedeemedAliases(keys, "ChatGPT", plan, email, code, region)
+}
+
+// EnqueueCardRedeemedAliases 卡台码（ChatGPT / Grok）开通成功，product 决定标题。
+func EnqueueCardRedeemedAliases(keys []string, product, plan, email, code, region string) error {
+	return db.EnqueueTelegramNotificationAliases(keys, formatCardRedeemed(product, plan, email, code, region))
 }
 
 func formatChatGPTRedeemed(plan, email, code, region string) string {
+	return formatCardRedeemed("ChatGPT", plan, email, code, region)
+}
+
+func formatCardRedeemed(product, plan, email, code, region string) string {
+	product = strings.TrimSpace(product)
+	if product == "" {
+		product = "ChatGPT"
+	}
 	email = strings.TrimSpace(email)
 	if email == "" {
 		email = "—"
@@ -233,15 +246,65 @@ func formatChatGPTRedeemed(plan, email, code, region string) string {
 	}
 	now := nowText()
 	text := fmt.Sprintf(
-		"✅ <b>ChatGPT 开通成功</b>\n"+
+		"✅ <b>%s 开通成功</b>\n"+
 			"套餐: %s\n"+
 			"账号: %s\n"+
 			"卡密: <code>%s</code>\n"+
 			"地区: %s\n"+
 			"🕐 %s",
-		escapeHTML(plan), escapeHTML(email), escapeHTML(code), escapeHTML(region), now,
+		escapeHTML(product), escapeHTML(plan), escapeHTML(email), escapeHTML(code), escapeHTML(region), now,
 	)
 	return text
+}
+
+// RedeemFailure 一笔兑换在提交之后失败（或结果未知需要人工核对）的通知内容。
+// 只在已提交兑换之后使用：预检阶段被挡下的不通知（用户填错凭据会反复重试，刷屏）。
+type RedeemFailure struct {
+	Product string // ChatGPT / Grok / Telegram
+	Title   string // 空 = 「兑换失败」
+	Plan    string
+	Who     string // 账号邮箱 / 用户名
+	Code    string // 完整卡密，运营要拿它去核对
+	Region  string
+	Batch   string // 批量充值的批次号，非批量留空
+	Reason  string
+}
+
+// EnqueueRedeemFailedAliases 持久化一条兑换失败通知；keys 同成功通知一样按业务身份去重。
+func EnqueueRedeemFailedAliases(keys []string, f RedeemFailure) error {
+	return db.EnqueueTelegramNotificationAliases(keys, FormatRedeemFailed(f))
+}
+
+// FormatRedeemFailed 纯函数，便于测试和在调用方事务里入队。
+func FormatRedeemFailed(f RedeemFailure) string {
+	dash := func(s string) string {
+		if s = strings.TrimSpace(s); s == "" {
+			return "—"
+		}
+		return s
+	}
+	title := strings.TrimSpace(f.Title)
+	if title == "" {
+		title = "兑换失败"
+	}
+	reason := strings.Join(strings.Fields(f.Reason), " ")
+	if r := []rune(reason); len(r) > 300 {
+		reason = string(r[:300]) + "…"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "❌ <b>%s %s</b>\n", escapeHTML(dash(f.Product)), escapeHTML(title))
+	fmt.Fprintf(&b, "套餐: %s\n", escapeHTML(dash(f.Plan)))
+	fmt.Fprintf(&b, "账号: %s\n", escapeHTML(dash(f.Who)))
+	fmt.Fprintf(&b, "卡密: <code>%s</code>\n", escapeHTML(dash(f.Code)))
+	if strings.TrimSpace(f.Region) != "" {
+		fmt.Fprintf(&b, "地区: %s\n", escapeHTML(f.Region))
+	}
+	if strings.TrimSpace(f.Batch) != "" {
+		fmt.Fprintf(&b, "批次: <code>%s</code>\n", escapeHTML(f.Batch))
+	}
+	fmt.Fprintf(&b, "原因: %s\n", escapeHTML(dash(reason)))
+	fmt.Fprintf(&b, "🕐 %s", nowText())
+	return b.String()
 }
 
 // RegionLabel 把付款地区码说成运营能看懂的区。空字符串是发码时的默认菲律宾；还没同步到的不要猜。

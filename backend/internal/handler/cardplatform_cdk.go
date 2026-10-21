@@ -1376,6 +1376,7 @@ func PublicCDKRedeem(c *gin.Context) {
 		writeUpstreamUnavailable(c, "cdk-redeem", err)
 		return
 	}
+	notifyGPTRedeemRejected(accountID, redeemCode, st, raw, strAny(body["client_request_id"]), strAny(body["clientRequestId"]))
 	if enqueueImmediateGPTResult(c, accountID, redeemCode, body, st, raw) {
 		return
 	}
@@ -1420,6 +1421,8 @@ func PublicCDKResult(c *gin.Context) {
 						c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
 						return
 					}
+				} else if isTerminalRedeemFailure(payload) {
+					logGPTFailureNotice(notifyGPTFailure(route.Account.ID, boundCode, payload, ""))
 				}
 				goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, boundCode) })
 			}
@@ -1451,6 +1454,8 @@ func PublicCDKResult(c *gin.Context) {
 					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "notification enqueue failed; retry result"})
 					return
 				}
+			} else if isTerminalRedeemFailure(payload) {
+				logGPTFailureNotice(notifyGPTFailure(notificationAccount, cdkCode, payload, ""))
 			}
 			goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, cdkCode) })
 		}
@@ -1523,6 +1528,9 @@ func PublicCDKResultByCode(c *gin.Context) {
 		goSafe("observe-card-order", func() { observeFromPublicResult(context.Background(), payload, bind.CDKCode) })
 	}
 
+	if st >= 200 && st < 300 && isTerminalRedeemFailure(payload) {
+		logGPTFailureNotice(notifyGPTFailure(notificationAccount, bind.CDKCode, payload, ""))
+	}
 	// 已完成的订单：从 accounthub 获取账单 URL
 	if st >= 200 && st < 300 && isTerminalRedeemSuccess(payload) {
 		email := gptResultEmail(payload)

@@ -1036,5 +1036,57 @@ func saveState(code *db.TGCode, red *db.TGRedemption) error {
 	if err := db.SaveTGRedemption(*red); err != nil {
 		return err
 	}
-	return db.UpdateTGCodeStatus(code.ID, code.Status)
+	if err := db.UpdateTGCodeStatus(code.ID, code.Status); err != nil {
+		return err
+	}
+	notifyTGFailure(code, red)
+	return nil
+}
+
+// notifyTGFailure 付款流程已经启动之后失败（或卡在需人工核对）发一条 TG 通知，每笔兑换每种结局一次。
+// 报价阶段被拒（用户名不对、不符合条件）钱没动，用户会改了再试，不通知；管理员手动结案的也不通知。
+func notifyTGFailure(code *db.TGCode, red *db.TGRedemption) {
+	moneyMoved := red.FundingDispatched || red.PaymentDispatched || red.PaymentAttempted
+	if !moneyMoved || red.ResolvedAt != "" {
+		return
+	}
+	var key, title string
+	switch {
+	case red.FinishedAt != "" && code.Status != "completed":
+		key, title = fmt.Sprintf("tg:redemption:%d:failed", red.ID), "兑换失败"
+	case code.Status == "review_required" || code.Status == "requires_action":
+		key, title = fmt.Sprintf("tg:redemption:%d:attention", red.ID), "需人工核对"
+	default:
+		return
+	}
+	who := red.Recipient
+	if who != "" && !strings.HasPrefix(who, "@") {
+		who = "@" + who
+	}
+	reason := strings.TrimSpace(red.Message)
+	if ec := strings.TrimSpace(red.ErrorCode); ec != "" && !strings.Contains(reason, ec) {
+		reason = strings.TrimSpace(reason + " (" + ec + ")")
+	}
+	if reason == "" {
+		reason = "上游状态 " + firstNonEmptyStr(red.UpstreamStatus, code.Status)
+	}
+	if err := notify.EnqueueRedeemFailedAliases([]string{key}, notify.RedeemFailure{
+		Product: "Telegram",
+		Title:   title,
+		Plan:    PlanLabel(code.Plan),
+		Who:     who,
+		Code:    code.Code,
+		Reason:  reason,
+	}); err != nil {
+		log.Printf("[tg-member] failure notice not queued redemption=%d: %v", red.ID, err)
+	}
+}
+
+func firstNonEmptyStr(vals ...string) string {
+	for _, v := range vals {
+		if v = strings.TrimSpace(v); v != "" {
+			return v
+		}
+	}
+	return ""
 }

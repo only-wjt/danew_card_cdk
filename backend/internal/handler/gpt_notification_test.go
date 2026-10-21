@@ -350,7 +350,8 @@ func TestGPTImmediateRedeem(t *testing.T) {
 			{"code-fallback", `{"status":"completed"}`, 200, true, false},
 			{"pending", `{"status":"success","data":{"order":{"id":"ord_immediate","status":"pending"}}}`, 200, false, false},
 			{"accepted", `{"status":"success"}`, 202, false, false},
-			{"failed", `{"data":{"order":{"id":"ord_immediate","status":"failed"}}}`, 200, false, false},
+			// 兑换回包当场失败：发一条失败通知（不是成功通知，见下方文本断言）
+			{"failed", `{"data":{"order":{"id":"ord_immediate","status":"failed"}}}`, 200, true, false},
 			{"queue-failure", `{"data":{"order":{"id":"ord_immediate","status":"completed"}}}`, 200, false, true},
 		} {
 			t.Run(fmt.Sprintf("site=%v/%s", site, tc.name), func(t *testing.T) {
@@ -434,6 +435,15 @@ func TestGPTImmediateRedeem(t *testing.T) {
 					count = 1
 				}
 				gptQueueCount(t, count)
+				if tc.name == "failed" {
+					var text string
+					if err := db.DB.QueryRow("SELECT text FROM telegram_notifications LIMIT 1").Scan(&text); err != nil {
+						t.Fatal(err)
+					}
+					if !strings.Contains(text, "兑换失败") || strings.Contains(text, "开通成功") {
+						t.Fatalf("failed redeem queued wrong notice: %s", text)
+					}
+				}
 				if tc.failQueue {
 					response := gptTestPayload(t, w.Body.String())
 					if response["retry_action"] != "result" || response["redeem_accepted"] != true || isTerminalRedeemSuccess(response) {
@@ -455,7 +465,8 @@ func TestGPTImmediateRedeem(t *testing.T) {
 					}
 					gptQueueCount(t, 1)
 				}
-				if tc.queued || tc.failQueue {
+				// 失败通知与成功通知命名空间分开；失败单不会再收到完成回调，跳过这段去重检查。
+				if (tc.queued || tc.failQueue) && tc.name != "failed" {
 					hook := fmt.Sprintf(`{"type":"openai.direct.completed","data":{"object":{"orderId":"ord_immediate","clientRequestId":%q,"code":%q}}}`, clientID, code)
 					if got := gptWebhookRequest(t, 101, hook); got != 200 {
 						t.Fatalf("hook=%d", got)

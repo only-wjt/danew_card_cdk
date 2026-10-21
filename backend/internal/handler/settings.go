@@ -194,7 +194,7 @@ func AdminPutSettings(c *gin.Context) {
 
 // AdminTelegramTest POST /api/v1/admin/settings/telegram-test
 func AdminTelegramTest(c *gin.Context) {
-	err := notify.SendNow("✅ 通知测试\n这是后台发出的一条测试消息。开通成功也会发到这个聊天。")
+	err := notify.SendNow("✅ 通知测试\n这是后台发出的一条测试消息。开通成功和兑换失败也会发到这个聊天。")
 	if err != nil {
 		if err.Error() == "telegram not configured" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "还没配好机器人 Token 和聊天 ID"})
