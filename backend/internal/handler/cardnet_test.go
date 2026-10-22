@@ -33,12 +33,21 @@ type fakeCardPlatform struct {
 	consumed  map[int64]bool
 	deleted   map[int64]bool
 	regions   []map[string]string
+	// grokMode: ok | fail（目录 500）| ignore（老卡台忽略 product 参数，回 GPT 目录）
+	grokMode string
+	// returnPlan 非空时发码回包的 plan 用它（模拟卡台按别的档发了）
+	returnPlan string
+	calls      []fakeIssueCall
+}
+
+type fakeIssueCall struct {
+	Plan, PaymentCountry string
 }
 
 func newFakeCardPlatform(t *testing.T) *fakeCardPlatform {
 	t.Helper()
 	f := &fakeCardPlatform{
-		nextID: 1000, batches: map[string][]map[string]any{}, issueMode: "ok",
+		nextID: 1000, batches: map[string][]map[string]any{}, issueMode: "ok", grokMode: "ok",
 		consumed: map[int64]bool{}, deleted: map[int64]bool{},
 		regions: []map[string]string{{"country": "PH", "currency": "PHP"}, {"country": "US", "currency": "USD"}},
 	}
@@ -58,8 +67,29 @@ func (f *fakeCardPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && path == "/gpt-direct/plans":
 		f.mu.Lock()
-		regions := f.regions
+		regions, grokMode := f.regions, f.grokMode
 		f.mu.Unlock()
+		if r.URL.Query().Get("product") == "grok" && grokMode != "ignore" {
+			if grokMode == "fail" {
+				f.write(w, 500, map[string]any{"code": 500, "msg": "grok catalogue down"})
+				return
+			}
+			// 与卡台一致：注册表是裸键，定价表带 grok_ 前缀。
+			f.write(w, 200, map[string]any{"code": 0, "data": map[string]any{
+				"registry": []map[string]any{
+					{"key": "premium_monthly", "label": "Premium 月付", "sort_order": 2},
+					{"key": "plus_monthly", "label": "Plus 月付", "sort_order": 1},
+					{"key": "ultra_yearly", "label": "Ultra 年付", "sort_order": 3},
+				},
+				"plans": map[string]any{
+					"grok_premium_monthly": map[string]any{"label": "Grok Premium", "enabled": true, "serviceFeeUsdMinor": 100},
+					"grok_plus_monthly":    map[string]any{"label": "Grok Plus", "enabled": true, "serviceFeeUsdMinor": 50},
+					"grok_ultra_yearly":    map[string]any{"label": "Grok Ultra", "enabled": false},
+				},
+				"payment_regions": []map[string]string{{"country": "US", "currency": "USD"}},
+			}})
+			return
+		}
 		f.write(w, 200, map[string]any{"code": 0, "data": map[string]any{
 			"plans": map[string]any{
 				"plus":    map[string]any{"label": "Plus", "enabled": true, "serviceFeeUsdMinor": 150},
@@ -90,7 +120,13 @@ func (f *fakeCardPlatform) issue(w http.ResponseWriter, r *http.Request) {
 	key := r.Header.Get("Idempotency-Key")
 	f.mu.Lock()
 	f.issueKeys = append(f.issueKeys, key)
+	f.calls = append(f.calls, fakeIssueCall{Plan: body.Plan, PaymentCountry: body.PaymentCountry})
 	mode, block, entered := f.issueMode, f.block, f.entered
+	// 卡台回包里的 Grok 档位是裸键。
+	retPlan := strings.TrimPrefix(body.Plan, "grok_")
+	if f.returnPlan != "" {
+		retPlan = f.returnPlan
+	}
 	f.mu.Unlock()
 	if entered != nil {
 		entered <- struct{}{}
@@ -113,7 +149,7 @@ func (f *fakeCardPlatform) issue(w http.ResponseWriter, r *http.Request) {
 			f.nextID++
 			issued = append(issued, map[string]any{
 				"id": f.nextID, "code": fmt.Sprintf("GPTD-TEST-%06d-%s", f.nextID, strings.ToUpper(body.Plan)),
-				"code_prefix": fmt.Sprintf("GPTD-TEST-%06d", f.nextID), "plan": body.Plan, "fee_amount_minor": 150,
+				"code_prefix": fmt.Sprintf("GPTD-TEST-%06d", f.nextID), "plan": retPlan, "fee_amount_minor": 150,
 			})
 		}
 		f.batches[key] = issued
@@ -604,16 +640,22 @@ func TestAdminCardnetOptions(t *testing.T) {
 	if st != http.StatusOK || out["message"] != nil {
 		t.Fatalf("options: %d %v", st, out)
 	}
-	// 只列可售档位（go 在卡台是停用的）。
+	// 只列可售档位（go、grok ultra 在卡台是停用的），先 GPT 后 Grok，Grok 键带前缀。
 	keys := []string{}
 	for _, p := range out["plans"].([]any) {
-		keys = append(keys, p.(map[string]any)["key"].(string))
+		m := p.(map[string]any)
+		keys = append(keys, m["product"].(string)+":"+m["key"].(string))
 	}
-	if fmt.Sprint(keys) != "[plus pro_20x]" && fmt.Sprint(keys) != "[pro_20x plus]" {
+	if fmt.Sprint(keys) != "[gpt:plus gpt:pro_20x grok:grok_plus_monthly grok:grok_premium_monthly]" {
 		t.Fatalf("plans: %v", keys)
 	}
+	// 顶层地区仍是 GPT 的；Grok 的在 products 里。
 	if len(out["payment_regions"].([]any)) != 2 {
 		t.Fatalf("regions: %v", out["payment_regions"])
+	}
+	grok := out["products"].(map[string]any)["grok"].(map[string]any)
+	if grok["available"] != true || grok["fixed_payment_country"] != "US" || fmt.Sprint(grok["payment_regions"]) != "[map[country:US currency:USD]]" {
+		t.Fatalf("grok product: %v", grok)
 	}
 
 	gptTestSQL(t, `UPDATE card_platform_accounts SET status='disabled' WHERE id=7`)

@@ -698,6 +698,7 @@ type CardnetRequestQuery struct {
 	ClientID int64
 	Status   string
 	Query    string // request_id / 卡网订单号 / 幂等键
+	Product  string // gpt / grok：库里 Grok 档位一律带 grok_ 前缀
 	Page     int
 	PageSize int
 }
@@ -725,6 +726,12 @@ func ListCardnetRequests(q CardnetRequestQuery) ([]CardnetIssueRequest, int, err
 	if s := strings.TrimSpace(q.Query); s != "" {
 		where = append(where, "(r.request_id = ? OR r.external_order_no = ? OR r.idempotency_key = ?)")
 		args = append(args, s, s, s)
+	}
+	switch strings.ToLower(strings.TrimSpace(q.Product)) {
+	case "grok":
+		where = append(where, `r.plan LIKE 'grok\_%' ESCAPE '\'`)
+	case "gpt":
+		where = append(where, `r.plan NOT LIKE 'grok\_%' ESCAPE '\'`)
 	}
 	cond := strings.Join(where, " AND ")
 	var total int
