@@ -104,6 +104,12 @@ func PublicSessionPrecheck(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请粘贴 Session"})
 		return
 	}
+	if len(raw) > maxRawSessionBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Session 过长，请只粘贴一条"})
+		return
+	}
+	// 新版 Session 带大段营销数据（marketingEligibility），精简后再按 16 KB 判断。
+	raw = slimSessionJSON(raw)
 	if len(raw) > maxBoundSessionBytes {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Session 过长，请只粘贴一条"})
 		return
