@@ -1275,15 +1275,59 @@ func PublicCDKPreflight(c *gin.Context) {
 	proxyPublicJSON(c, st, raw)
 }
 
-// 单条 session 绑定上限；正常的 ChatGPT session JSON 远小于此。
+// 单条 session 绑定上限，按精简后的大小算（slimSessionJSON）；兑换要用的字段加起来约 7–8 KB。
 const maxBoundSessionBytes = 16 << 10
 
-// bindableSession 仅在上游预检 2xx 时返回可落库的 session。
+// maxRawSessionBytes 粘贴进来的原始 Session 上限，只防超大请求。
+// chatgpt.com/api/auth/session 现在会带一大段 marketingEligibility（实测 30 KB），整段常有 36 KB+。
+const maxRawSessionBytes = 256 << 10
+
+// sessionKeepKeys 兑换、账单查询、卡健康用到的 Session 字段（NextAuth 标准字段）。
+var sessionKeepKeys = []string{"user", "account", "expires", "accessToken", "access_token", "sessionToken", "session_token", "authProvider"}
+
+// slimSessionJSON 把 ChatGPT Session JSON 精简成上面这些字段，丢掉 marketingEligibility、
+// WARNING_BANNER、statsigContext 这类与兑换无关、又越来越大的内容。
+// 不是 JSON 对象或没有 sessionToken 的原样返回，交给后续校验处理。
+func slimSessionJSON(raw string) string {
+	s := strings.TrimSpace(raw)
+	if !strings.HasPrefix(s, "{") {
+		return s
+	}
+	var o map[string]json.RawMessage
+	if json.Unmarshal([]byte(s), &o) != nil {
+		return s
+	}
+	if _, ok := o["sessionToken"]; !ok {
+		if _, ok := o["session_token"]; !ok {
+			return s
+		}
+	}
+	slim := make(map[string]json.RawMessage, len(sessionKeepKeys))
+	for _, k := range sessionKeepKeys {
+		if v, ok := o[k]; ok {
+			slim[k] = v
+		}
+	}
+	if len(slim) == len(o) {
+		return s // 没有可丢的字段，保持原文
+	}
+	out, err := json.Marshal(slim)
+	if err != nil {
+		return s
+	}
+	return string(out)
+}
+
+// bindableSession 仅在上游预检 2xx 时返回可落库的 session（精简后）。
 func bindableSession(status int, body map[string]any) string {
 	if status < 200 || status >= 300 {
 		return ""
 	}
 	sess := extractCredentialSession(body["credential"])
+	if len(sess) > maxRawSessionBytes {
+		return ""
+	}
+	sess = slimSessionJSON(sess)
 	if len(sess) > maxBoundSessionBytes {
 		return ""
 	}
