@@ -40,7 +40,7 @@
               <tr v-for="row in clients" :key="row.client.id">
                 <td class="font-medium">{{ row.client.name }}</td>
                 <td class="mono text-xs">{{ row.client.key_prefix }}…</td>
-                <td class="text-sm">{{ row.client.allowed_plans.join(', ') || '—' }}</td>
+                <td class="text-sm">{{ row.client.allowed_plans.map(planText).join(', ') || '—' }}</td>
                 <td class="text-sm">{{ row.client.allowed_countries.join(', ') || 'PH（默认）' }}</td>
                 <td class="mono">{{ row.issued_today }} / {{ row.client.daily_code_limit }}</td>
                 <td class="text-sm">{{ row.client.ip_allowlist.join(', ') || '不限' }}</td>
@@ -67,7 +67,7 @@
     <!-- 发码请求 -->
     <template v-if="tab === 'requests'">
       <div class="card filter-card">
-        <div class="filter-grid">
+        <div class="filter-grid filter-grid-wide">
           <div class="form-group !mb-0">
             <label>请求号 / 卡网订单号 / 幂等键</label>
             <input v-model="reqFilters.q" class="input mono" placeholder="CNR… / DJ…" @keyup.enter="searchRequests" />
@@ -84,6 +84,13 @@
             <select v-model="reqFilters.status" class="field-select">
               <option value="">全部</option>
               <option v-for="(label, key) in requestStatusLabels" :key="key" :value="key">{{ label }}</option>
+            </select>
+          </div>
+          <div class="form-group !mb-0">
+            <label>产品</label>
+            <select v-model="reqFilters.product" class="field-select">
+              <option value="">全部</option>
+              <option v-for="g in productGroups" :key="g.key" :value="g.key">{{ g.title }}</option>
             </select>
           </div>
           <div class="filter-actions">
@@ -118,7 +125,7 @@
                   {{ r.external_order_no || '—' }}
                   <span v-if="r.external_ref" class="block text-muted">{{ r.external_ref }}</span>
                 </td>
-                <td>{{ r.plan }} <span class="text-muted">{{ r.payment_country || 'PH(默认)' }}</span></td>
+                <td :title="r.plan">{{ planText(r.plan) }} <span class="text-muted">{{ r.payment_country || 'PH(默认)' }}</span></td>
                 <td class="mono">{{ r.count }}</td>
                 <td class="mono">{{ usd(r.fee_total_minor) }}</td>
                 <td>
@@ -196,7 +203,7 @@
               <tr v-for="s in statRows" :key="`${s.date}-${s.client_id}-${s.plan}`">
                 <td class="mono">{{ s.date }}</td>
                 <td>{{ clientName(s.client_id) }}</td>
-                <td>{{ s.plan }}</td>
+                <td :title="s.plan">{{ planText(s.plan) }}</td>
                 <td class="mono">{{ s.codes }}</td>
                 <td class="mono">{{ usd(s.fee_minor) }}</td>
                 <td class="mono">{{ s.consumed }}</td>
@@ -218,27 +225,35 @@
           <label>允许套餐（不勾选则不能发任何码）</label>
           <div v-if="optionsLoading" class="text-xs text-muted">正在读取卡台套餐…</div>
           <template v-else>
-            <div v-if="planChoices.length" class="check-list">
-              <label
-                v-for="p in planChoices"
-                :key="p.key"
-                class="check-tile"
-                :class="{ 'is-checked': editing.plans.includes(p.key) }"
-              >
-                <input type="checkbox" :value="p.key" v-model="editing.plans" />
-                <span class="flex-1">
-                  <span class="font-medium text-ink">{{ p.label || p.key }}</span>
-                  <span class="block text-xs text-muted mono">
-                    {{ p.key }}<template v-if="p.stale"> · 卡台已停售</template><template v-else> · {{ usd(p.service_fee_usd_minor) }}/张</template>
+            <div v-for="g in planGroups" :key="g.key" class="plan-group">
+              <div class="flex flex-wrap items-baseline gap-2 mb-1.5">
+                <span class="text-sm font-semibold text-ink">{{ g.title }}</span>
+                <span v-if="g.state && !g.state.available" class="text-xs text-err">{{ g.state.message || '暂不可用' }}</span>
+                <span v-else-if="g.note" class="text-xs text-muted">{{ g.note }}</span>
+              </div>
+              <div v-if="g.items.length" class="check-list">
+                <label
+                  v-for="p in g.items"
+                  :key="p.key"
+                  class="check-tile"
+                  :class="{ 'is-checked': editing.plans.includes(p.key) }"
+                >
+                  <input type="checkbox" :value="p.key" v-model="editing.plans" />
+                  <span class="flex-1">
+                    <span class="font-medium text-ink">{{ p.label || p.key }}</span>
+                    <span class="block text-xs text-muted mono">
+                      {{ p.key }}<template v-if="p.stale"> · 卡台已停售</template><template v-else> · {{ usd(p.service_fee_usd_minor) }}/张</template>
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+              </div>
+              <p v-else-if="g.state?.available" class="text-xs text-muted">卡台没有可售档位</p>
             </div>
             <p v-if="optionsMessage" class="text-xs text-err mt-1">{{ optionsMessage }}</p>
           </template>
         </div>
         <div class="form-group">
-          <label>允许地区（不勾选则只允许默认地区 PH）</label>
+          <label>允许地区（仅约束 ChatGPT；不勾选则只允许默认地区 PH）</label>
           <div v-if="!optionsLoading" class="check-list">
             <label
               v-for="r in regionChoices"
@@ -300,7 +315,7 @@
             <tr v-for="c in detail.codes" :key="c.id">
               <td class="mono">{{ c.id }}</td>
               <td class="mono text-xs">{{ c.code }}</td>
-              <td>{{ c.plan }}</td>
+              <td :title="c.plan">{{ planText(c.plan) }}</td>
               <td>{{ c.payment_country || '—' }}</td>
               <td class="mono">{{ usd(c.fee_amount_minor) }}</td>
               <td>{{ c.status || 'unused' }}</td>
@@ -321,6 +336,7 @@ import { authFetch } from '../../lib/api'
 import { dialog } from '../../lib/dialog'
 import { copyToClipboard } from '../../lib/clipboard'
 import { regionLabel } from '../../lib/region'
+import { grokPlanLabel, isGrokPlan } from '../../lib/grok'
 import Modal from '../../components/Modal.vue'
 import Pagination from '../../components/Pagination.vue'
 
@@ -399,7 +415,7 @@ const requestStatusLabels: Record<string, string> = {
 }
 
 const requests = ref<IssueRequest[]>([])
-const reqFilters = reactive({ q: '', client_id: '', status: '' })
+const reqFilters = reactive({ q: '', client_id: '', status: '', product: '' })
 const reqPage = ref(1)
 const reqPageSize = 20
 const reqTotal = ref(0)
@@ -415,20 +431,40 @@ const clientOpen = ref(false)
 const saving = ref(false)
 const editing = reactive({ id: 0, name: '', plans: [] as string[], countries: [] as string[], limit: 200, ips: '' })
 
-// 表单勾选项：与卡网发码同源（主台可售档位与地区）。已授权但卡台已下架的项也列出来，方便取消勾选。
-interface PlanOption { key: string; label: string; service_fee_usd_minor: number; stale?: boolean }
+// 表单勾选项：与卡网发码同源（主台可售档位与地区），按产品分组。已授权但卡台已下架的项也列出来，方便取消勾选。
+interface PlanOption { key: string; label: string; product?: string; service_fee_usd_minor: number; stale?: boolean }
 interface RegionOption { country: string; currency: string; stale?: boolean }
+interface ProductState { available: boolean; message?: string; fixed_payment_country?: string }
 const planOptions = ref<PlanOption[]>([])
 const regionOptions = ref<RegionOption[]>([])
+const productStates = ref<Record<string, ProductState>>({})
 const optionsLoading = ref(false)
 const optionsMessage = ref('')
 
-const planChoices = computed<PlanOption[]>(() => {
+// X 不开放给卡网，这里只有 ChatGPT 与 Grok。
+const productGroups = [
+  { key: 'gpt', title: 'ChatGPT', note: '' },
+  { key: 'grok', title: 'Grok', note: '固定美国（USD）付款，不受允许地区限制' },
+]
+
+// 卡网档位键：Grok 一律带 grok_ 前缀，其余是 ChatGPT。
+function productOf(key: string) {
+  return String(key || '').trim().toLowerCase().startsWith('grok_') ? 'grok' : 'gpt'
+}
+
+function planText(key: string) {
+  return productOf(key) === 'grok' && isGrokPlan(key) ? grokPlanLabel(key) : key
+}
+
+const planGroups = computed(() => {
   const known = new Set(planOptions.value.map((p) => p.key))
-  const stale = editing.plans
+  const stale: PlanOption[] = editing.plans
     .filter((key) => !known.has(key))
-    .map((key) => ({ key, label: key, service_fee_usd_minor: 0, stale: true }))
-  return [...planOptions.value, ...stale]
+    .map((key) => ({ key, label: planText(key), service_fee_usd_minor: 0, stale: true }))
+  const all = [...planOptions.value, ...stale]
+  return productGroups
+    .map((g) => ({ ...g, state: productStates.value[g.key], items: all.filter((p) => (p.product || productOf(p.key)) === g.key) }))
+    .filter((g) => g.items.length || g.state)
 })
 
 const regionChoices = computed<RegionOption[]>(() => {
@@ -448,10 +484,12 @@ async function loadOptions() {
     const d = await api('/api/v1/admin/cardnet/options')
     planOptions.value = d.plans || []
     regionOptions.value = d.payment_regions || []
+    productStates.value = d.products || {}
     optionsMessage.value = d.message || (planOptions.value.length ? '' : '卡台没有可售套餐')
   } catch (e: any) {
     planOptions.value = []
     regionOptions.value = []
+    productStates.value = {}
     optionsMessage.value = e.message
   } finally {
     optionsLoading.value = false
@@ -589,6 +627,7 @@ async function loadRequests() {
     if (reqFilters.q.trim()) params.set('q', reqFilters.q.trim())
     if (reqFilters.client_id) params.set('client_id', reqFilters.client_id)
     if (reqFilters.status) params.set('status', reqFilters.status)
+    if (reqFilters.product) params.set('product', reqFilters.product)
     const d = await api(`/api/v1/admin/cardnet/requests?${params}`)
     requests.value = d.list || []
     reqTotal.value = d.total || 0
@@ -686,6 +725,8 @@ onMounted(loadClients)
   grid-template-columns: 1fr 160px 160px auto;
   align-items: end;
 }
+.filter-grid-wide { grid-template-columns: 1fr 160px 140px 140px auto; }
+.plan-group + .plan-group { margin-top: 12px; }
 @media (max-width: 768px) {
   .filter-grid { grid-template-columns: 1fr; }
 }

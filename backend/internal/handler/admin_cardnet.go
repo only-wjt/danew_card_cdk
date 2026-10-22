@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -25,15 +26,34 @@ type adminCardnetClientBody struct {
 	Status           string   `json:"status"`
 }
 
-func (b adminCardnetClientBody) input(fallbackLimit int) db.CardnetClientInput {
+// input 授权套餐按卡网键规则规范化：Grok 旧键换新键；X 键、裸 Grok 键直接报错，不静默丢弃。
+// 不校验卡台当前是否可售：卡台下架后仍允许保留，前端会标「卡台已停售」。
+// existing 是客户端现有的授权：其中不合规的键原样放过——停用/启用会把整份授权回传，
+// 不能因为一个历史键让「停用」按钮失败（这类键发码时本来就会被拒）。
+func (b adminCardnetClientBody) input(fallbackLimit int, existing ...string) (db.CardnetClientInput, error) {
 	limit := fallbackLimit
 	if b.DailyCodeLimit != nil {
 		limit = *b.DailyCodeLimit
 	}
-	return db.CardnetClientInput{
-		Name: b.Name, AllowedPlans: b.AllowedPlans, AllowedCountries: b.AllowedCountries,
-		DailyCodeLimit: limit, IPAllowlist: b.IPAllowlist,
+	plans := make([]string, 0, len(b.AllowedPlans))
+	for _, raw := range b.AllowedPlans {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		plan, _, err := cardplatform.CardnetCanonicalPlan(raw)
+		if err != nil {
+			if slices.ContainsFunc(existing, func(p string) bool { return strings.EqualFold(p, strings.TrimSpace(raw)) }) {
+				plans = append(plans, raw)
+				continue
+			}
+			return db.CardnetClientInput{}, err
+		}
+		plans = append(plans, plan)
 	}
+	return db.CardnetClientInput{
+		Name: b.Name, AllowedPlans: plans, AllowedCountries: b.AllowedCountries,
+		DailyCodeLimit: limit, IPAllowlist: b.IPAllowlist,
+	}, nil
 }
 
 func adminCardnetID(c *gin.Context) (int64, bool) {
@@ -67,7 +87,12 @@ func AdminCreateCardnetClient(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	client, key, err := db.CreateCardnetClient(body.input(200))
+	in, err := body.input(200)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	client, key, err := db.CreateCardnetClient(in)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -93,7 +118,12 @@ func AdminUpdateCardnetClient(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request"})
 		return
 	}
-	client, err := db.UpdateCardnetClient(id, body.input(current.DailyCodeLimit))
+	in, err := body.input(current.DailyCodeLimit, current.AllowedPlans...)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	client, err := db.UpdateCardnetClient(id, in)
 	if err != nil {
 		writeCardnetAdminErr(c, err)
 		return
@@ -128,32 +158,29 @@ func AdminRotateCardnetClientKey(c *gin.Context) {
 }
 
 // AdminCardnetOptions GET /api/v1/admin/cardnet/options
-// 客户端表单可勾选的套餐与地区：与卡网发码同源（主台可售档位、主台下发的地区）。
+// 客户端表单可勾选的套餐与地区：与卡网发码同源（主台可售档位、主台下发的地区），按产品标注，不含 X。
+// payment_regions 仍是 GPT 地区；各产品的可用状态与地区在 products 里。
 func AdminCardnetOptions(c *gin.Context) {
-	out := gin.H{"plans": []gin.H{}, "payment_regions": []cardplatform.PaymentRegion{}}
+	out := gin.H{"plans": []gin.H{}, "payment_regions": []cardplatform.PaymentRegion{}, "products": gin.H{}}
 	acc, err := cardnetPrimaryAccount()
 	if err != nil {
 		out["message"] = "主台不可用：" + err.Error()
 		c.JSON(http.StatusOK, out)
 		return
 	}
-	snap := cardnetUpstream(c.Request.Context(), acc)
-	if snap.plansErr != nil || snap.plans == nil {
+	cat := loadCardnetCatalogue(c.Request.Context(), acc)
+	out["products"] = cat.products
+	out["payment_regions"] = cat.gptRegions()
+	if !cat.anyAvailable() {
 		out["message"] = "读取卡台套餐失败"
 		c.JSON(http.StatusOK, out)
 		return
 	}
-	plans := []gin.H{}
-	for _, p := range snap.plans.SellablePlans() {
-		if cardplatform.IsXPremiumPlan(p.Key) {
-			continue
-		}
-		plans = append(plans, gin.H{"key": p.Key, "label": p.Label, "service_fee_usd_minor": p.ServiceFeeUsdMinor})
+	plans := make([]gin.H, 0, len(cat.rows))
+	for _, r := range cat.rows {
+		plans = append(plans, gin.H{"key": r.Key, "product": r.Product, "label": r.Label, "service_fee_usd_minor": r.Plan.ServiceFeeUsdMinor})
 	}
 	out["plans"] = plans
-	if snap.plans.PaymentRegions != nil {
-		out["payment_regions"] = snap.plans.PaymentRegions
-	}
 	c.JSON(http.StatusOK, out)
 }
 
@@ -163,7 +190,8 @@ func AdminListCardnetRequests(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
 	list, total, err := db.ListCardnetRequests(db.CardnetRequestQuery{
-		ClientID: clientID, Status: c.Query("status"), Query: c.Query("q"), Page: page, PageSize: pageSize,
+		ClientID: clientID, Status: c.Query("status"), Query: c.Query("q"), Product: c.Query("product"),
+		Page: page, PageSize: pageSize,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
