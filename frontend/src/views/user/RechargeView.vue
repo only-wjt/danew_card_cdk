@@ -109,12 +109,12 @@
               <dt>当前套餐</dt>
               <dd>{{ planLabel(currentPlanKey) }}</dd>
             </div>
-            <!-- Grok 预检只回账号与报价，没有订阅明细：只显示这次首月要付多少。 -->
-            <div v-if="isGrok">
-              <dt>首月价格</dt>
-              <dd :class="account.grokQuote && account.grokQuote.amount * 2 <= account.grokQuote.list ? 'text-good' : ''">{{ grokPriceText }}</dd>
+            <!-- Grok 预检没有订阅明细：只显示有没有首月优惠，不显示金额（后端已去掉报价）。 -->
+            <div v-if="isGrok && grokOfferText">
+              <dt>首月优惠</dt>
+              <dd :class="account.grokOffer === 'half' ? 'text-good' : ''">{{ grokOfferText }}</dd>
             </div>
-            <template v-else>
+            <template v-if="!isGrok">
             <div>
               <dt>订阅状态</dt>
               <dd>{{ subscriptionStatusText }}</dd>
@@ -337,7 +337,7 @@ const grokSession = ref('')
 const grokBlockingReason = ref('')
 const sessionRaw = ref('')
 const cookieGuide = ref(false)
-type GrokQuote = { amount: number; list: number; currency: string }
+type GrokOffer = 'half' | 'discount' | 'none' | ''
 
 /** 预检成功后的账号/订阅摘要（与卡台 GPT 直充 preflight 字段对齐） */
 const account = ref({
@@ -352,8 +352,8 @@ const account = ref({
   subscriptionIsDelinquent: null as boolean | null,
   lastPayment: null as any,
   paymentMethod: null as any,
-  // Grok：预检报价里目标档位的首月价（最小单位），以及本站标记的半价卡密。
-  grokQuote: null as GrokQuote | null,
+  // Grok：目标档位有没有首月优惠（不含金额），以及本站标记的半价卡密。
+  grokOffer: '' as GrokOffer,
   grokPromoCode: false,
 })
 const resultStatus = ref('')
@@ -445,7 +445,7 @@ function loadProgress(): boolean {
           typeof p.account.subscriptionIsDelinquent === 'boolean' ? p.account.subscriptionIsDelinquent : null,
         lastPayment: p.account.lastPayment || null,
         paymentMethod: p.account.paymentMethod || null,
-        grokQuote: p.account.grokQuote && typeof p.account.grokQuote === 'object' ? p.account.grokQuote : null,
+        grokOffer: ['half', 'discount', 'none'].includes(p.account.grokOffer) ? p.account.grokOffer : '',
         grokPromoCode: p.account.grokPromoCode === true,
       }
     }
@@ -689,33 +689,23 @@ function applyAccountFromPreflight(data: any) {
       typeof body.subscription_is_delinquent === 'boolean' ? body.subscription_is_delinquent : null,
     lastPayment: body.last_payment || null,
     paymentMethod: body.payment_method || null,
-    grokQuote: isGrok.value ? pickGrokQuote(body.quotes, targetPlan.value) : null,
+    grokOffer: isGrok.value ? pickGrokOffer(body.first_month_offers, targetPlan.value) : '',
     grokPromoCode: data?.grok_promo === true || body.grok_promo === true,
   }
 }
 
-// 卡台 Grok 预检的 quotes：{ premium_monthly: { amountMinor, listAmountMinor, currency } }。
-function pickGrokQuote(quotes: any, plan: string): GrokQuote | null {
-  if (!quotes || typeof quotes !== 'object') return null
+// 后端把 Grok 报价换成不带金额的 first_month_offers：{ premium_monthly: 'half' | 'discount' | 'none' }。
+function pickGrokOffer(offers: any, plan: string): GrokOffer {
+  if (!offers || typeof offers !== 'object') return ''
   for (const key of grokQuoteKeys(plan)) {
-    const q = quotes[key]
-    if (!q || typeof q !== 'object') continue
-    const amount = Number(q.amountMinor ?? q.amount_minor)
-    const list = Number(q.listAmountMinor ?? q.list_amount_minor ?? amount)
-    if (!Number.isFinite(amount) || amount < 0) return null
-    return { amount, list: Number.isFinite(list) ? list : amount, currency: String(q.currency || 'USD') }
+    const v = offers[key]
+    if (v === 'half' || v === 'discount' || v === 'none') return v
   }
-  return null
+  return ''
 }
 
-const grokPriceText = computed(() => {
-  const q = account.value.grokQuote
-  if (!q) return '上游未提供'
-  const amount = formatPaymentAmount(q.amount, q.currency)
-  if (q.list <= q.amount) return amount
-  const list = formatPaymentAmount(q.list, q.currency)
-  return q.amount * 2 <= q.list ? `${amount}（原价 ${list}，首月半价）` : `${amount}（原价 ${list}）`
-})
+const GROK_OFFER_TEXT: Record<GrokOffer, string> = { half: '首月半价', discount: '有首月优惠', none: '无', '': '' }
+const grokOfferText = computed(() => GROK_OFFER_TEXT[account.value.grokOffer] || '')
 
 function clearAccount() {
   account.value = {
@@ -730,7 +720,7 @@ function clearAccount() {
     subscriptionRecoveryRequired: false,
     lastPayment: null,
     paymentMethod: null,
-    grokQuote: null,
+    grokOffer: '',
     grokPromoCode: false,
   }
 }

@@ -143,7 +143,7 @@ func TestGrokPromoCodeRedeemGate(t *testing.T) {
 	e.up.set(func(f *fakeCardPlatform) { f.grokPrices = grokPremiumPrices(false) })
 	st, out := e.grokPreflight(promo, promoTok)
 	if st != http.StatusUnprocessableEntity || out["error_code"] != grokPromoErrorCode ||
-		!strings.Contains(fmt.Sprint(out["error"]), "$30.00") {
+		!strings.Contains(fmt.Sprint(out["error"]), "没有首月半价资格") || strings.Contains(fmt.Sprint(out["error"]), "30.00") {
 		t.Fatalf("promo code on full-price account: %d %v", st, out)
 	}
 	// 跳过预检直接兑换：服务端复核，卡台 /redeem 不会被调用。
@@ -197,9 +197,13 @@ func TestGrokPromoCodeRedeemGate(t *testing.T) {
 
 	// 半价账号：半价码预检通过，兑换前复核一次再提交。
 	e.up.set(func(f *fakeCardPlatform) { f.grokPrices = grokPremiumPrices(true) })
-	// 通过时带 grok_promo 标记（兑换页显示「首月半价卡密」），卡台原有字段不丢；正价码不带。
-	if st, out := e.grokPreflight(promo, promoTok); st != http.StatusOK || out["grok_promo"] != true ||
-		out["data"].(map[string]any)["quotes"] == nil {
+	// 通过时带 grok_promo 标记（兑换页显示「首月半价卡密」）；正价码不带。
+	// 报价金额不回浏览器，只给不带金额的 first_month_offers，账号等字段照旧。
+	st, out = e.grokPreflight(promo, promoTok)
+	data, _ := out["data"].(map[string]any)
+	if st != http.StatusOK || out["grok_promo"] != true || data["email"] != "a@example.com" ||
+		data["quotes"] != nil || data["promotions"] != nil ||
+		fmt.Sprint(data["first_month_offers"]) != "map[premium_monthly:half]" {
 		t.Fatalf("promo code on half-price account: %d %v", st, out)
 	}
 	if st, out := e.grokPreflight(full, fullTok); st != http.StatusOK || out["grok_promo"] != nil {

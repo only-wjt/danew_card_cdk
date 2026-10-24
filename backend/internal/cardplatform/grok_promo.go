@@ -134,3 +134,40 @@ func minorOf(m map[string]any, keys ...string) int64 {
 	}
 	return -1
 }
+
+// 首月优惠档次（不含金额）：兑换页只告诉买家有没有优惠，不露卡台报价。
+const (
+	GrokOfferHalf     = "half"
+	GrokOfferDiscount = "discount"
+	GrokOfferNone     = "none"
+)
+
+// GrokFirstMonthOffers 预检报价里每个档位的首月优惠档次，键与 quotes 相同。
+func GrokFirstMonthOffers(raw json.RawMessage) map[string]string {
+	var root map[string]any
+	if json.Unmarshal(raw, &root) != nil {
+		return nil
+	}
+	scope := root
+	if data, ok := root["data"].(map[string]any); ok {
+		if _, has := data["quotes"]; has {
+			scope = data
+		}
+	}
+	quotes, _ := scope["quotes"].(map[string]any)
+	out := map[string]string{}
+	for key := range quotes {
+		q, err := ParseGrokPromoQuote(raw, key)
+		switch {
+		case err != nil:
+			continue
+		case q.HalfPrice():
+			out[key] = GrokOfferHalf
+		case q.AmountMinor < q.ListAmountMinor:
+			out[key] = GrokOfferDiscount
+		default:
+			out[key] = GrokOfferNone
+		}
+	}
+	return out
+}

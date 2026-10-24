@@ -89,6 +89,12 @@ func TestParseGrokPromoQuote(t *testing.T) {
 	if q, err := ParseGrokPromoQuote(json.RawMessage(`{"quotes":{"super_monthly":{"amountMinor":0,"listAmountMinor":10000}}}`), "super_monthly"); err != nil || !q.HalfPrice() {
 		t.Fatalf("free first month: %+v %v", q, err)
 	}
+	// 不带金额的优惠档次：premium / super 月付半价，plus 与年付没有优惠。
+	offers := GrokFirstMonthOffers(raw)
+	if offers["premium_monthly"] != GrokOfferHalf || offers["super_monthly"] != GrokOfferHalf ||
+		offers["plus_monthly"] != GrokOfferNone || offers["super_yearly"] != GrokOfferNone {
+		t.Fatalf("offers: %v", offers)
+	}
 	// 只打七折不算半价。
 	partial := json.RawMessage(`{"data":{"quotes":{"super_monthly":{"amountMinor":7000,"listAmountMinor":10000}}}}`)
 	if q, err := ParseGrokPromoQuote(partial, "super_monthly"); err != nil || q.HalfPrice() {

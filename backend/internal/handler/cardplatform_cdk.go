@@ -1269,6 +1269,9 @@ func PublicCDKPreflight(c *gin.Context) {
 			raw = withTopLevelField(raw, "grok_promo", true)
 		}
 	}
+	if cardplatform.IsGrokCredential(extractCredentialSession(body["credential"])) {
+		raw = redactGrokQuotes(raw)
+	}
 	// 预检成功才把 credential.session 绑到卡密（账单页可凭卡密查）。
 	// 上游拒绝的请求不落库：否则任何人都能对任意码写入/覆盖绑定。
 	tok := str(body["redemption_token"])

@@ -113,10 +113,11 @@ func grokPromoVerdict(raw json.RawMessage, plan string) string {
 	if q.HalfPrice() {
 		return ""
 	}
+	// 不报具体金额：卡台报价就是本站的扣款成本，给买家看到不合适。金额只记日志。
+	log.Printf("[grok-promo] %s blocked: first month %d / list %d %s", plan, q.AmountMinor, q.ListAmountMinor, q.Currency)
 	label := nonEmptyStr(cardplatform.GrokPlanLabel(cardplatform.GrokPromoKey(plan)), "Grok 首月半价")
-	return fmt.Sprintf("这是 %s 卡密，只能兑换到有首月半价资格的 Grok 账号。这个账号首月要付 %s（原价 %s），没有半价资格。"+
-		"卡密没有被消耗，请换一个有首月半价资格的账号，或改用正价卡密。",
-		label, formatMinorAmount(q.AmountMinor, q.Currency), formatMinorAmount(q.ListAmountMinor, q.Currency))
+	return fmt.Sprintf("这是 %s 卡密，只能兑换到有首月半价资格的 Grok 账号，这个账号没有首月半价资格。"+
+		"卡密没有被消耗，请换一个有首月半价资格的账号，或改用正价卡密。", label)
 }
 
 func rejectGrokPromo(c *gin.Context, msg string) {
@@ -176,9 +177,31 @@ func withTopLevelField(raw json.RawMessage, key string, val any) json.RawMessage
 	return out
 }
 
-func formatMinorAmount(minor int64, currency string) string {
-	if currency == "" || currency == "USD" {
-		return fmt.Sprintf("$%d.%02d", minor/100, minor%100)
+// redactGrokQuotes Grok 预检回给浏览器前去掉 quotes / promotions（卡台报价就是本站扣款成本），
+// 换成不带金额的 first_month_offers：{ "premium_monthly": "half" | "discount" | "none" }。
+func redactGrokQuotes(raw json.RawMessage) json.RawMessage {
+	var root map[string]json.RawMessage
+	if json.Unmarshal(raw, &root) != nil || root == nil {
+		return raw
 	}
-	return fmt.Sprintf("%d.%02d %s", minor/100, minor%100, currency)
+	offers, err := json.Marshal(cardplatform.GrokFirstMonthOffers(raw))
+	if err != nil {
+		return raw
+	}
+	var data map[string]json.RawMessage
+	if json.Unmarshal(root["data"], &data) == nil && data != nil {
+		delete(data, "quotes")
+		delete(data, "promotions")
+		data["first_month_offers"] = offers
+		if b, err := json.Marshal(data); err == nil {
+			root["data"] = b
+		}
+	}
+	delete(root, "quotes")
+	delete(root, "promotions")
+	out, err := json.Marshal(root)
+	if err != nil {
+		return raw
+	}
+	return out
 }
