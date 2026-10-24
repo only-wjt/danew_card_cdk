@@ -452,8 +452,12 @@ function productOf(key: string) {
   return String(key || '').trim().toLowerCase().startsWith('grok_') ? 'grok' : 'gpt'
 }
 
+// Grok 首月半价键 = 正价键 + _promo（本站虚拟档位，卡台按正价键发码）。
 function planText(key: string) {
-  return productOf(key) === 'grok' && isGrokPlan(key) ? grokPlanLabel(key) : key
+  const promo = /_promo$/i.test(String(key || '').trim())
+  const base = promo ? String(key).trim().slice(0, -'_promo'.length) : key
+  if (productOf(base) !== 'grok' || !isGrokPlan(base)) return key
+  return grokPlanLabel(base) + (promo ? '（首月半价）' : '')
 }
 
 const planGroups = computed(() => {

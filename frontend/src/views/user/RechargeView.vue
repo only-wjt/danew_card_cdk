@@ -1042,6 +1042,11 @@ async function doRedeem() {
         ? { redemption_token: redemptionToken.value, credential: { mode: 'session', session: grokSession.value }, client_request_id }
         : { redemption_token: redemptionToken.value, preflight_token: preflightToken.value, client_request_id }),
     })
+    // 本站在提交卡台前拦下（Grok 半价资格不符 / 需重新预览）：没提交、卡密没消耗，留在本步换账号重试，不去查单。
+    if (r.status === 422 && /^GROK_/.test(String(data?.error_code || ''))) {
+      error.value = String(data?.error || '兑换未提交，卡密没有被消耗')
+      return
+    }
     applyResultPayload(data)
     // 这次请求只决定「要不要去查结果」，不决定兑换成败。
     // 4xx 是卡台给出的业务结论；5xx / 网关超时只是没拿到回执，扣款可能已经在跑，一律交给轮询定论。

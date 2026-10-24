@@ -159,6 +159,12 @@ func migrateCardnet() error {
 		return nil
 	}
 	queries := []string{
+		// 本站预览拿到的 redemption_token → 码，只增不改（见 RecordPreviewToken）。
+		`CREATE TABLE IF NOT EXISTS cdk_preview_tokens (
+			redemption_token TEXT PRIMARY KEY,
+			cdk_code TEXT NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)`,
 		`CREATE TABLE IF NOT EXISTS cardnet_clients (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			name TEXT NOT NULL,
@@ -201,9 +207,24 @@ func migrateCardnet() error {
 		`CREATE INDEX IF NOT EXISTS idx_cnr_status ON cardnet_issue_requests(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_cnr_external_order ON cardnet_issue_requests(external_order_no)`,
 	}
+	var previewTokensExisted int
+	_ = DB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cdk_preview_tokens'`).Scan(&previewTokensExisted)
 	for _, q := range queries {
 		if _, err := DB.Exec(q); err != nil {
 			return err
+		}
+	}
+	if previewTokensExisted == 0 {
+		// 首次建表时从现有绑定回填一次：上线前预览过、还没兑换的 Grok 用户不用重新预览。
+		// 只能回填这一次——那时还没有半价码，绑定被改挂也无所谓；之后的改挂不能再导进来。
+		var bindings int
+		_ = DB.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='cdk_session_bindings'`).Scan(&bindings)
+		if bindings > 0 {
+			if _, err := DB.Exec(`INSERT OR IGNORE INTO cdk_preview_tokens (redemption_token, cdk_code)
+				SELECT TRIM(redemption_token), cdk_code FROM cdk_session_bindings
+				WHERE TRIM(COALESCE(redemption_token,'')) != '' AND cdk_code NOT LIKE 'RT:%'`); err != nil {
+				return err
+			}
 		}
 	}
 	cols := []struct{ name, ddl string }{
@@ -692,6 +713,57 @@ func GetCardnetCodeForClient(id, clientID int64) (CardnetIssuedCode, error) {
 		return c, ErrCardnetNotFound
 	}
 	return c, err
+}
+
+// CardnetCodeRequestPlan 卡网码在库里的档位与发码请求的档位（Grok 半价请求带 _promo，码上存正价键）。
+// 不是卡网发的码返回 ErrCardnetNotFound。用户输入的码大小写不定，原样和大写各查一次（走 code 唯一索引）。
+func CardnetCodeRequestPlan(code string) (codePlan, requestPlan string, err error) {
+	if DB == nil {
+		return "", "", fmt.Errorf("db not ready")
+	}
+	raw := strings.TrimSpace(code)
+	if raw == "" {
+		return "", "", ErrCardnetNotFound
+	}
+	err = DB.QueryRow(`SELECT COALESCE(c.plan,''), COALESCE(r.plan,'')
+		FROM cardplatform_cdk_codes c JOIN cardnet_issue_requests r ON r.id = c.cardnet_request_id
+		WHERE c.code IN (?, ?) AND c.issue_source = ? LIMIT 1`, raw, normalizeCDKCode(raw), CardnetIssueSource).Scan(&codePlan, &requestPlan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", ErrCardnetNotFound
+	}
+	return codePlan, requestPlan, err
+}
+
+// RecordPreviewToken 本站调卡台预览成功后记下 token 属于哪张码。
+// cdk_session_bindings 里的 token 会被预检、换号重新预览改写，不能用来判断「这个 token 兑的是哪张码」；
+// 这张表只在本站亲自拿到 token 时写入，已有的行不覆盖，客户端没法把一个 token 改挂到别的码上。
+func RecordPreviewToken(code, redemptionToken string) error {
+	if DB == nil {
+		return fmt.Errorf("db not ready")
+	}
+	c, tok := normalizeCDKCode(code), strings.TrimSpace(redemptionToken)
+	if c == "" || tok == "" {
+		return nil
+	}
+	_, err := DB.Exec(`INSERT OR IGNORE INTO cdk_preview_tokens (redemption_token, cdk_code) VALUES (?, ?)`, tok, c)
+	return err
+}
+
+// PreviewTokenCode 本站预览发出的 token 对应的码；不是本站预览拿到的 token 返回 ErrCardnetNotFound。
+func PreviewTokenCode(redemptionToken string) (string, error) {
+	if DB == nil {
+		return "", fmt.Errorf("db not ready")
+	}
+	tok := strings.TrimSpace(redemptionToken)
+	if tok == "" {
+		return "", ErrCardnetNotFound
+	}
+	var code string
+	err := DB.QueryRow(`SELECT cdk_code FROM cdk_preview_tokens WHERE redemption_token = ?`, tok).Scan(&code)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrCardnetNotFound
+	}
+	return code, err
 }
 
 type CardnetRequestQuery struct {
