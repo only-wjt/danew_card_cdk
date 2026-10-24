@@ -28,6 +28,12 @@ export function grokBarePlan(value: string): string {
   return LEGACY[bare] || bare
 }
 
+/** 预检报价表（quotes / promotions）里该档位可能用的键：新裸键、带前缀、改名前的旧裸键。 */
+export function grokQuoteKeys(value: string): string[] {
+  const bare = grokBarePlan(value)
+  return [bare, 'grok_' + bare, ...Object.keys(LEGACY).filter((k) => LEGACY[k] === bare)]
+}
+
 const TIER_LABEL: Record<string, string> = { plus: 'Plus', premium: 'Premium', super: 'Super', ultra: 'Ultra' }
 
 export function grokPlanLabel(value: string): string {

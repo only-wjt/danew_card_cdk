@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grokCredential, grokPlanLabel, isGrokCredential, isGrokPlan } from '../grok'
+import { grokCredential, grokPlanLabel, grokQuoteKeys, isGrokCredential, isGrokPlan } from '../grok'
 import { isXPremiumPlan } from '../x-premium'
 import { planLabel, planSatisfied } from '../plan'
 import { extractCdkSession } from '../batch-session'
@@ -52,5 +52,12 @@ describe('Grok credential', () => {
     expect(isGrokCredential('sso=' + value)).toBe(true)
     expect(isGrokCredential(value)).toBe(false)
     expect(extractCdkSession('sso=' + value)).toBe('sso=' + value)
+  })
+})
+
+describe('grokQuoteKeys', () => {
+  it('lists the bare key, the prefixed key and legacy aliases', () => {
+    expect(grokQuoteKeys('grok_ultra_monthly')).toEqual(['ultra_monthly', 'grok_ultra_monthly', 'heavy_monthly'])
+    expect(grokQuoteKeys('grok_super_monthly')).toEqual(['super_monthly', 'grok_super_monthly'])
   })
 })

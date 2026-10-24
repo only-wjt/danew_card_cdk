@@ -158,6 +158,24 @@ func grokPromoRecheck(c *gin.Context, cli *cardplatform.Client, accountID int64,
 	return true
 }
 
+// withTopLevelField 往卡台 JSON 对象响应顶层加一个字段；不是 JSON 对象时原样返回。
+func withTopLevelField(raw json.RawMessage, key string, val any) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) != nil || m == nil {
+		return raw
+	}
+	b, err := json.Marshal(val)
+	if err != nil {
+		return raw
+	}
+	m[key] = b
+	out, err := json.Marshal(m)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
 func formatMinorAmount(minor int64, currency string) string {
 	if currency == "" || currency == "USD" {
 		return fmt.Sprintf("$%d.%02d", minor/100, minor%100)
