@@ -18,16 +18,24 @@ const (
 
 // CardnetCanonicalPlan 卡网档位键规范化：发码、客户端授权、目录过滤都先过这里。
 // Grok 旧键（grok_lite_monthly 等）换成新键；X 键、裸 Grok 键、未知的 grok_ 键一律报错。
+// 半价键（grok_super_monthly_promo）保留后缀：授权、幂等哈希、请求记录都按它区分，发码时才去掉。
 func CardnetCanonicalPlan(raw string) (plan, product string, err error) {
 	p := strings.ToLower(strings.TrimSpace(raw))
 	switch {
 	case p == "":
 		return "", "", errors.New("plan 必填")
 	case strings.HasPrefix(p, "grok_"):
-		if !IsGrokPlan(p) {
+		base, promo := SplitGrokPromo(p)
+		if !IsGrokPlan(base) {
 			return "", "", errors.New("未知的 Grok 档位 " + p)
 		}
-		return GrokIssuePlan(p), CardnetProductGrok, nil
+		if promo {
+			if !HasGrokPromo(base) {
+				return "", "", errors.New("Grok 档位 " + GrokIssuePlan(base) + " 没有首月半价")
+			}
+			return GrokPromoKey(base), CardnetProductGrok, nil
+		}
+		return GrokIssuePlan(base), CardnetProductGrok, nil
 	case IsXPremiumPlan(p):
 		msg := "X 订阅不支持卡网发码：" + p
 		if !strings.HasPrefix(p, "x_") && IsGrokPlan("grok_"+p) {

@@ -21,6 +21,19 @@
 - **X 订阅不开放给卡网**：`x_*`、`basic_*`、`premium_*` 一律 422 `PLAN_NOT_SELLABLE`；
 - 每日额度 ChatGPT 与 Grok 共用。
 
+### Grok 首月半价档位（`_promo`）
+
+Grok 按账号给首月五折（目前只有 Premium / Super / Ultra 月付）。本站为这三个档位各提供一个半价键：
+`grok_premium_monthly_promo`、`grok_super_monthly_promo`、`grok_ultra_monthly_promo`。
+
+- 卡网另建一个「首月半价」商品，绑定 `_promo` 键即可，接口与正价键完全一样；
+- overview 里 `_promo` 档位的 `label` 带「（首月半价）」，`checkout_amount_minor` 是正价的一半；
+- 客户端「允许套餐」要单独勾 `_promo` 档位，否则发码返回 403 `PLAN_NOT_ALLOWED`；
+- 发码响应的 `plan` 与 `issued[].plan` 都是 `_promo` 键；同一个 Idempotency-Key 不能在正价键与半价键之间切换；
+- **兑换规则**：半价码只能兑到「首月报价是半价」的账号，否则在预检和兑换时拦下（HTTP 422，
+  `error_code=GROK_PROMO_INELIGIBLE`），卡密不消耗。正价码不受影响，任何账号都能兑。
+  商品页请写明「仅限有首月优惠资格的账号」。
+
 ## 错误与重试约定
 
 失败响应：`{"error_code": "...", "message": "..."}`（发码接口另带 `request_id`、`status`）。

@@ -57,11 +57,14 @@ var grokSSOCookie = regexp.MustCompile(`(?:^|;\s*)sso(?:-rw)?=[^;\s]+`)
 var grokTierLabels = map[string]string{"plus": "Plus", "premium": "Premium", "super": "Super", "ultra": "Ultra"}
 
 // GrokPlanLabel 带 grok_ 前缀的档位可读名（如 "Grok Premium 月付"）；不是 Grok 档位返回空串。
-// 裸 premium_* 归 X，这里不认。
+// 裸 premium_* 归 X，这里不认。卡网半价键（_promo）标「首月半价」。
 func GrokPlanLabel(plan string) string {
-	p := strings.ToLower(strings.TrimSpace(plan))
-	if !strings.HasPrefix(p, "grok_") || !IsGrokPlan(p) {
+	p, promo := SplitGrokPromo(strings.ToLower(plan))
+	if !strings.HasPrefix(p, "grok_") || !IsGrokPlan(p) || (promo && !HasGrokPromo(p)) {
 		return ""
+	}
+	if promo {
+		return GrokPlanLabel(p) + "（首月半价）"
 	}
 	bare := GrokBarePlan(p)
 	i := strings.LastIndex(bare, "_")

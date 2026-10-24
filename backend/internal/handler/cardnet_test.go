@@ -38,6 +38,12 @@ type fakeCardPlatform struct {
 	// returnPlan 非空时发码回包的 plan 用它（模拟卡台按别的档发了）
 	returnPlan string
 	calls      []fakeIssueCall
+	// grokPrices 公开预检回的 Grok 报价（quotes / promotions）；publicCalls 记录公开接口调用路径。
+	grokPrices   map[string]any
+	publicCalls  []string
+	publicBodies []map[string]any
+	// preflightReject 非 0 时公开预检直接回这个 HTTP 状态（如 409 码已被兑换）
+	preflightReject int
 }
 
 type fakeIssueCall struct {
@@ -105,6 +111,35 @@ func (f *fakeCardPlatform) serve(w http.ResponseWriter, r *http.Request) {
 		f.issue(w, r)
 	case strings.HasPrefix(path, "/gpt-direct/cdks/"):
 		f.mutate(w, r, strings.TrimPrefix(path, "/gpt-direct/cdks/"))
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/cdk/"):
+		f.mu.Lock()
+		f.publicCalls = append(f.publicCalls, strings.TrimPrefix(path, "/api/v1/cdk"))
+		prices, reject := f.grokPrices, f.preflightReject
+		f.mu.Unlock()
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		f.mu.Lock()
+		f.publicBodies = append(f.publicBodies, in)
+		f.mu.Unlock()
+		switch path {
+		case "/api/v1/cdk/preview":
+			f.write(w, 200, map[string]any{"code": 0, "data": map[string]any{
+				"redemption_token": "rt-" + strings.ToUpper(fmt.Sprint(in["code"])), "product": "grok"}})
+		case "/api/v1/cdk/preflight":
+			if reject != 0 {
+				f.write(w, reject, map[string]any{"code": reject, "msg": "cdk already redeemed"})
+				return
+			}
+			data := map[string]any{"email": "a@example.com", "currentPlan": "", "preflight_token": ""}
+			for k, v := range prices {
+				data[k] = v
+			}
+			f.write(w, 200, map[string]any{"code": 0, "msg": "ok", "data": data})
+		case "/api/v1/cdk/redeem":
+			f.write(w, 202, map[string]any{"code": 0, "data": map[string]any{"order": map[string]any{"status": "queued"}}})
+		default:
+			f.write(w, 404, map[string]any{"code": 404, "msg": "not found"})
+		}
 	default:
 		f.write(w, 404, map[string]any{"code": 404, "msg": "not found"})
 	}
@@ -641,12 +676,13 @@ func TestAdminCardnetOptions(t *testing.T) {
 		t.Fatalf("options: %d %v", st, out)
 	}
 	// 只列可售档位（go、grok ultra 在卡台是停用的），先 GPT 后 Grok，Grok 键带前缀。
+	// premium 月付有首月半价，紧跟一个 _promo 虚拟档位（plus 没有）。
 	keys := []string{}
 	for _, p := range out["plans"].([]any) {
 		m := p.(map[string]any)
 		keys = append(keys, m["product"].(string)+":"+m["key"].(string))
 	}
-	if fmt.Sprint(keys) != "[gpt:plus gpt:pro_20x grok:grok_plus_monthly grok:grok_premium_monthly]" {
+	if fmt.Sprint(keys) != "[gpt:plus gpt:pro_20x grok:grok_plus_monthly grok:grok_premium_monthly grok:grok_premium_monthly_promo]" {
 		t.Fatalf("plans: %v", keys)
 	}
 	// 顶层地区仍是 GPT 的；Grok 的在 products 里。

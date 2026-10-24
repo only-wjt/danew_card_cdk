@@ -320,6 +320,16 @@ func loadCardnetCatalogue(ctx context.Context, acc db.CardPlatformAccount) cardn
 				Key: key, Product: cardplatform.CardnetProductGrok,
 				Label: nonEmptyStr(cardplatform.GrokPlanLabel(key), p.Label), Plan: p,
 			})
+			// 首月半价是本站的虚拟档位：卡台按正价键发码，兑换时只放行首月报价是半价的账号。
+			if cardplatform.HasGrokPromo(key) {
+				promo := p
+				promo.CheckoutAmountMinor = p.CheckoutAmountMinor / 2
+				pkey := cardplatform.GrokPromoKey(key)
+				out.rows = append(out.rows, cardnetPlanRow{
+					Key: pkey, Product: cardplatform.CardnetProductGrok,
+					Label: nonEmptyStr(cardplatform.GrokPlanLabel(pkey), p.Label+"（首月半价）"), Plan: promo,
+				})
+			}
 		}
 	}
 	out.products[cardplatform.CardnetProductGrok] = grok
@@ -509,7 +519,8 @@ func createCardnetRequest(c *gin.Context, client db.CardnetClient, key, plan, pr
 		// Grok 目录的键是裸键；目录读到了却是空的，说明卡台没开 Grok（老卡台忽略 product 参数），不能放行。
 		lookup := plan
 		if grok {
-			lookup = cardplatform.GrokBarePlan(plan)
+			base, _ := cardplatform.SplitGrokPromo(plan)
+			lookup = cardplatform.GrokBarePlan(base)
 		}
 		if sellable := plans.SellableKeys(); (grok || len(sellable) > 0) && !sellable[lookup] {
 			cardnetError(c, http.StatusUnprocessableEntity, "PLAN_NOT_SELLABLE", "卡台未开放档位 "+plan)
@@ -588,10 +599,12 @@ func runCardnetIssue(ctx context.Context, req db.CardnetIssueRequest, allowRevie
 	defer cancel()
 	// Grok 发给卡台的键显式带 grok_ 前缀（库里存的已是这个写法，再包一层只为防御）：
 	// 裸键要靠卡台反查产品，premium_* 会落到 X。
+	// 半价键卡台不认：按正价键发码、落库，半价靠请求上的 _promo 识别（db.CardnetPromoCodePlan）。
 	grok := cardplatform.CardnetPlanProduct(req.Plan) == cardplatform.CardnetProductGrok
 	wirePlan := req.Plan
 	if grok {
-		wirePlan = cardplatform.GrokIssuePlan(req.Plan)
+		base, _ := cardplatform.SplitGrokPromo(req.Plan)
+		wirePlan = cardplatform.GrokIssuePlan(base)
 	}
 	res, err := cardplatform.NewFromAccount(acc).IssueCDKs(callCtx, wirePlan, req.Count, req.UpstreamIdemKey, prefs...)
 	if err != nil {
@@ -620,9 +633,9 @@ func runCardnetIssue(ctx context.Context, req db.CardnetIssueRequest, allowRevie
 		if grok {
 			// 卡台回的 Grok 档位是裸键，裸 premium_* 与 X 同名：落库补成 grok_ 前缀，
 			// 查单、通知、统计才不会显示成 X。档位对不上（卡台按别的档发了）不能交给买家。
-			plan = cardplatform.GrokIssuePlan(firstNonEmpty(it.Plan, req.Plan))
-			if plan != req.Plan && mismatch == "" {
-				mismatch = fmt.Sprintf("卡台返回档位 %s，请求的是 %s", strings.TrimSpace(it.Plan), req.Plan)
+			plan = cardplatform.GrokIssuePlan(firstNonEmpty(it.Plan, wirePlan))
+			if plan != wirePlan && mismatch == "" {
+				mismatch = fmt.Sprintf("卡台返回档位 %s，请求的是 %s", strings.TrimSpace(it.Plan), wirePlan)
 			}
 		}
 		codes = append(codes, db.CardnetCodeToSave{
@@ -726,10 +739,16 @@ func cardnetSucceededResponse(req db.CardnetIssueRequest, replayed bool) (int, g
 		return http.StatusBadGateway, cardnetErrBody(req, "UPSTREAM_COUNT_MISMATCH",
 			fmt.Sprintf("本站记录 %d 张码，期望 %d 张", len(codes), req.Count))
 	}
+	// 半价码在库里存正价键，回给卡网时补回请求的 _promo 键，和请求的 plan 对得上。
+	promo := cardplatform.IsGrokPromoKey(req.Plan)
 	issued := make([]gin.H, 0, len(codes))
 	for _, it := range codes {
+		plan := it.Plan
+		if promo {
+			plan = cardplatform.GrokPromoKey(it.Plan)
+		}
 		issued = append(issued, gin.H{
-			"id": it.ID, "code": it.Code, "plan": it.Plan,
+			"id": it.ID, "code": it.Code, "plan": plan,
 			"payment_country": it.PaymentCountry, "fee_amount_minor": it.FeeAmountMinor,
 		})
 	}

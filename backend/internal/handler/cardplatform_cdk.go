@@ -1209,12 +1209,15 @@ func PublicCDKPreview(c *gin.Context) {
 	}
 	// 成功时记下 code ↔ redemption_token，供后续绑定 session / 账单查卡密
 	if st >= 200 && st < 300 {
-		if tok := extractJSONString(raw, "redemption_token", "token"); tok != "" {
+		for _, tok := range []string{extractJSONString(raw, "redemption_token", "token"), extractJSONNestedString(raw, "data", "redemption_token")} {
+			if tok == "" {
+				continue
+			}
 			_ = db.BindCDKRedemptionToken(code, tok)
-		}
-		// 嵌套 data
-		if tok := extractJSONNestedString(raw, "data", "redemption_token"); tok != "" {
-			_ = db.BindCDKRedemptionToken(code, tok)
+			// Grok 兑换按这张表认 token 是哪张码（半价码校验），写失败时兑换会要求重新预览。
+			if err := db.RecordPreviewToken(code, tok); err != nil {
+				log.Printf("[cdk-preview] record token failed tok=%s: %v", shortTok(tok), err)
+			}
 		}
 	}
 	proxyPublicJSON(c, st, raw)
@@ -1253,6 +1256,16 @@ func PublicCDKPreflight(c *gin.Context) {
 	if err != nil {
 		writeUpstreamUnavailable(c, "cdk-preflight", err)
 		return
+	}
+	// 卡网 Grok 半价码：账号首月不是半价就在这里先拦下，免得用户走到兑换才发现。
+	previewCode, _ := db.PreviewTokenCode(str(body["redemption_token"]))
+	if plan, promo := grokPromoPlan(str(body["code"]), previewCode, legacyCode); promo {
+		if _, rejected := grokPreflightRejected(st, raw); !rejected {
+			if msg := grokPromoVerdict(raw, plan); msg != "" {
+				rejectGrokPromo(c, msg)
+				return
+			}
+		}
 	}
 	// 预检成功才把 credential.session 绑到卡密（账单页可凭卡密查）。
 	// 上游拒绝的请求不落库：否则任何人都能对任意码写入/覆盖绑定。
@@ -1422,6 +1435,13 @@ func PublicCDKRedeem(c *gin.Context) {
 		return
 	}
 	cli := legacyCardClientForCode(redeemCode)
+	// 带 credential 的是 Grok 兑换（GPT / X 带 preflight_token）：半价码要在提交卡台前复核账号报价。
+	// 不看 body 长什么样也要认出半价码：卡台若认 credential 的别名，光凭字段判断会漏。
+	if body["credential"] != nil || isGrokPromoRedeem(body) {
+		if !grokRedeemGate(c, cli, accountID, body) {
+			return
+		}
+	}
 	st, raw, err := cli.Redeem(c.Request.Context(), body, deviceFrom(c))
 	if err != nil {
 		writeUpstreamUnavailable(c, "cdk-redeem", err)

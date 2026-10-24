@@ -152,6 +152,11 @@ func PublicAgentCDKExchange(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "本站未找到该完整卡密（仅支持本站发过的码）"})
 		return
 	}
+	// 换出的新码不带卡网请求，半价限制会丢，变成任何账号都能兑的正价码。
+	if _, promo := grokPromoPlan(code); promo {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Grok 首月半价卡密不支持换码"})
+		return
+	}
 	plan = strings.ToLower(strings.TrimSpace(plan))
 	if plan == "" {
 		plan = "plus"
