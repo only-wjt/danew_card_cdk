@@ -1219,6 +1219,10 @@ func PublicCDKPreview(c *gin.Context) {
 				log.Printf("[cdk-preview] record token failed tok=%s: %v", shortTok(tok), err)
 			}
 		}
+		// 半价卡密在预览时就告诉用户：要用有首月优惠资格的账号。
+		if _, promo := grokPromoPlan(code); promo {
+			raw = withDataField(raw, "grok_promo", true)
+		}
 	}
 	proxyPublicJSON(c, st, raw)
 }

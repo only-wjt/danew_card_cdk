@@ -63,6 +63,7 @@
         <div v-if="previewInfo" class="rounded-xl bg-soft p-4 text-sm space-y-1">
           <div>套餐：<b>{{ targetPlan ? planLabel(targetPlan) : '—' }}</b></div>
           <div class="text-muted">{{ previewInfo.message || '码有效，可继续' }}</div>
+          <GrokPlanBenefits v-if="isGrok" class="pt-3" :plan="targetPlan" :promo="grokPromoCode" />
         </div>
         <button class="btn-primary w-full" :disabled="busy" @click="doPreview">{{ busy ? '校验中…' : '预览 / 下一步' }}</button>
       </div>
@@ -70,6 +71,11 @@
       <!-- 2 preflight -->
       <div v-show="step === 2" class="card space-y-4">
         <h2 class="text-xl font-bold text-ink">{{ isGrok ? t('grok.credential') : isXPremiumPlan(targetPlan) ? t('xPremium.credential') : 'ChatGPT 凭证' }}</h2>
+        <!-- 预览后就让用户看到这张卡兑的是什么（半价卡密提醒要用有资格的账号） -->
+        <div v-if="isGrok" class="rounded-xl bg-soft p-4">
+          <div class="text-sm mb-3">套餐：<b>{{ planLabel(targetPlan) }}</b></div>
+          <GrokPlanBenefits :plan="targetPlan" :promo="grokPromoCode" />
+        </div>
         <!-- 只支持 Session：邮箱+密码兑换已下线（后端 preflight 也会拒绝 mailbox） -->
         <p v-if="isGrok" class="text-sm text-muted">{{ t('grok.hint') }}</p>
         <p v-else-if="isXPremiumPlan(targetPlan)" class="text-sm text-muted">{{ t('xPremium.hint') }}
@@ -98,9 +104,14 @@
           <div class="flex flex-wrap items-center gap-2">
             <strong class="text-ink text-base">{{ account.email || '账号已验证' }}</strong>
             <el-tag v-if="!isGrok" size="small" :type="subscriptionStatusTag">{{ subscriptionStatusText }}</el-tag>
-            <el-tag v-else-if="account.grokPromoCode" size="small" type="warning">首月半价卡密</el-tag>
+            <el-tag v-else-if="grokPromoCode" size="small" type="warning">首月半价卡密</el-tag>
           </div>
           <dl class="account-facts">
+            <div v-if="isGrok">
+              <dt>套餐变更</dt>
+              <dd>{{ planLabel(currentPlanKey) }} → {{ planLabel(targetPlan) }}</dd>
+            </div>
+            <template v-else>
             <div>
               <dt>目标套餐</dt>
               <dd>{{ planLabel(targetPlan) }}</dd>
@@ -109,6 +120,7 @@
               <dt>当前套餐</dt>
               <dd>{{ planLabel(currentPlanKey) }}</dd>
             </div>
+            </template>
             <!-- Grok 预检没有订阅明细：只显示有没有首月优惠，不显示金额（后端已去掉报价）。 -->
             <div v-if="isGrok && grokOfferText">
               <dt>首月优惠</dt>
@@ -147,6 +159,7 @@
             </div>
             </template>
           </dl>
+          <GrokPlanBenefits v-if="isGrok" class="pt-3 border-t" style="border-color: var(--brd)" :plan="targetPlan" />
         </div>
         <div v-else class="rounded-xl bg-soft p-3 text-sm text-muted">
           预检未返回账号摘要，仍可尝试兑换（以卡台校验为准）。
@@ -283,6 +296,7 @@ import RedeemModeTabs from '../../components/RedeemModeTabs.vue'
 import XRedeemView from './XRedeemView.vue'
 import TgRedeemView from './TgRedeemView.vue'
 import XCookieGuide from '../../components/XCookieGuide.vue'
+import GrokPlanBenefits from '../../components/GrokPlanBenefits.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
@@ -508,6 +522,8 @@ const targetPlan = computed(() => {
   return plan
 })
 const isGrok = computed(() => isGrokPlan(targetPlan.value) && !isXPremiumPlan(targetPlan.value))
+// 半价卡密：预览时后端就会标出，预检通过时再标一次。
+const grokPromoCode = computed(() => previewInfo.value?.grok_promo === true || account.value.grokPromoCode)
 // GPT / X：必须有预检票；Grok：预检通过且没有阻塞项即可。
 const canRedeem = computed(() => isGrok.value ? !!grokSession.value && !grokBlockingReason.value : !!preflightToken.value)
 

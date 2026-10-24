@@ -138,6 +138,13 @@ func TestGrokPromoCodeRedeemGate(t *testing.T) {
 	promo := e.issueOne(key, "dj-GATE-1", "grok_premium_monthly_promo")
 	full := e.issueOne(key, "dj-GATE-2", "grok_premium_monthly")
 	promoTok, fullTok := e.preview(promo), e.preview(full)
+	// 预览就标出半价卡密（顶层与 data 里都有），正价码不标。
+	for code, want := range map[string]any{promo: true, full: nil} {
+		_, out := e.do(http.MethodPost, "/api/v1/public/cdk/preview", "", "", fmt.Sprintf(`{"code":%q}`, code))
+		if out["grok_promo"] != want || out["data"].(map[string]any)["grok_promo"] != want {
+			t.Fatalf("preview flag for %s: %v", code, out)
+		}
+	}
 
 	// 原价账号：半价码在预检就被拦下。
 	e.up.set(func(f *fakeCardPlatform) { f.grokPrices = grokPremiumPrices(false) })
