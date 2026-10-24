@@ -97,7 +97,8 @@
         <div v-if="account.checked" class="rounded-xl border p-4 space-y-3" style="border-color: var(--brd); background: var(--surface-2, var(--soft))">
           <div class="flex flex-wrap items-center gap-2">
             <strong class="text-ink text-base">{{ account.email || '账号已验证' }}</strong>
-            <el-tag size="small" :type="subscriptionStatusTag">{{ subscriptionStatusText }}</el-tag>
+            <el-tag v-if="!isGrok" size="small" :type="subscriptionStatusTag">{{ subscriptionStatusText }}</el-tag>
+            <el-tag v-else-if="account.grokPromoCode" size="small" type="warning">首月半价卡密</el-tag>
           </div>
           <dl class="account-facts">
             <div>
@@ -108,6 +109,12 @@
               <dt>当前套餐</dt>
               <dd>{{ planLabel(currentPlanKey) }}</dd>
             </div>
+            <!-- Grok 预检只回账号与报价，没有订阅明细：只显示这次首月要付多少。 -->
+            <div v-if="isGrok">
+              <dt>首月价格</dt>
+              <dd :class="account.grokQuote && account.grokQuote.amount * 2 <= account.grokQuote.list ? 'text-good' : ''">{{ grokPriceText }}</dd>
+            </div>
+            <template v-else>
             <div>
               <dt>订阅状态</dt>
               <dd>{{ subscriptionStatusText }}</dd>
@@ -138,6 +145,7 @@
               <dt>支付方式</dt>
               <dd>{{ paymentMethodText }}</dd>
             </div>
+            </template>
           </dl>
         </div>
         <div v-else class="rounded-xl bg-soft p-3 text-sm text-muted">
@@ -278,7 +286,7 @@ import XCookieGuide from '../../components/XCookieGuide.vue'
 import { dialog } from '../../lib/dialog'
 import { planLabel, planSatisfied as isSatisfied } from '../../lib/plan'
 import { isXPremiumPlan, xPremiumCredential } from '../../lib/x-premium'
-import { grokCredential, isGrokPlan } from '../../lib/grok'
+import { grokCredential, grokQuoteKeys, isGrokPlan } from '../../lib/grok'
 import { X_REDEEM_UI } from '../../lib/features'
 
 const { t } = useI18n({ useScope: 'global' })
@@ -329,6 +337,8 @@ const grokSession = ref('')
 const grokBlockingReason = ref('')
 const sessionRaw = ref('')
 const cookieGuide = ref(false)
+type GrokQuote = { amount: number; list: number; currency: string }
+
 /** 预检成功后的账号/订阅摘要（与卡台 GPT 直充 preflight 字段对齐） */
 const account = ref({
   checked: false,
@@ -342,6 +352,9 @@ const account = ref({
   subscriptionIsDelinquent: null as boolean | null,
   lastPayment: null as any,
   paymentMethod: null as any,
+  // Grok：预检报价里目标档位的首月价（最小单位），以及本站标记的半价卡密。
+  grokQuote: null as GrokQuote | null,
+  grokPromoCode: false,
 })
 const resultStatus = ref('')
 const resultStage = ref('')
@@ -432,6 +445,8 @@ function loadProgress(): boolean {
           typeof p.account.subscriptionIsDelinquent === 'boolean' ? p.account.subscriptionIsDelinquent : null,
         lastPayment: p.account.lastPayment || null,
         paymentMethod: p.account.paymentMethod || null,
+        grokQuote: p.account.grokQuote && typeof p.account.grokQuote === 'object' ? p.account.grokQuote : null,
+        grokPromoCode: p.account.grokPromoCode === true,
       }
     }
     recoveryPending.value = p.recoveryPending === true
@@ -674,8 +689,33 @@ function applyAccountFromPreflight(data: any) {
       typeof body.subscription_is_delinquent === 'boolean' ? body.subscription_is_delinquent : null,
     lastPayment: body.last_payment || null,
     paymentMethod: body.payment_method || null,
+    grokQuote: isGrok.value ? pickGrokQuote(body.quotes, targetPlan.value) : null,
+    grokPromoCode: data?.grok_promo === true || body.grok_promo === true,
   }
 }
+
+// 卡台 Grok 预检的 quotes：{ premium_monthly: { amountMinor, listAmountMinor, currency } }。
+function pickGrokQuote(quotes: any, plan: string): GrokQuote | null {
+  if (!quotes || typeof quotes !== 'object') return null
+  for (const key of grokQuoteKeys(plan)) {
+    const q = quotes[key]
+    if (!q || typeof q !== 'object') continue
+    const amount = Number(q.amountMinor ?? q.amount_minor)
+    const list = Number(q.listAmountMinor ?? q.list_amount_minor ?? amount)
+    if (!Number.isFinite(amount) || amount < 0) return null
+    return { amount, list: Number.isFinite(list) ? list : amount, currency: String(q.currency || 'USD') }
+  }
+  return null
+}
+
+const grokPriceText = computed(() => {
+  const q = account.value.grokQuote
+  if (!q) return '上游未提供'
+  const amount = formatPaymentAmount(q.amount, q.currency)
+  if (q.list <= q.amount) return amount
+  const list = formatPaymentAmount(q.list, q.currency)
+  return q.amount * 2 <= q.list ? `${amount}（原价 ${list}，首月半价）` : `${amount}（原价 ${list}）`
+})
 
 function clearAccount() {
   account.value = {
@@ -690,6 +730,8 @@ function clearAccount() {
     subscriptionRecoveryRequired: false,
     lastPayment: null,
     paymentMethod: null,
+    grokQuote: null,
+    grokPromoCode: false,
   }
 }
 

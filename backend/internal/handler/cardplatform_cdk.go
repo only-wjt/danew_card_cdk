@@ -1265,6 +1265,8 @@ func PublicCDKPreflight(c *gin.Context) {
 				rejectGrokPromo(c, msg)
 				return
 			}
+			// 通过了：告诉兑换页这是半价卡密（页面据此打标签）。
+			raw = withTopLevelField(raw, "grok_promo", true)
 		}
 	}
 	// 预检成功才把 credential.session 绑到卡密（账单页可凭卡密查）。

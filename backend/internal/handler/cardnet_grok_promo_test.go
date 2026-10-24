@@ -197,8 +197,13 @@ func TestGrokPromoCodeRedeemGate(t *testing.T) {
 
 	// 半价账号：半价码预检通过，兑换前复核一次再提交。
 	e.up.set(func(f *fakeCardPlatform) { f.grokPrices = grokPremiumPrices(true) })
-	if st, out := e.grokPreflight(promo, promoTok); st != http.StatusOK {
+	// 通过时带 grok_promo 标记（兑换页显示「首月半价卡密」），卡台原有字段不丢；正价码不带。
+	if st, out := e.grokPreflight(promo, promoTok); st != http.StatusOK || out["grok_promo"] != true ||
+		out["data"].(map[string]any)["quotes"] == nil {
 		t.Fatalf("promo code on half-price account: %d %v", st, out)
+	}
+	if st, out := e.grokPreflight(full, fullTok); st != http.StatusOK || out["grok_promo"] != nil {
+		t.Fatalf("full code must not be flagged: %d %v", st, out)
 	}
 	e.up.takePublicCalls()
 	if st, out := e.grokRedeem(promoTok, ""); st != http.StatusAccepted {
