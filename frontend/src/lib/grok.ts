@@ -61,3 +61,46 @@ export function grokCredential(raw: string): string {
   // 只粘了值：cookie 值字符集，末尾允许 base64 填充 =
   return /^[A-Za-z0-9._~%+/-]{16,4096}={0,2}$/.test(s) ? 'sso=' + s : ''
 }
+
+export interface GrokBenefit {
+  /** 产品线：Grok / Cursor / X / 用量 / 计费 */
+  name: string
+  detail: string
+}
+
+// 2026-10-12 起 Grok 按「The X Subscription」售卖：Grok + Cursor + X Premium 打包。
+// 卡台不下发权益说明，这里本站维护；xAI 调整档位权益时同步改这张表。
+const TIER_BENEFITS: Record<string, GrokBenefit[]> = {
+  plus: [
+    { name: 'Grok', detail: '对话 · 语音 · Imagine · Build · Grok API' },
+    { name: 'Cursor', detail: '可用（仅 Grok 模型）' },
+    { name: 'X', detail: 'X 蓝 V 认证 · 广告减少' },
+    { name: '用量', detail: '基准用量' },
+  ],
+  premium: [
+    { name: 'Grok', detail: '最新模型 · 更快对话 · 图片/视频生成 · 云端 Agent · Grok Bot' },
+    { name: 'Cursor', detail: 'Pro 级权益（与 Grok 共用用量）' },
+    { name: 'X', detail: 'X 蓝 V 认证 · 无广告（X Premium+ 权益）' },
+    { name: '用量', detail: 'Plus 的 4 倍' },
+  ],
+  super: [
+    { name: 'Grok', detail: 'Premium 全部权益 · 高峰期优先使用模型' },
+    { name: 'Cursor', detail: 'Pro 级权益（与 Grok 共用用量）' },
+    { name: 'X', detail: 'X 蓝 V 认证 · 无广告（X Premium+ 权益）' },
+    { name: '用量', detail: 'Plus 的 15 倍' },
+  ],
+  ultra: [
+    { name: 'Grok', detail: 'Super 全部权益 · 新产品/新模型抢先体验' },
+    { name: 'Cursor', detail: 'Pro 级权益（与 Grok 共用用量）' },
+    { name: 'X', detail: 'X 蓝 V 认证 · 无广告（X Premium+ 权益）' },
+    { name: '用量', detail: 'Plus 的 50 倍' },
+  ],
+}
+
+/** Grok 档位包含的权益；不是已知 Grok 档位返回空数组。年付与月付权益相同，另加一条计费说明。 */
+export function grokPlanBenefits(value: string): GrokBenefit[] {
+  const m = grokBarePlan(value).match(/^(plus|premium|super|ultra)_(monthly|yearly)$/)
+  if (!m) return []
+  const list = TIER_BENEFITS[m[1]]
+  return m[2] === 'yearly' ? [...list, { name: '计费', detail: '按年计费（权益同月付）' }] : list
+}

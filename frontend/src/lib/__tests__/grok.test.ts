@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { grokCredential, grokPlanLabel, grokQuoteKeys, isGrokCredential, isGrokPlan } from '../grok'
+import { grokCredential, grokPlanLabel, grokQuoteKeys, grokPlanBenefits, isGrokCredential, isGrokPlan } from '../grok'
 import { isXPremiumPlan } from '../x-premium'
 import { planLabel, planSatisfied } from '../plan'
 import { extractCdkSession } from '../batch-session'
@@ -59,5 +59,14 @@ describe('grokQuoteKeys', () => {
   it('lists the bare key, the prefixed key and legacy aliases', () => {
     expect(grokQuoteKeys('grok_ultra_monthly')).toEqual(['ultra_monthly', 'grok_ultra_monthly', 'heavy_monthly'])
     expect(grokQuoteKeys('grok_super_monthly')).toEqual(['super_monthly', 'grok_super_monthly'])
+  })
+})
+
+describe('grokPlanBenefits', () => {
+  it('lists Grok / Cursor / X / usage per tier, with a billing row for yearly', () => {
+    expect(grokPlanBenefits('grok_premium_monthly').map((b) => b.name)).toEqual(['Grok', 'Cursor', 'X', '用量'])
+    expect(grokPlanBenefits('grok_monthly')[3].detail).toBe('Plus 的 4 倍') // 旧键按新档位
+    expect(grokPlanBenefits('grok_ultra_yearly').slice(-1)[0].name).toBe('计费')
+    expect(grokPlanBenefits('plus')).toEqual([])
   })
 })

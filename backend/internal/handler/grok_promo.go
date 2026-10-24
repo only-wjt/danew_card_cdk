@@ -177,6 +177,22 @@ func withTopLevelField(raw json.RawMessage, key string, val any) json.RawMessage
 	return out
 }
 
+// withDataField 顶层与 data 对象（若有）都加上这个字段：前端有的读 data、有的读顶层。
+func withDataField(raw json.RawMessage, key string, val any) json.RawMessage {
+	raw = withTopLevelField(raw, key, val)
+	var root map[string]json.RawMessage
+	if json.Unmarshal(raw, &root) != nil || root == nil {
+		return raw
+	}
+	if data := withTopLevelField(root["data"], key, val); string(data) != string(root["data"]) {
+		root["data"] = data
+		if out, err := json.Marshal(root); err == nil {
+			return out
+		}
+	}
+	return raw
+}
+
 // redactGrokQuotes Grok 预检回给浏览器前去掉 quotes / promotions（卡台报价就是本站扣款成本），
 // 换成不带金额的 first_month_offers：{ "premium_monthly": "half" | "discount" | "none" }。
 func redactGrokQuotes(raw json.RawMessage) json.RawMessage {
