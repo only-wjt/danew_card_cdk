@@ -143,6 +143,7 @@ type CardnetIssuedCode struct {
 	FeeAmountMinor int64  `json:"fee_amount_minor"`
 	Status         string `json:"status"`
 	AccountID      int64  `json:"-"`
+	PromoOnly      bool   `json:"promo_only"`
 }
 
 // CardnetCodeToSave 卡台返回、待随请求一起提交的码。
@@ -152,6 +153,8 @@ type CardnetCodeToSave struct {
 	Prefix         string
 	Plan           string
 	FeeAmountMinor int64
+	// PromoOnly 卡网 Grok 首月半价码（请求档位带 _promo），落库为 promo_only=1。
+	PromoOnly bool
 }
 
 func migrateCardnet() error {
@@ -232,6 +235,8 @@ func migrateCardnet() error {
 		{"cardnet_client_id", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN cardnet_client_id INTEGER NOT NULL DEFAULT 0`},
 		{"cardnet_request_id", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN cardnet_request_id INTEGER NOT NULL DEFAULT 0`},
 		{"external_order_no", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN external_order_no TEXT NOT NULL DEFAULT ''`},
+		// 卡网 Grok 首月半价码：码上存正价档位，半价记在这里（兑换拦截、后台展示都读它）。
+		{"promo_only", `ALTER TABLE cardplatform_cdk_codes ADD COLUMN promo_only INTEGER NOT NULL DEFAULT 0`},
 	}
 	for _, col := range cols {
 		var n int
@@ -243,6 +248,12 @@ func migrateCardnet() error {
 				return err
 			}
 		}
+	}
+	// 加列之前发出的半价码：按发码请求的 _promo 档位补标记。可重复执行。
+	if _, err := DB.Exec(`UPDATE cardplatform_cdk_codes SET promo_only = 1
+		WHERE promo_only = 0 AND cardnet_request_id IN (
+			SELECT id FROM cardnet_issue_requests WHERE plan LIKE 'grok\_%\_promo' ESCAPE '\')`); err != nil {
+		return err
 	}
 	for _, q := range []string{
 		`CREATE INDEX IF NOT EXISTS idx_cp_cdk_cardnet_request ON cardplatform_cdk_codes(cardnet_request_id)`,
@@ -644,9 +655,9 @@ func CompleteCardnetRequest(req CardnetIssueRequest, codes []CardnetCodeToSave) 
 		}
 		res, err := tx.Exec(`
 			UPDATE cardplatform_cdk_codes
-			SET issue_source = ?, cardnet_client_id = ?, cardnet_request_id = ?, external_order_no = ?
+			SET issue_source = ?, cardnet_client_id = ?, cardnet_request_id = ?, external_order_no = ?, promo_only = ?
 			WHERE code = ? AND COALESCE(cardnet_request_id, 0) IN (0, ?)
-		`, CardnetIssueSource, req.ClientID, req.ID, req.ExternalOrderNo, strings.TrimSpace(it.Code), req.ID)
+		`, CardnetIssueSource, req.ClientID, req.ID, req.ExternalOrderNo, boolToInt(it.PromoOnly), strings.TrimSpace(it.Code), req.ID)
 		if err != nil {
 			return err
 		}
@@ -672,11 +683,11 @@ func CompleteCardnetRequest(req CardnetIssueRequest, codes []CardnetCodeToSave) 
 }
 
 const cardnetCodeCols = `id, COALESCE(upstream_id,0), code, COALESCE(plan,''), COALESCE(payment_country,''),
-	COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(fulfilled_account_id,0)`
+	COALESCE(fee_amount_minor,0), COALESCE(status,''), COALESCE(fulfilled_account_id,0), COALESCE(promo_only,0) = 1`
 
 func scanCardnetCode(s interface{ Scan(...any) error }) (CardnetIssuedCode, error) {
 	var c CardnetIssuedCode
-	err := s.Scan(&c.ID, &c.UpstreamID, &c.Code, &c.Plan, &c.PaymentCountry, &c.FeeAmountMinor, &c.Status, &c.AccountID)
+	err := s.Scan(&c.ID, &c.UpstreamID, &c.Code, &c.Plan, &c.PaymentCountry, &c.FeeAmountMinor, &c.Status, &c.AccountID, &c.PromoOnly)
 	return c, err
 }
 
@@ -715,23 +726,26 @@ func GetCardnetCodeForClient(id, clientID int64) (CardnetIssuedCode, error) {
 	return c, err
 }
 
-// CardnetCodeRequestPlan 卡网码在库里的档位与发码请求的档位（Grok 半价请求带 _promo，码上存正价键）。
-// 不是卡网发的码返回 ErrCardnetNotFound。用户输入的码大小写不定，原样和大写各查一次（走 code 唯一索引）。
-func CardnetCodeRequestPlan(code string) (codePlan, requestPlan string, err error) {
+// PromoCodePlan 卡网 Grok 首月半价码（promo_only=1）返回它在库里的档位（正价键）。
+// 不是半价码（含本站没有的码）promo=false、err=nil。用户输入的码大小写不定，原样和大写各查一次（走 code 唯一索引）。
+func PromoCodePlan(code string) (plan string, promo bool, err error) {
 	if DB == nil {
-		return "", "", fmt.Errorf("db not ready")
+		return "", false, fmt.Errorf("db not ready")
 	}
 	raw := strings.TrimSpace(code)
 	if raw == "" {
-		return "", "", ErrCardnetNotFound
+		return "", false, nil
 	}
-	err = DB.QueryRow(`SELECT COALESCE(c.plan,''), COALESCE(r.plan,'')
-		FROM cardplatform_cdk_codes c JOIN cardnet_issue_requests r ON r.id = c.cardnet_request_id
-		WHERE c.code IN (?, ?) AND c.issue_source = ? LIMIT 1`, raw, normalizeCDKCode(raw), CardnetIssueSource).Scan(&codePlan, &requestPlan)
+	var flag int
+	err = DB.QueryRow(`SELECT COALESCE(plan,''), COALESCE(promo_only,0) FROM cardplatform_cdk_codes
+		WHERE code IN (?, ?) LIMIT 1`, raw, normalizeCDKCode(raw)).Scan(&plan, &flag)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", ErrCardnetNotFound
+		return "", false, nil
 	}
-	return codePlan, requestPlan, err
+	if err != nil {
+		return "", false, err
+	}
+	return plan, flag == 1, nil
 }
 
 // RecordPreviewToken 本站调卡台预览成功后记下 token 属于哪张码。
@@ -850,6 +864,8 @@ func CardnetStats(clientID int64, from, to string) ([]CardnetStatRow, error) {
 		args = append(args, clientID)
 	}
 	day := `date(created_at, '+8 hours')`
+	// 半价码单独成行：档位显示成卡网的 _promo 键，与请求列表一致。
+	statPlan := `CASE WHEN COALESCE(promo_only,0) = 1 THEN COALESCE(plan,'') || '_promo' ELSE COALESCE(plan,'') END`
 	if s := strings.TrimSpace(from); s != "" {
 		where = append(where, day+" >= ?")
 		args = append(args, s)
@@ -859,13 +875,13 @@ func CardnetStats(clientID int64, from, to string) ([]CardnetStatRow, error) {
 		args = append(args, s)
 	}
 	rows, err := DB.Query(`
-		SELECT `+day+` AS d, cardnet_client_id, COALESCE(plan,''), COUNT(*), COALESCE(SUM(fee_amount_minor),0),
+		SELECT `+day+` AS d, cardnet_client_id, `+statPlan+` AS sp, COUNT(*), COALESCE(SUM(fee_amount_minor),0),
 		       SUM(CASE WHEN lower(COALESCE(status,'')) IN ('consumed','used','redeemed') THEN 1 ELSE 0 END),
 		       SUM(CASE WHEN lower(COALESCE(status,'')) = 'disabled' THEN 1 ELSE 0 END)
 		FROM cardplatform_cdk_codes
 		WHERE `+strings.Join(where, " AND ")+`
-		GROUP BY d, cardnet_client_id, plan
-		ORDER BY d DESC, cardnet_client_id, plan
+		GROUP BY d, cardnet_client_id, sp
+		ORDER BY d DESC, cardnet_client_id, sp
 	`, args...)
 	if err != nil {
 		return nil, err

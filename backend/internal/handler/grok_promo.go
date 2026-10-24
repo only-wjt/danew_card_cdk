@@ -31,22 +31,19 @@ var grokRedeemBodyKeys = map[string]bool{
 	"no_auto_card_switch": true, "strict_card_preference": true, "exclude_card_ids": true,
 }
 
-// grokPromoPlan 任一个码是卡网 Grok 半价码时，返回它的正价档位。
+// grokPromoPlan 任一个码是卡网 Grok 半价码（码上 promo_only=1）时，返回它的正价档位。
 func grokPromoPlan(codes ...string) (string, bool) {
 	for _, code := range codes {
 		if code == "" {
 			continue
 		}
-		codePlan, reqPlan, err := db.CardnetCodeRequestPlan(code)
+		plan, promo, err := db.PromoCodePlan(code)
 		if err != nil {
-			if !errors.Is(err, db.ErrCardnetNotFound) {
-				log.Printf("[grok-promo] lookup %s: %v", shortTok(code), err)
-			}
+			log.Printf("[grok-promo] lookup %s: %v", shortTok(code), err)
 			continue
 		}
-		if cardplatform.IsGrokPromoKey(reqPlan) {
-			base, _ := cardplatform.SplitGrokPromo(reqPlan)
-			return nonEmptyStr(codePlan, base), true
+		if promo {
+			return plan, true
 		}
 	}
 	return "", false
