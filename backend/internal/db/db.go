@@ -1299,6 +1299,8 @@ type StoredCDKCode struct {
 	FulfilledProvider  string  `json:"fulfilled_provider"`
 	FailoverUsed       bool    `json:"failover_used"`
 	FailoverReason     string  `json:"failover_reason"`
+	// PromoOnly 卡网 Grok 首月半价码（只能兑到有首月优惠资格的账号）。
+	PromoOnly bool `json:"promo_only"`
 }
 
 // StoredCDKListQuery 管理端本站码列表筛选。
@@ -1310,6 +1312,7 @@ type StoredCDKListQuery struct {
 	BindingState     string // complete / degraded / none
 	FulfilledAccount int64
 	Failover         string // yes / no
+	Promo            string // yes / no：卡网 Grok 首月半价码
 	Page             int
 	PageSize         int
 }
@@ -1415,6 +1418,12 @@ func ListStoredCDKsDetailed(query StoredCDKListQuery) ([]StoredCDKCode, int, err
 	case "no", "0", "false":
 		where += ` AND COALESCE(failover_used,0) = 0`
 	}
+	switch strings.ToLower(strings.TrimSpace(query.Promo)) {
+	case "yes", "1", "true":
+		where += ` AND COALESCE(promo_only,0) = 1`
+	case "no", "0", "false":
+		where += ` AND COALESCE(promo_only,0) = 0`
+	}
 
 	var total int
 	if err := DB.QueryRow(`SELECT COUNT(*) FROM cardplatform_cdk_codes c`+where, args...).Scan(&total); err != nil {
@@ -1435,7 +1444,8 @@ func ListStoredCDKsDetailed(query StoredCDKListQuery) ([]StoredCDKCode, int, err
 		          WHERE b.site_code_id = c.id ORDER BY b.is_primary DESC, b.id ASC), ''),
 		       COALESCE(c.fulfilled_account_id,0),
 		       COALESCE((SELECT name FROM card_platform_accounts a WHERE a.id = c.fulfilled_account_id),''),
-		       COALESCE(c.fulfilled_provider,''), COALESCE(c.failover_used,0), COALESCE(c.failover_reason,'')
+		       COALESCE(c.fulfilled_provider,''), COALESCE(c.failover_used,0), COALESCE(c.failover_reason,''),
+		       COALESCE(c.promo_only,0)
 		FROM cardplatform_cdk_codes c` + strings.Replace(where, " WHERE ", " WHERE ", 1) + `
 		ORDER BY created_at DESC, rowid DESC
 		LIMIT ? OFFSET ?`
@@ -1448,7 +1458,7 @@ func ListStoredCDKsDetailed(query StoredCDKListQuery) ([]StoredCDKCode, int, err
 	out := make([]StoredCDKCode, 0, query.PageSize)
 	for rows.Next() {
 		var it StoredCDKCode
-		var dual, failover int
+		var dual, failover, promo int
 		var country sql.NullString
 		if err := rows.Scan(
 			&it.UpstreamID, &it.RowID, &it.Code, &it.CodePrefix, &it.Plan,
@@ -1456,12 +1466,13 @@ func ListStoredCDKsDetailed(query StoredCDKListQuery) ([]StoredCDKCode, int, err
 			&it.CodeKind, &it.IssueStatus, &dual,
 			&it.BindingTotal, &it.BindingUsable, &it.BindingSummary,
 			&it.FulfilledAccountID, &it.FulfilledAccount, &it.FulfilledProvider,
-			&failover, &it.FailoverReason,
+			&failover, &it.FailoverReason, &promo,
 		); err != nil {
 			return nil, 0, err
 		}
 		it.DualEligible = dual != 0
 		it.FailoverUsed = failover != 0
+		it.PromoOnly = promo != 0
 		if country.Valid {
 			s := country.String
 			it.PaymentCountry = &s

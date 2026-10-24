@@ -640,6 +640,7 @@ func runCardnetIssue(ctx context.Context, req db.CardnetIssueRequest, allowRevie
 		}
 		codes = append(codes, db.CardnetCodeToSave{
 			UpstreamID: it.ID, Code: code, Prefix: it.CodePrefix, Plan: plan, FeeAmountMinor: it.FeeAmountMinor,
+			PromoOnly: cardplatform.IsGrokPromoKey(req.Plan),
 		})
 	}
 	if len(codes) != req.Count || len(res.Issued) != req.Count {

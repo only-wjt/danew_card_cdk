@@ -242,6 +242,10 @@
             <el-option label="发生过切台" value="yes" />
             <el-option label="未切台" value="no" />
           </el-select>
+          <el-select v-model="listPromo" clearable placeholder="半价" class="!w-[120px]" @change="searchList">
+            <el-option label="只看首月半价" value="yes" />
+            <el-option label="只看正价" value="no" />
+          </el-select>
         </template>
         <el-button type="primary" :loading="loadingList" @click="searchList">查询</el-button>
         <el-button :loading="loadingList" @click="loadList">刷新</el-button>
@@ -356,8 +360,11 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="plan" label="套餐" width="100">
-          <template #default="{ row }">{{ rowPlanLabel(row.plan) }}</template>
+        <el-table-column prop="plan" label="套餐" min-width="120">
+          <template #default="{ row }">
+            {{ rowPlanLabel(row.plan) }}
+            <el-tag v-if="row.promo_only" size="small" type="warning" class="ml-1" title="卡网首月半价码：只能兑到有首月优惠资格的 Grok 账号">首月半价</el-tag>
+          </template>
         </el-table-column>
         <el-table-column label="区域" min-width="145">
           <template #default="{ row }">
@@ -544,6 +551,8 @@ const listCodeKind = ref('')
 const listBindingState = ref('')
 const listFulfilledAccount = ref('')
 const listFailover = ref('')
+// 卡网 Grok 首月半价码：yes 只看半价 / no 只看正价
+const listPromo = ref('')
 const platformAccounts = ref<Array<{ id: number; name: string }>>([])
 const statusOptions = ['unused', 'reserved', 'consumed', 'frozen', 'disabled', 'review']
 
@@ -764,6 +773,7 @@ function appendStoredFilters(qs: URLSearchParams) {
   if (listBindingState.value) qs.set('binding_state', listBindingState.value)
   if (listFulfilledAccount.value) qs.set('fulfilled_account_id', listFulfilledAccount.value)
   if (listFailover.value) qs.set('failover', listFailover.value)
+  if (listPromo.value) qs.set('promo', listPromo.value)
 }
 
 async function fetchAllStoredCodes(): Promise<string[]> {
@@ -1618,6 +1628,7 @@ async function loadList() {
       if (listBindingState.value) qs.set('binding_state', listBindingState.value)
       if (listFulfilledAccount.value) qs.set('fulfilled_account_id', listFulfilledAccount.value)
       if (listFailover.value) qs.set('failover', listFailover.value)
+      if (listPromo.value) qs.set('promo', listPromo.value)
       const r = await authFetch(`/api/v1/admin/cardplatform/cdks/stored?${qs.toString()}`)
       const d = await r.json().catch(() => ({}))
       if (!r.ok) {

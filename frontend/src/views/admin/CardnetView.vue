@@ -315,7 +315,10 @@
             <tr v-for="c in detail.codes" :key="c.id">
               <td class="mono">{{ c.id }}</td>
               <td class="mono text-xs">{{ c.code }}</td>
-              <td :title="c.plan">{{ planText(c.plan) }}</td>
+              <td :title="c.plan">
+                {{ planText(c.plan) }}
+                <span v-if="c.promo_only" class="pill pill-warn ml-1">首月半价</span>
+              </td>
               <td>{{ c.payment_country || '—' }}</td>
               <td class="mono">{{ usd(c.fee_amount_minor) }}</td>
               <td>{{ c.status || 'unused' }}</td>
@@ -384,6 +387,7 @@ interface IssuedCode {
   payment_country: string
   fee_amount_minor: number
   status: string
+  promo_only?: boolean
 }
 
 interface StatRow {

@@ -86,9 +86,9 @@ func TestCardnetIssueGrokPromo(t *testing.T) {
 		if plan != "grok_premium_monthly" {
 			t.Fatalf("stored plan should be the full-price key, got %s", plan)
 		}
-		codePlan, reqPlan, err := db.CardnetCodeRequestPlan(strings.ToLower(it["code"].(string)))
-		if err != nil || codePlan != "grok_premium_monthly" || reqPlan != "grok_premium_monthly_promo" {
-			t.Fatalf("promo lookup: %s %s %v", codePlan, reqPlan, err)
+		codePlan, promo, err := db.PromoCodePlan(strings.ToLower(it["code"].(string)))
+		if err != nil || codePlan != "grok_premium_monthly" || !promo {
+			t.Fatalf("promo lookup: %s %v %v", codePlan, promo, err)
 		}
 	}
 	// 半价与正价是不同参数：同键换档位算换参。

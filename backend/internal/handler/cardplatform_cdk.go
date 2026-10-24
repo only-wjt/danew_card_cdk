@@ -506,7 +506,7 @@ func CardPlatformStoreCDKCodes(c *gin.Context) {
 
 // CardPlatformListStoredCDKs GET /api/v1/admin/cardplatform/cdks/stored
 // 只读本站已存完整码（随时复制/导出；不依赖卡台列表）。
-// query: plan= / q= / status= / page= / page_size= / limit= / format=json|txt
+// query: plan= / q= / status= / promo=yes|no / page= / page_size= / limit= / format=json|txt
 //
 // 列表默认分页（page_size=20）；导出 txt / 显式大 limit 仍可一次拉多条。
 // 状态：本站 SQLite + 当前页轻量向卡台核对（不再整库翻页）；Webhook completed 也会回写 consumed。
@@ -517,6 +517,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	codeKind := strings.TrimSpace(strings.ToLower(c.Query("code_kind")))
 	bindingState := strings.TrimSpace(strings.ToLower(c.Query("binding_state")))
 	failover := strings.TrimSpace(strings.ToLower(c.Query("failover")))
+	promo := strings.TrimSpace(strings.ToLower(c.Query("promo")))
 	fulfilledAccount, _ := strconv.ParseInt(c.Query("fulfilled_account_id"), 10, 64)
 	format := strings.ToLower(strings.TrimSpace(c.DefaultQuery("format", "json")))
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
@@ -532,7 +533,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 		list, _, err := db.ListStoredCDKsDetailed(db.StoredCDKListQuery{
 			Plan: plan, Q: q, Status: status, CodeKind: codeKind,
 			BindingState: bindingState, FulfilledAccount: fulfilledAccount,
-			Failover: failover, Page: 1, PageSize: limit,
+			Failover: failover, Promo: promo, Page: 1, PageSize: limit,
 		})
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -576,7 +577,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 	list, total, err := db.ListStoredCDKsDetailed(db.StoredCDKListQuery{
 		Plan: plan, Q: q, Status: status, CodeKind: codeKind,
 		BindingState: bindingState, FulfilledAccount: fulfilledAccount,
-		Failover: failover, Page: page, PageSize: pageSize,
+		Failover: failover, Promo: promo, Page: page, PageSize: pageSize,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -630,6 +631,7 @@ func CardPlatformListStoredCDKs(c *gin.Context) {
 			"fulfilled_account":    it.FulfilledAccount,
 			"fulfilled_provider":   it.FulfilledProvider,
 			"failover_used":        it.FailoverUsed, "failover_reason": it.FailoverReason,
+			"promo_only":           it.PromoOnly,
 			"has_full_code": true, "stored": true,
 			"note": func() string {
 				if it.UpstreamID <= 0 {
